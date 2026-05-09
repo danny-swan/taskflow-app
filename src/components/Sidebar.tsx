@@ -50,7 +50,8 @@ export function Sidebar() {
         <div className="flex items-center">
           <TaskFlowMark />
         </div>
-        <div className="text-[11px] text-muted mt-1 ml-[2px] tracking-wider tabular">v1.0</div>
+        <div className="text-[11px] text-muted mt-0.5 ml-[2px] tracking-wide">{tr(lang, 'brand_sub')}</div>
+        <div className="text-[10px] text-faint mt-0.5 ml-[2px] tracking-wider tabular mono">v{__APP_VERSION__}</div>
       </div>
 
       {/* Nav */}
