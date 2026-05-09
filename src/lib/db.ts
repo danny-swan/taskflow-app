@@ -2,7 +2,7 @@
 import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 // @ts-ignore
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
-import { readBinaryFile, writeBinaryFile, BaseDirectory, createDir } from '@tauri-apps/plugin-fs';
+import { readFile, writeFile, mkdir, remove, BaseDirectory } from '@tauri-apps/plugin-fs';
 
 const DB_FILE = 'taskflow.sqlite';
 
