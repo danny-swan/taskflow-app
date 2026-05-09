@@ -4,7 +4,7 @@ import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { readFile, writeFile, mkdir, remove, BaseDirectory } from '@tauri-apps/plugin-fs';
 
-const DB_FILE = 'taskflow.sqlite';
+const DB_FILE = 'TaskFlow/taskflow.sqlite';
 
 let SQL: SqlJsStatic | null = null;
 let db: Database | null = null;
@@ -13,25 +13,24 @@ let db: Database | null = null;
 // Когда будем делать "кастомный путь", логика выбора пути будет вставляться именно сюда.
 
 async function ensureAppDataDir() {
-  // Создаёт папку приложения в каталоге AppData (если её ещё нет).
-  // BaseDirectory.AppData — стандартная директория данных приложения в Tauri.[web:33][web:48]
-  await createDir('', { baseDir: BaseDirectory.AppData, recursive: true });
+  // создаём папку TaskFlow в каталоге AppData, если её ещё нет
+  await mkdir('TaskFlow', { baseDir: BaseDirectory.AppData, recursive: true });
 }
 
 async function loadFromFile(): Promise<Uint8Array | null> {
   try {
     await ensureAppDataDir();
-    const bytes = await readBinaryFile(DB_FILE, { baseDir: BaseDirectory.AppData });
+    const bytes = await readFile(DB_FILE, { baseDir: BaseDirectory.AppData });
     return bytes;
   } catch {
-    // файла ещё нет — первый запуск, это нормально
+    // файла ещё нет — первый запуск
     return null;
   }
 }
 
 async function saveToFile(bytes: Uint8Array): Promise<void> {
   await ensureAppDataDir();
-  await writeBinaryFile(DB_FILE, bytes, { baseDir: BaseDirectory.AppData });
+  await writeFile(DB_FILE, bytes, { baseDir: BaseDirectory.AppData });
 }
 
 export async function initDb(): Promise<Database> {
@@ -271,9 +270,11 @@ export function exportCsv(): string {
   return lines.join('\n');
 }
 
-export function isStorageAvailable() { return storageAvailable; }
-
-export function resetDatabase() {
-  tryStorage(() => { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(STORAGE_KEY_TS); return null; }, null);
+export async function resetDatabase() {
+  try {
+    await remove(DB_FILE, { baseDir: BaseDirectory.AppData });
+  } catch {
+    // если файла нет — ничего страшного
+  }
   db = null;
 }
