@@ -48,6 +48,7 @@ interface State {
   toasts: { id: number; text: string }[];
   quote: string;
   columnWidths: Record<string, number>;
+  taskStatusFilter: string | null; // for metric chips: 'total' | 'inprogress' | 'paused' | 'done' | null
 
   // Derived helpers
   getDeletedStatusId(): number | undefined;
@@ -83,6 +84,7 @@ interface State {
   dismissToast(id: number): void;
 
   setColumnWidth(key: string, w: number): void;
+  setTaskStatusFilter(f: string | null): void;
 }
 
 let toastId = 0;
@@ -100,6 +102,7 @@ export const useStore = create<State>((set, get) => ({
   toasts: [],
   quote: '',
   columnWidths: {},
+  taskStatusFilter: null,
 
   getDeletedStatusId() {
     return get().statuses.find(s => s.is_technical === 1 && s.name === 'Удалено')?.id;
@@ -308,5 +311,9 @@ export const useStore = create<State>((set, get) => ({
     const next = { ...get().columnWidths, [key]: w };
     set({ columnWidths: next });
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['column_widths', JSON.stringify(next)]);
+  },
+
+  setTaskStatusFilter(f) {
+    set({ taskStatusFilter: f });
   },
 }));

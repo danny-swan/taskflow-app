@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Task, useStore } from '../store/useStore';
 import { TagChip } from './TagChip';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
-import { Check, Undo2, Maximize2 } from 'lucide-react';
+import { Check, Undo2, Maximize2, Trash2 } from 'lucide-react';
 import { tr } from '../lib/i18n';
 import { todayISO } from '../lib/utils';
 
@@ -18,6 +18,7 @@ export function TaskCard({
   const statuses = useStore(s => s.statuses);
   const tags = useStore(s => s.tags);
   const updateTask = useStore(s => s.updateTask);
+  const softDeleteTask = useStore(s => s.softDeleteTask);
   const pushToast = useStore(s => s.pushToast);
   const status = statuses.find(s => s.id === task.status_id);
   const tag = tags.find(t => t.id === task.tag_id);
@@ -26,8 +27,8 @@ export function TaskCard({
   const [titleDraft, setTitleDraft] = useState(task.title);
   const [editingComment, setEditingComment] = useState(false);
   const [commentDraft, setCommentDraft] = useState(task.comment || '');
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  // Sync drafts when underlying task changes (and we're not editing)
   useEffect(() => { if (!editingTitle) setTitleDraft(task.title); }, [task.title, editingTitle]);
   useEffect(() => { if (!editingComment) setCommentDraft(task.comment || ''); }, [task.comment, editingComment]);
 
@@ -49,6 +50,23 @@ export function TaskCard({
     }
   };
 
+  const onDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmDelete(true);
+  };
+
+  const onConfirmDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    softDeleteTask(task.id);
+    pushToast(tr(lang, 'deleted'));
+    setConfirmDelete(false);
+  };
+
+  const onCancelDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmDelete(false);
+  };
+
   const onOpenModalClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onOpenModal();
@@ -62,7 +80,6 @@ export function TaskCard({
       updateTask(task.id, { title: next });
       pushToast(tr(lang, 'saved'));
     } else if (!next) {
-      // empty — revert
       setTitleDraft(task.title);
     }
     setEditingTitle(false);
@@ -87,10 +104,8 @@ export function TaskCard({
     setEditingComment(false);
   };
 
-  // Card-empty-area click → modal (only if click target is not on an interactive subregion)
   const onCardClick = (e: React.MouseEvent) => {
-    // If a click bubbled up from a child that didn't stopPropagation, open modal
-    if (editingTitle || editingComment) return;
+    if (editingTitle || editingComment || confirmDelete) return;
     onOpenModal();
   };
 
@@ -117,6 +132,38 @@ export function TaskCard({
         }}
       />
 
+      {/* Delete button — top right corner, appears on hover */}
+      <button
+        type="button"
+        onClick={onDeleteClick}
+        onMouseDown={stopBubble}
+        title={tr(lang, 'delete_task_q')}
+        aria-label={tr(lang, 'delete')}
+        className="absolute top-1.5 right-1.5 w-6 h-6 rounded flex items-center justify-center text-muted opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-[var(--status-important)] transition-opacity z-10"
+      >
+        <Trash2 size={12} />
+      </button>
+
+      {/* Delete confirmation popover */}
+      {confirmDelete && (
+        <div
+          className="absolute inset-0 bg-surface/95 backdrop-blur-sm flex flex-col items-center justify-center gap-2 z-20 rounded-lg"
+          onClick={stopBubble}
+        >
+          <div className="text-[13px] font-medium">{tr(lang, 'delete_task_q')}</div>
+          <div className="flex gap-2">
+            <button
+              onClick={onConfirmDelete}
+              className="px-3 py-1 text-[12px] bg-[var(--status-important)] text-white rounded-md hover:opacity-90"
+            >{tr(lang, 'delete')}</button>
+            <button
+              onClick={onCancelDelete}
+              className="px-3 py-1 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
+            >{tr(lang, 'cancel')}</button>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-stretch gap-2 pl-4 pr-2 py-2.5">
         {/* Main content */}
         <div className="flex-1 min-w-0">
@@ -126,16 +173,13 @@ export function TaskCard({
             </div>
           )}
 
-          {/* Title — inline editable. Wider click hitbox (py-1 -my-1, horizontal px-2 -mx-2) so the
-              clickable region extends ~8px beyond the visible text on each side without affecting
-              surrounding layout. */}
           {!editingTitle ? (
             <div
               className="block w-full text-[13.5px] font-semibold text-text leading-snug inline-edit-target cursor-text rounded px-2 -mx-2 py-1 -my-1 hover:bg-surface-alt/40"
               onMouseDown={stopBubble}
               onClick={(e) => { e.stopPropagation(); setEditingTitle(true); }}
               title={lang === 'ru' ? 'Нажмите, чтобы изменить' : 'Click to edit'}
-              style={{ wordBreak: 'break-word' }}
+              style={{ wordBreak: 'break-word', paddingRight: '1.5rem' }}
             >
               {task.title}
             </div>
@@ -156,7 +200,6 @@ export function TaskCard({
             </div>
           )}
 
-          {/* Comment — inline editable. Slightly wider click zone, smaller than title bonus. */}
           {!editingComment ? (
             task.comment ? (
               <div
@@ -187,8 +230,8 @@ export function TaskCard({
           )}
         </div>
 
-        {/* Right rail: deadline + maximize + done button */}
-        <div className="flex items-center gap-1.5 shrink-0 self-center">
+        {/* Right rail: deadline + maximize + done button — shifted left to give space for × */}
+        <div className="flex items-center gap-1 shrink-0 self-center mr-5">
           <DeadlineBadge deadline={task.deadline} isDone={isDone} />
           <button
             type="button"
@@ -254,4 +297,3 @@ function DeadlineBadge({ deadline, isDone }: { deadline: string | null; isDone: 
     </span>
   );
 }
-

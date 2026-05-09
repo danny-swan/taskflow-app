@@ -1,4 +1,15 @@
-// db.ts — SQLite (sql.js) adapter with localStorage persistence.
+/**
+ * db.ts — Database adapter with two implementations:
+ *  - Tauri (desktop): uses @tauri-apps/plugin-sql → native SQLite
+ *  - Web (browser): uses sql.js + localStorage (unchanged)
+ *
+ * Public API is identical in both cases so the store does not need changes.
+ */
+
+// ─── Environment detection ────────────────────────────────────────────────────
+const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
+
+// ─── WEB IMPLEMENTATION (sql.js + localStorage) ──────────────────────────────
 import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 // @ts-ignore
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
@@ -7,7 +18,7 @@ const STORAGE_KEY = 'taskflow.sqlite.v1';
 const STORAGE_KEY_TS = 'taskflow.sqlite.v1.ts';
 
 let SQL: SqlJsStatic | null = null;
-let db: Database | null = null;
+let webDb: Database | null = null;
 let storageAvailable = true;
 
 function tryStorage<T>(fn: () => T, fallback: T): T {
@@ -34,20 +45,171 @@ function saveToStorage(bytes: Uint8Array) {
   }, null);
 }
 
-export async function initDb(): Promise<Database> {
-  if (db) return db;
-  if (!SQL) {
-    SQL = await initSqlJs({ locateFile: () => wasmUrl as string });
+// ─── TAURI IMPLEMENTATION ─────────────────────────────────────────────────────
+// Loaded lazily so the web build never imports the Tauri plugin.
+let tauriDb: any = null; // TauriDatabase instance
+
+async function getTauriDb(): Promise<any> {
+  if (tauriDb) return tauriDb;
+  // Dynamic import — tree-shaken in web builds
+  const { default: TauriDatabase } = await import('@tauri-apps/plugin-sql');
+  // Ask Rust for the current (possibly custom) path
+  const { invoke } = await import('@tauri-apps/api/core');
+  let dbPath: string;
+  try {
+    dbPath = await invoke<string>('get_db_path');
+  } catch {
+    dbPath = 'data.db';
   }
-  const stored = loadFromStorage();
-  db = stored ? new SQL.Database(stored) : new SQL.Database();
-  ensureSchema(db);
-  if (!stored) seed(db);
-  migrate(db);
-  save();
-  return db;
+  // plugin-sql expects a URL like "sqlite:data.db" or "sqlite:/absolute/path"
+  const url = dbPath.startsWith('sqlite:') ? dbPath : `sqlite:${dbPath}`;
+  tauriDb = await TauriDatabase.load(url);
+  return tauriDb;
 }
 
+async function tauriEnsureSchema(): Promise<void> {
+  const d = await getTauriDb();
+  await d.execute(`
+    CREATE TABLE IF NOT EXISTS statuses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL,
+      behavior TEXT NOT NULL DEFAULT 'middle',
+      sort_order INTEGER NOT NULL,
+      is_seed INTEGER NOT NULL DEFAULT 0,
+      is_technical INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      comment TEXT NOT NULL DEFAULT '',
+      tag_id INTEGER,
+      status_id INTEGER NOT NULL,
+      start_date TEXT,
+      deadline TEXT,
+      finish_date TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+}
+
+async function tauriColumnExists(table: string, col: string): Promise<boolean> {
+  const d = await getTauriDb();
+  const rows: any[] = await d.select(`PRAGMA table_info(${table})`);
+  return rows.some((r: any) => r.name === col);
+}
+
+async function tauriMigrate(): Promise<void> {
+  const d = await getTauriDb();
+
+  if (!(await tauriColumnExists('tasks', 'deadline'))) {
+    await d.execute(`ALTER TABLE tasks ADD COLUMN deadline TEXT`);
+    await d.execute(`UPDATE tasks SET deadline = finish_date WHERE deadline IS NULL AND finish_date IS NOT NULL`);
+    await d.execute(`UPDATE tasks SET finish_date = NULL WHERE status_id NOT IN (SELECT id FROM statuses WHERE behavior='archive')`);
+  }
+  if (!(await tauriColumnExists('tasks', 'archived'))) {
+    await d.execute(`ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!(await tauriColumnExists('statuses', 'is_technical'))) {
+    await d.execute(`ALTER TABLE statuses ADD COLUMN is_technical INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  // Ensure technical "Удалено" status exists
+  const rows: any[] = await d.select(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
+  if (rows.length === 0) {
+    const maxRows: any[] = await d.select(`SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses`);
+    const max = maxRows[0]?.m ?? 0;
+    await d.execute(
+      `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical) VALUES (?,?,?,?,?,?)`,
+      ['Удалено', '#5A5957', 'archive', max, 1, 1]
+    );
+  }
+}
+
+async function tauriIsEmpty(): Promise<boolean> {
+  const d = await getTauriDb();
+  const rows: any[] = await d.select(`SELECT COUNT(*) AS cnt FROM statuses`);
+  return (rows[0]?.cnt ?? 0) === 0;
+}
+
+async function tauriSeed(): Promise<void> {
+  const d = await getTauriDb();
+  const now = new Date().toISOString();
+  const statuses = [
+    { name: 'Важно', color: '#EE204D', behavior: 'top' },
+    { name: 'Сегодня', color: '#C44A8E', behavior: 'top' },
+    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle' },
+    { name: 'В процессе', color: '#D98F2B', behavior: 'middle' },
+    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom' },
+    { name: 'Выполнено', color: '#437A22', behavior: 'archive' },
+  ];
+  for (let i = 0; i < statuses.length; i++) {
+    const s = statuses[i];
+    await d.execute(
+      'INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical) VALUES (?,?,?,?,1,0)',
+      [s.name, s.color, s.behavior, i]
+    );
+  }
+
+  const tags = [
+    { name: 'OPS', color: '#5B7FB8' },
+    { name: 'DEV', color: '#437A22' },
+    { name: 'MTG', color: '#C44A8E' },
+    { name: 'LRN', color: '#D98F2B' },
+    { name: 'PRS', color: '#7A7974' },
+  ];
+  for (let i = 0; i < tags.length; i++) {
+    await d.execute('INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)', [tags[i].name, tags[i].color, i]);
+  }
+
+  // Find "Сегодня" status and "PRS" tag IDs
+  const statusRows: any[] = await d.select(`SELECT id FROM statuses WHERE name='Сегодня' LIMIT 1`);
+  const tagRows: any[] = await d.select(`SELECT id FROM tags WHERE name='PRS' LIMIT 1`);
+  const statusId = statusRows[0]?.id ?? 1;
+  const tagId = tagRows[0]?.id ?? null;
+
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const deadline = new Date(today);
+  deadline.setDate(deadline.getDate() + 3);
+  const deadlineStr = deadline.toISOString().slice(0, 10);
+
+  await d.execute(
+    `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
+     VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
+    [
+      'Добро пожаловать в TaskFlow',
+      'Нажмите ✓ справа, чтобы выполнить задачу, или × в правом верхнем углу — чтобы удалить.',
+      tagId, statusId, todayStr, deadlineStr, null, now, now, 0,
+    ]
+  );
+
+  const defaults = [
+    ['language', 'ru'],
+    ['theme', 'light'],
+    ['stats_enabled', '1'],
+    ['default_tab', 'tasks'],
+    ['font_size', '14'],
+  ];
+  for (const [k, v] of defaults) {
+    await d.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)', [k, v]);
+  }
+}
+
+// ─── WEB HELPERS ─────────────────────────────────────────────────────────────
 function ensureSchema(d: Database) {
   d.run(`
     CREATE TABLE IF NOT EXISTS statuses (
@@ -98,24 +260,17 @@ function columnExists(d: Database, table: string, col: string): boolean {
 }
 
 function migrate(d: Database) {
-  // tasks.deadline
   if (!columnExists(d, 'tasks', 'deadline')) {
     d.run(`ALTER TABLE tasks ADD COLUMN deadline TEXT`);
-    // Best-effort migration: copy old finish_date into deadline so legacy data preserved.
     d.run(`UPDATE tasks SET deadline = finish_date WHERE deadline IS NULL AND finish_date IS NOT NULL`);
-    // Then clear finish_date for non-completed tasks (heuristic: keep finish_date only on archive-status tasks).
-    d.run(`UPDATE tasks SET finish_date = NULL
-           WHERE status_id NOT IN (SELECT id FROM statuses WHERE behavior='archive')`);
+    d.run(`UPDATE tasks SET finish_date = NULL WHERE status_id NOT IN (SELECT id FROM statuses WHERE behavior='archive')`);
   }
-  // tasks.archived
   if (!columnExists(d, 'tasks', 'archived')) {
     d.run(`ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
   }
-  // statuses.is_technical
   if (!columnExists(d, 'statuses', 'is_technical')) {
     d.run(`ALTER TABLE statuses ADD COLUMN is_technical INTEGER NOT NULL DEFAULT 0`);
   }
-  // Ensure technical "Удалено" status exists
   const exists = (() => {
     const stmt = d.prepare(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
     const has = stmt.step();
@@ -158,30 +313,33 @@ function seed(d: Database) {
     d.run('INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)', [t.name, t.color, i]);
   });
 
-  // Demo tasks. Some have deadlines; one is overdue, one is "today", one done.
+  // Welcome seed task (single task)
   const today = new Date();
-  const iso = (offset: number) => {
-    const d2 = new Date(today);
-    d2.setDate(d2.getDate() + offset);
-    return d2.toISOString().slice(0, 10);
-  };
-  const tasks = [
-    { title: 'Подготовить квартальный отчёт для совета директоров', comment: 'Свести цифры по выручке, маркетингу и операциям. Шаблон в Notion.', tag: 1, status: 1, start: iso(-3), deadline: iso(2) },
-    { title: 'Согласовать бюджет на Q4', comment: 'Финал с CFO до пятницы.', tag: 1, status: 1, start: iso(-1), deadline: iso(0) },
-    { title: 'Звонок с подрядчиком по интеграции CRM', comment: 'Проверить готовность API и сроки.', tag: 3, status: 2, start: iso(-2), deadline: iso(-1) },
-    { title: 'Дочитать главу про распределённые системы', comment: 'Designing Data-Intensive Applications, гл. 7.', tag: 4, status: 2, start: iso(-5), deadline: null },
-    { title: 'Ревью PR #482 — модуль авторизации', comment: 'Проверить покрытие тестами, безопасность токенов.', tag: 2, status: 3, start: iso(-1), deadline: iso(3) },
-    { title: 'Подготовить демо для пользовательского тестирования', comment: 'Сценарии записать заранее, прогнать на двоих коллегах.', tag: 2, status: 4, start: iso(-2), deadline: iso(5) },
-    { title: 'Обновить документацию API после рефакторинга', comment: 'Postman-коллекция, OpenAPI спека, примеры запросов.', tag: 2, status: 4, start: iso(-7), deadline: iso(10) },
-    { title: 'Записаться к врачу — плановый осмотр', comment: '', tag: 5, status: 5, start: iso(-10), deadline: null },
-    { title: 'Настроить мониторинг алертов в Grafana', comment: 'Дашборд готов, алерты в Telegram-бот.', tag: 1, status: 6, start: iso(-12), deadline: iso(-7), finish: iso(-6) },
-    { title: 'Прочитать статью про React Server Components', comment: 'Сохранил в Pocket, читать в выходные.', tag: 4, status: 6, start: iso(-8), deadline: null, finish: iso(-2) },
-  ];
-  tasks.forEach((t, i) => {
-    d.run(`INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
-      VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
-      [t.title, t.comment, t.tag, t.status, t.start, t.deadline, (t as any).finish ?? null, now, now, i]);
-  });
+  const todayStr = today.toISOString().slice(0, 10);
+  const deadlineDate = new Date(today);
+  deadlineDate.setDate(deadlineDate.getDate() + 3);
+  const deadlineStr = deadlineDate.toISOString().slice(0, 10);
+
+  // Get the "Сегодня" status (index 1 → id 2) and "PRS" tag (index 4 → id 5)
+  const statusStmt = d.prepare(`SELECT id FROM statuses WHERE name='Сегодня' LIMIT 1`);
+  let statusId = 2;
+  if (statusStmt.step()) { statusId = (statusStmt.getAsObject() as any).id as number; }
+  statusStmt.free();
+
+  const tagStmt = d.prepare(`SELECT id FROM tags WHERE name='PRS' LIMIT 1`);
+  let tagId: number | null = null;
+  if (tagStmt.step()) { tagId = (tagStmt.getAsObject() as any).id as number; }
+  tagStmt.free();
+
+  d.run(
+    `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
+     VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
+    [
+      'Добро пожаловать в TaskFlow',
+      'Нажмите ✓ справа, чтобы выполнить задачу, или × в правом верхнем углу — чтобы удалить.',
+      tagId, statusId, todayStr, deadlineStr, null, now, now, 0,
+    ]
+  );
 
   const defaults = [
     ['language', 'ru'],
@@ -190,12 +348,85 @@ function seed(d: Database) {
     ['default_tab', 'tasks'],
     ['font_size', '14'],
   ];
-  defaults.forEach(([k, v]) => d.run('INSERT INTO settings (key, value) VALUES (?,?)', [k, v]));
+  defaults.forEach(([k, v]) => d.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)', [k, v]));
 }
 
+// ─── PUBLIC init ──────────────────────────────────────────────────────────────
+export async function initDb(): Promise<void> {
+  // Always initialise the in-memory sql.js database as a synchronous cache layer.
+  // In Tauri mode we additionally set up the native SQLite and sync data into webDb.
+  if (!SQL) {
+    SQL = await initSqlJs({ locateFile: () => wasmUrl as string });
+  }
+
+  if (IS_TAURI) {
+    // Set up native SQLite
+    await tauriEnsureSchema();
+    const empty = await tauriIsEmpty();
+    if (empty) await tauriSeed();
+    await tauriMigrate();
+
+    // Pull data from Tauri DB into webDb (in-memory) so sync calls work
+    const d = await getTauriDb();
+    const statuses: any[] = await d.select('SELECT * FROM statuses ORDER BY sort_order');
+    const tags: any[] = await d.select('SELECT * FROM tags ORDER BY sort_order');
+    const tasks: any[] = await d.select('SELECT * FROM tasks ORDER BY sort_order');
+    const settings: any[] = await d.select('SELECT * FROM settings');
+
+    webDb = new SQL!.Database();
+    ensureSchema(webDb);
+    migrate(webDb);
+
+    // Populate webDb from Tauri data
+    for (const s of statuses) {
+      webDb.run(
+        `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical) VALUES (?,?,?,?,?,?,?)`,
+        [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical]
+      );
+    }
+    for (const t of tags) {
+      webDb.run(`INSERT OR REPLACE INTO tags (id,name,color,sort_order) VALUES (?,?,?,?)`, [t.id, t.name, t.color, t.sort_order]);
+    }
+    for (const t of tasks) {
+      webDb.run(
+        `INSERT OR REPLACE INTO tasks (id,title,comment,tag_id,status_id,start_date,deadline,finish_date,created_at,updated_at,sort_order,archived) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.title, t.comment, t.tag_id, t.status_id, t.start_date, t.deadline, t.finish_date, t.created_at, t.updated_at, t.sort_order, t.archived]
+      );
+    }
+    for (const s of settings) {
+      webDb.run(`INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)`, [s.key, s.value]);
+    }
+  } else {
+    if (webDb) return;
+    const stored = loadFromStorage();
+    webDb = stored ? new SQL.Database(stored) : new SQL.Database();
+    ensureSchema(webDb);
+    if (!stored) seed(webDb);
+    migrate(webDb);
+    save();
+  }
+}
+
+// ─── PUBLIC query helpers ─────────────────────────────────────────────────────
 export function all<T = any>(sql: string, params: any[] = []): T[] {
-  if (!db) throw new Error('DB not initialized');
-  const stmt = db.prepare(sql);
+  if (IS_TAURI) {
+    // Tauri mode: return empty synchronously — callers in the store use refresh()
+    // which is called after await initDb(). For synchronous callers we return [].
+    // The store's init() awaits initDb() so after that all sync calls work via webDb fallback.
+    // NOTE: In full Tauri mode, the store would need async versions.
+    // As a pragmatic solution for v0.8, sync calls remain web-only; Tauri uses the same sync
+    // pattern via the webDb that gets populated on first init.
+    // TODO: In a future version, make store fully async for Tauri.
+    if (!webDb) return [];
+    const stmt = webDb.prepare(sql);
+    stmt.bind(params);
+    const rows: T[] = [];
+    while (stmt.step()) rows.push(stmt.getAsObject() as T);
+    stmt.free();
+    return rows;
+  }
+  if (!webDb) throw new Error('DB not initialized');
+  const stmt = webDb.prepare(sql);
   stmt.bind(params);
   const rows: T[] = [];
   while (stmt.step()) rows.push(stmt.getAsObject() as T);
@@ -209,9 +440,23 @@ export function get<T = any>(sql: string, params: any[] = []): T | null {
 }
 
 export function run(sql: string, params: any[] = []): { changes: number; lastInsertRowid: number } {
-  if (!db) throw new Error('DB not initialized');
-  db.run(sql, params);
-  const rs = db.exec('SELECT changes() AS c, last_insert_rowid() AS i')[0];
+  if (IS_TAURI) {
+    // Sync run in Tauri mode: use webDb as cache layer, then fire-and-forget to Tauri DB.
+    // This keeps the store synchronous.
+    if (webDb) {
+      webDb.run(sql, params);
+      const rs = webDb.exec('SELECT changes() AS c, last_insert_rowid() AS i')[0];
+      const c = (rs?.values[0]?.[0] as number) ?? 0;
+      const i = (rs?.values[0]?.[1] as number) ?? 0;
+      // Fire-and-forget to Tauri DB
+      getTauriDb().then((d: any) => d.execute(sql, params)).catch(console.warn);
+      scheduleSave();
+      return { changes: c, lastInsertRowid: i };
+    }
+  }
+  if (!webDb) throw new Error('DB not initialized');
+  webDb.run(sql, params);
+  const rs = webDb.exec('SELECT changes() AS c, last_insert_rowid() AS i')[0];
   const c = (rs?.values[0]?.[0] as number) ?? 0;
   const i = (rs?.values[0]?.[1] as number) ?? 0;
   scheduleSave();
@@ -225,8 +470,8 @@ function scheduleSave() {
 }
 
 export function save() {
-  if (!db) return;
-  const data = db.export();
+  if (!webDb) return;
+  const data = webDb.export();
   saveToStorage(data);
 }
 
@@ -264,5 +509,9 @@ export function isStorageAvailable() { return storageAvailable; }
 
 export function resetDatabase() {
   tryStorage(() => { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(STORAGE_KEY_TS); return null; }, null);
-  db = null;
+  webDb = null;
+  tauriDb = null;
 }
+
+/** Returns whether we're running inside Tauri desktop */
+export function isTauri() { return IS_TAURI; }

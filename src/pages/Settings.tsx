@@ -1,23 +1,26 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive } from 'lucide-react';
 import { downloadFile } from '../lib/utils';
-import { exportJson, exportCsv, resetDatabase } from '../lib/db';
+import { exportJson, exportCsv, resetDatabase, isTauri } from '../lib/db';
+import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 
-type Sub = 'general' | 'tags' | 'statuses' | 'stats' | 'theme' | 'io';
+type Sub = 'general' | 'tags' | 'statuses' | 'stats' | 'theme' | 'io' | 'storage';
 
 export function SettingsPage() {
   const lang = useStore(s => s.language);
   const [sub, setSub] = useState<Sub>('general');
 
-  const subs: { key: Sub; label: string }[] = [
+  const subs: { key: Sub; label: string; tauriOnly?: boolean }[] = [
     { key: 'general', label: tr(lang, 'settings_general') },
     { key: 'tags', label: tr(lang, 'settings_tags') },
     { key: 'statuses', label: tr(lang, 'settings_statuses') },
     { key: 'stats', label: tr(lang, 'settings_stats') },
     { key: 'theme', label: tr(lang, 'settings_theme') },
     { key: 'io', label: tr(lang, 'settings_io') },
+    { key: 'storage', label: tr(lang, 'storage_section') },
   ];
 
   return (
@@ -39,6 +42,7 @@ export function SettingsPage() {
         {sub === 'stats' && <StatsToggleSection />}
         {sub === 'theme' && <ThemeSection />}
         {sub === 'io' && <IOSection />}
+        {sub === 'storage' && <StorageSection />}
       </div>
     </div>
   );
@@ -274,9 +278,40 @@ function ThemeSection() {
   );
 }
 
+// ─── Import helpers ───────────────────────────────────────────────────────────
+interface ImportedTask {
+  title: string;
+  comment?: string;
+  tag?: string;
+  status?: string;
+  start_date?: string;
+  deadline?: string;
+  finish_date?: string;
+}
+
+function normalizeImported(rows: Record<string, any>[]): ImportedTask[] {
+  return rows.map(r => ({
+    title: r['title'] ?? r['Название'] ?? r['Задача'] ?? '',
+    comment: r['comment'] ?? r['Комментарий'] ?? '',
+    tag: r['tag'] ?? r['Тэг'] ?? '',
+    status: r['status'] ?? r['Статус'] ?? '',
+    start_date: r['start_date'] ?? r['Старт'] ?? '',
+    deadline: r['deadline'] ?? r['Дедлайн'] ?? '',
+    finish_date: r['finish_date'] ?? r['Финиш'] ?? '',
+  })).filter(t => t.title);
+}
+
 function IOSection() {
   const lang = useStore(s => s.language);
   const pushToast = useStore(s => s.pushToast);
+  const statuses = useStore(s => s.statuses);
+  const tags = useStore(s => s.tags);
+  const addTask = useStore(s => s.addTask);
+  const tasks = useStore(s => s.tasks);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [preview, setPreview] = useState<{ rows: ImportedTask[]; filename: string } | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const handleExportCsv = () => {
     downloadFile('taskflow.csv', exportCsv(), 'text/csv');
@@ -293,24 +328,155 @@ function IOSection() {
     }
   };
 
+  const parseFile = async (file: File): Promise<ImportedTask[]> => {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (ext === 'json') {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      // Support both full export format {tasks:[...]} and raw array
+      const rows = Array.isArray(data) ? data : (data.tasks ?? []);
+      return normalizeImported(rows);
+    }
+    if (ext === 'csv') {
+      return new Promise((resolve, reject) => {
+        Papa.parse(file, {
+          header: true,
+          skipEmptyLines: true,
+          complete: (res) => resolve(normalizeImported(res.data as Record<string, any>[])),
+          error: reject,
+        });
+      });
+    }
+    if (ext === 'xlsx' || ext === 'xls') {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet);
+      return normalizeImported(rows);
+    }
+    throw new Error('Unsupported file format');
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const rows = await parseFile(file);
+      setPreview({ rows, filename: file.name });
+    } catch (err) {
+      alert('Ошибка парсинга файла: ' + String(err));
+    }
+    // Reset input so same file can be chosen again
+    e.target.value = '';
+  };
+
+  const resolveTaskFields = (t: ImportedTask) => {
+    const defaultStatus = statuses.find(s => s.behavior === 'top' || s.behavior === 'middle');
+    const statusMatch = t.status
+      ? statuses.find(s => s.name.toLowerCase() === t.status!.toLowerCase())
+      : null;
+    const tagMatch = t.tag
+      ? tags.find(tg => tg.name.toLowerCase() === t.tag!.toLowerCase())
+      : null;
+    const today = new Date().toISOString();
+    return {
+      title: t.title,
+      comment: t.comment ?? '',
+      tag_id: tagMatch?.id ?? null,
+      status_id: statusMatch?.id ?? defaultStatus?.id ?? (statuses[0]?.id ?? 1),
+      start_date: t.start_date || today.slice(0, 10),
+      deadline: t.deadline || null,
+      finish_date: t.finish_date || null,
+    };
+  };
+
+  const doImport = async (replace: boolean) => {
+    if (!preview) return;
+    if (replace) {
+      if (!confirm(tr(lang, 'import_confirm_replace'))) return;
+      // Soft-delete all current tasks
+      const softDelete = useStore.getState().softDeleteTask;
+      for (const t of tasks) softDelete(t.id);
+    }
+    setImporting(true);
+    let count = 0;
+    for (const row of preview.rows) {
+      addTask(resolveTaskFields(row));
+      count++;
+    }
+    setImporting(false);
+    setPreview(null);
+    pushToast(`${tr(lang, 'imported_n')} ${count} ${tr(lang, 'import_rows')}`);
+  };
+
   return (
-    <div className="max-w-xl space-y-4">
+    <div className="max-w-xl space-y-6">
       <h3 className="font-display text-[16px] font-semibold">{tr(lang, 'settings_io')}</h3>
 
-      <div className="grid grid-cols-2 gap-3">
-        <button onClick={handleExportCsv} className="flex items-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
-          <Download size={16} /> {tr(lang, 'export_csv')}
-        </button>
-        <button onClick={handleExportJson} className="flex items-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
-          <Download size={16} /> {tr(lang, 'export_json')}
-        </button>
+      {/* Export */}
+      <div>
+        <div className="text-[12px] text-muted uppercase tracking-wider mb-2">Экспорт</div>
+        <div className="grid grid-cols-2 gap-3">
+          <button onClick={handleExportCsv} className="flex items-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
+            <Download size={16} /> {tr(lang, 'export_csv')}
+          </button>
+          <button onClick={handleExportJson} className="flex items-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
+            <Download size={16} /> {tr(lang, 'export_json')}
+          </button>
+        </div>
       </div>
 
-      <div className="px-4 py-3 border border-border-soft rounded-lg bg-surface-alt flex items-center gap-2">
-        <Upload size={16} className="text-muted" />
-        <div>
-          <div className="text-[13px] font-medium">Импорт из .xlsx</div>
-          <div className="text-[12px] text-muted">{tr(lang, 'coming_soon')} — пока используйте CSV-импорт через ручную миграцию.</div>
+      {/* Import */}
+      <div>
+        <div className="text-[12px] text-muted uppercase tracking-wider mb-2">{tr(lang, 'import_tasks')}</div>
+        <div className="border border-border-soft rounded-lg p-4 space-y-3 bg-surface">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.csv,.xlsx,.xls"
+            className="hidden"
+            onChange={handleFileChange}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-2 px-4 py-2.5 border border-dashed border-border rounded-lg hover:bg-surface-alt text-[13px] w-full justify-center"
+          >
+            <Upload size={15} />
+            {tr(lang, 'import_json_csv_xlsx')}
+          </button>
+
+          {preview && (
+            <div className="space-y-3">
+              <div className="text-[12px] text-muted">
+                <span className="font-medium text-text">{preview.filename}</span>
+                {' '}— {tr(lang, 'import_preview')}: {preview.rows.length} {tr(lang, 'import_rows')}
+              </div>
+              {preview.rows.slice(0, 3).map((r, i) => (
+                <div key={i} className="text-[12px] text-muted px-2 py-1 bg-surface-alt rounded truncate">
+                  {i + 1}. {r.title}
+                </div>
+              ))}
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => doImport(false)}
+                  disabled={importing}
+                  className="flex-1 px-3 py-2 text-[12px] bg-accent text-white rounded-md hover:bg-accent-hover font-medium disabled:opacity-50"
+                >
+                  {tr(lang, 'import_add')}
+                </button>
+                <button
+                  onClick={() => doImport(true)}
+                  disabled={importing}
+                  className="flex-1 px-3 py-2 text-[12px] border border-[var(--status-important)] text-[var(--status-important)] rounded-md hover:bg-[var(--status-important)] hover:text-white font-medium disabled:opacity-50"
+                >
+                  {tr(lang, 'import_replace')}
+                </button>
+              </div>
+              <button onClick={() => setPreview(null)} className="text-[11px] text-muted hover:text-text">
+                {tr(lang, 'cancel')}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -318,6 +484,93 @@ function IOSection() {
         onClick={handleReset}
         className="px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-[var(--status-important)] hover:text-white text-muted"
       >Сбросить базу</button>
+    </div>
+  );
+}
+
+// ─── Storage section ──────────────────────────────────────────────────────────
+function StorageSection() {
+  const lang = useStore(s => s.language);
+  const [dbPath, setDbPath] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const pushToast = useStore(s => s.pushToast);
+  const isDesktop = isTauri();
+
+  const loadPath = async () => {
+    if (!isDesktop) return;
+    setLoading(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const path = await invoke<string>('get_db_path');
+      setDbPath(path);
+    } catch (e) {
+      setDbPath('(error loading path)');
+    }
+    setLoading(false);
+  };
+
+  // Load on mount
+  useState(() => { loadPath(); });
+
+  const handleChoose = async () => {
+    if (!isDesktop) return;
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const selected = await save({
+        filters: [{ name: 'SQLite Database', extensions: ['db', 'sqlite'] }],
+        defaultPath: dbPath ?? undefined,
+      });
+      if (selected) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('set_db_path', { path: selected });
+        setDbPath(selected);
+        pushToast(tr(lang, 'saved'));
+      }
+    } catch (e) {
+      console.warn('Dialog error:', e);
+    }
+  };
+
+  const handleReset = async () => {
+    if (!isDesktop) return;
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('set_db_path', { path: '' });
+    await loadPath();
+    pushToast(tr(lang, 'saved'));
+  };
+
+  return (
+    <div className="max-w-xl space-y-4">
+      <h3 className="font-display text-[16px] font-semibold flex items-center gap-2">
+        <HardDrive size={16} />
+        {tr(lang, 'storage_section')}
+      </h3>
+
+      {!isDesktop ? (
+        <div className="px-4 py-3 border border-border-soft rounded-lg bg-surface-alt">
+          <div className="text-[12px] text-muted">{tr(lang, 'db_path_label')}</div>
+          <div className="text-[13px] font-mono mt-1">localStorage</div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="text-[12px] text-muted">{tr(lang, 'db_path_label')}</div>
+          <div className="flex gap-2 items-center">
+            <div className="flex-1 px-3 py-2 bg-surface-alt border border-border-soft rounded-lg text-[12px] font-mono truncate">
+              {loading ? '…' : (dbPath ?? '(loading)')}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleChoose}
+              className="px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
+            >{tr(lang, 'db_path_choose')}</button>
+            <button
+              onClick={handleReset}
+              className="px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt text-muted"
+            >{tr(lang, 'db_path_reset')}</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -3,7 +3,9 @@ import { useStore, Task } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { StatusGroup } from '../components/StatusGroup';
 import { TaskModal } from '../components/TaskModal';
-import { Search, Filter, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
+import {
+  Search, Filter, ChevronsDownUp, ChevronsUpDown,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   DndContext, closestCorners, PointerSensor, useSensor, useSensors,
@@ -33,12 +35,12 @@ export function TasksPage() {
 
   const [query, setQuery] = useState('');
   const [tagFilter, setTagFilter] = useState<number | null>(null);
+  const statusFilter = useStore(s => s.taskStatusFilter);
   const [openTask, setOpenTask] = useState<Task | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
 
   // Manually-set collapse state (set by collapse-all or chevron clicks).
-  // Effective state during filter is computed below.
   const [manualCollapsed, setManualCollapsed] = useState<Record<number, boolean>>(() => readCollapseState());
   useEffect(() => { writeCollapseState(manualCollapsed); }, [manualCollapsed]);
 
@@ -54,28 +56,39 @@ export function TasksPage() {
     return () => window.removeEventListener('keydown', fn);
   }, [navigate]);
 
-  const filterActive = !!query || tagFilter != null;
+  // Status-id sets used by the chip filter logic.
+  const archiveStatusIds = useMemo(
+    () => new Set(allStatuses.filter(s => s.behavior === 'archive' && s.is_technical !== 1).map(s => s.id)),
+    [allStatuses]
+  );
+  const pausedStatusIds = useMemo(
+    () => new Set(allStatuses.filter(s => s.behavior === 'bottom' || s.behavior === 'paused').map(s => s.id)),
+    [allStatuses]
+  );
+
+  const filterActive = !!query || tagFilter != null || statusFilter != null;
 
   const grouped = useMemo(() => {
     const filtered = tasks.filter(t => {
       if (query && !(t.title.toLowerCase().includes(query.toLowerCase()) ||
         (t.comment || '').toLowerCase().includes(query.toLowerCase()))) return false;
       if (tagFilter && t.tag_id !== tagFilter) return false;
+      // Status filter from chips
+      if (statusFilter === 'inprogress' && (archiveStatusIds.has(t.status_id) || pausedStatusIds.has(t.status_id))) return false;
+      if (statusFilter === 'paused' && !pausedStatusIds.has(t.status_id)) return false;
+      if (statusFilter === 'done' && !archiveStatusIds.has(t.status_id)) return false;
       return true;
     });
     return statuses.map(s => ({
       status: s,
       tasks: filtered.filter(t => t.status_id === s.id).sort((a, b) => a.sort_order - b.sort_order),
     }));
-  }, [tasks, statuses, query, tagFilter]);
+  }, [tasks, statuses, query, tagFilter, statusFilter, archiveStatusIds, pausedStatusIds]);
 
-  // Effective collapse state — overridden by filter (groups with matches expand, empty groups collapse)
   const effectiveCollapsed = useMemo(() => {
     const eff: Record<number, boolean> = {};
     if (filterActive) {
-      grouped.forEach(g => {
-        eff[g.status.id] = g.tasks.length === 0;
-      });
+      grouped.forEach(g => { eff[g.status.id] = g.tasks.length === 0; });
     } else {
       statuses.forEach(s => { eff[s.id] = !!manualCollapsed[s.id]; });
     }
@@ -109,9 +122,7 @@ export function TasksPage() {
     return tasks.find(t => t.id === num) ?? null;
   };
 
-  const onDragStart = (e: DragStartEvent) => {
-    setActiveId(String(e.active.id));
-  };
+  const onDragStart = (e: DragStartEvent) => { setActiveId(String(e.active.id)); };
 
   const onDragEnd = (e: DragEndEvent) => {
     setActiveId(null);
@@ -134,17 +145,13 @@ export function TasksPage() {
 
     const taskId: number = activeData.taskId;
 
-    // Same group → reorder
     if (sourceStatusId === targetStatusId) {
       const groupTasks = grouped.find(g => g.status.id === sourceStatusId)?.tasks ?? [];
       const ids = groupTasks.map(t => t.id);
       const oldIdx = ids.indexOf(taskId);
       let newIdx: number;
-      if (overData.type === 'task') {
-        newIdx = ids.indexOf(overData.taskId);
-      } else {
-        newIdx = ids.length - 1;
-      }
+      if (overData.type === 'task') { newIdx = ids.indexOf(overData.taskId); }
+      else { newIdx = ids.length - 1; }
       if (oldIdx < 0 || newIdx < 0 || oldIdx === newIdx) return;
       const next = [...ids];
       next.splice(oldIdx, 1);
@@ -153,7 +160,6 @@ export function TasksPage() {
       return;
     }
 
-    // Cross-group: change status_id, position the task in target group
     const targetGroup = grouped.find(g => g.status.id === targetStatusId);
     if (!targetGroup) return;
     const targetIds = targetGroup.tasks.map(t => t.id);
@@ -162,12 +168,9 @@ export function TasksPage() {
       insertAt = targetIds.indexOf(overData.taskId);
       if (insertAt < 0) insertAt = targetIds.length;
     }
-    // updateTask handles finish_date logic when entering/leaving an archive status
     updateTask(taskId, { status_id: targetStatusId });
-    // Re-order target group with the inserted task
     const newOrder = [...targetIds.slice(0, insertAt), taskId, ...targetIds.slice(insertAt)];
     reorderTasks(targetStatusId, newOrder);
-    // Also re-pack the source group orders to keep them tight
     const sourceGroup = grouped.find(g => g.status.id === sourceStatusId);
     if (sourceGroup) {
       const sourceOrder = sourceGroup.tasks.map(t => t.id).filter(id => id !== taskId);

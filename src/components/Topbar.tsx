@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Clock } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { MetricChips } from './MetricChips';
 
 /**
  * Topbar: rotating session quote on the left, optional datetime on the right.
@@ -48,6 +49,7 @@ export function Topbar({ showDateTime }: { showDateTime?: boolean }) {
       >
         {quote}
       </div>
+      {showDateTime && <MetricChips />}
       {showDateTime && (
         <div className="datetime-chip shrink-0">
           <Clock size={13} aria-hidden />

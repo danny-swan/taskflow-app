@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import {
@@ -6,29 +6,78 @@ import {
   PieChart, Pie, Cell, BarChart, Bar,
 } from 'recharts';
 
-type Period = 'week' | 'month' | 'quarter' | 'year';
+type Period = 'week' | 'month' | 'quarter' | 'year' | 'custom';
+
+interface CustomRange { from: string; to: string }
 
 export function DashboardPage() {
   const lang = useStore(s => s.language);
-  // FULL data — including archived — drives the dashboard, BUT we hide the
-  // technical "Удалено" status entirely (per user spec v0.4 #3).
   const allTasks = useStore(s => s.tasks);
   const allStatuses = useStore(s => s.statuses);
   const tags = useStore(s => s.tags);
-  const [period, setPeriod] = useState<Period>('month');
+  // Default changed from 'month' to 'week' (fix #5)
+  const [period, setPeriod] = useState<Period>('week');
+  const [customRange, setCustomRange] = useState<CustomRange>({
+    from: (() => { const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10); })(),
+    to: new Date().toISOString().slice(0, 10),
+  });
+  const [customOpen, setCustomOpen] = useState(false);
+  const [draftFrom, setDraftFrom] = useState(customRange.from);
+  const [draftTo, setDraftTo] = useState(customRange.to);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
 
-  const periodDays = period === 'week' ? 7 : period === 'month' ? 30 : period === 'quarter' ? 90 : 365;
+  // Close custom popover on outside click
+  useEffect(() => {
+    if (!customOpen) return;
+    const fn = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) setCustomOpen(false);
+    };
+    setTimeout(() => document.addEventListener('mousedown', fn), 0);
+    return () => document.removeEventListener('mousedown', fn);
+  }, [customOpen]);
+
+  const periodDays = period === 'week' ? 7 : period === 'month' ? 30 : period === 'quarter' ? 90 : period === 'year' ? 365 : 0;
 
   const techIds = useMemo(() => new Set(allStatuses.filter(s => s.is_technical === 1).map(s => s.id)), [allStatuses]);
   const deletedStatusIds = useMemo(
     () => new Set(allStatuses.filter(s => s.is_technical === 1 && s.name === 'Удалено').map(s => s.id)),
     [allStatuses],
   );
-  // Tasks excluding tasks soft-deleted into the "Удалено" status
   const dashTasks = useMemo(
     () => allTasks.filter(t => !deletedStatusIds.has(t.status_id)),
     [allTasks, deletedStatusIds],
   );
+
+  // Date range for custom period
+  const dateRange = useMemo<{ from: string; to: string } | null>(() => {
+    if (period !== 'custom') return null;
+    return customRange;
+  }, [period, customRange]);
+
+  // Filter tasks to date range for activity chart (by created_at)
+  const activityDates = useMemo(() => {
+    if (period === 'custom' && dateRange) {
+      const result: { date: string; count: number }[] = [];
+      const from = new Date(dateRange.from + 'T00:00:00');
+      const to = new Date(dateRange.to + 'T00:00:00');
+      for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+        const iso = d.toISOString().slice(0, 10);
+        const count = dashTasks.filter(t => t.created_at?.slice(0, 10) === iso).length;
+        result.push({ date: iso.slice(5), count });
+      }
+      return result;
+    }
+    const days: { date: string; count: number }[] = [];
+    const now = new Date();
+    for (let i = periodDays - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const iso = d.toISOString().slice(0, 10);
+      const count = dashTasks.filter(t => t.created_at?.slice(0, 10) === iso).length;
+      days.push({ date: iso.slice(5), count });
+    }
+    return days;
+  }, [dashTasks, periodDays, period, dateRange]);
 
   const kpis = useMemo(() => {
     const total = dashTasks.length;
@@ -46,19 +95,6 @@ export function DashboardPage() {
     ).length;
     return { total, inProgress, completed, overdue };
   }, [dashTasks, allStatuses, techIds]);
-
-  const activity = useMemo(() => {
-    const days: { date: string; count: number }[] = [];
-    const now = new Date();
-    for (let i = periodDays - 1; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
-      const iso = d.toISOString().slice(0, 10);
-      const count = dashTasks.filter(t => t.created_at?.slice(0, 10) === iso).length;
-      days.push({ date: iso.slice(5), count });
-    }
-    return days;
-  }, [dashTasks, periodDays]);
 
   const byStatus = useMemo(() =>
     allStatuses
@@ -111,33 +147,90 @@ export function DashboardPage() {
     { key: 'month', label: tr(lang, 'month') },
     { key: 'quarter', label: tr(lang, 'quarter') },
     { key: 'year', label: tr(lang, 'year') },
+    { key: 'custom', label: tr(lang, 'dash_custom') },
   ];
+
+  const applyCustom = () => {
+    setCustomRange({ from: draftFrom, to: draftTo });
+    setCustomOpen(false);
+  };
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5 relative z-10">
       <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
         <h2 className="font-display text-[18px] font-semibold">{tr(lang, 'nav_dashboard')}</h2>
-        <div className="flex items-center bg-surface-alt rounded-md p-0.5 border border-border-soft">
-          {periods.map(p => (
-            <button
-              key={p.key}
-              onClick={() => setPeriod(p.key)}
-              className={'px-2.5 py-1 text-[12px] rounded ' +
-                (period === p.key ? 'bg-surface text-text shadow-sm' : 'text-muted hover:text-text')}
-            >{p.label}</button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center bg-surface-alt rounded-md p-0.5 border border-border-soft">
+            {periods.map(p => (
+              <button
+                key={p.key}
+                onClick={() => {
+                  if (p.key === 'custom') {
+                    setDraftFrom(customRange.from);
+                    setDraftTo(customRange.to);
+                    setCustomOpen(o => !o);
+                    setPeriod('custom');
+                  } else {
+                    setPeriod(p.key);
+                    setCustomOpen(false);
+                  }
+                }}
+                className={'px-2.5 py-1 text-[12px] rounded ' +
+                  (period === p.key ? 'bg-surface text-text shadow-sm' : 'text-muted hover:text-text')}
+              >{p.label}</button>
+            ))}
+          </div>
+
+          {/* Custom period popover */}
+          {period === 'custom' && customOpen && (
+            <div
+              ref={popoverRef}
+              className="absolute right-6 mt-2 z-30 bg-surface border border-border rounded-xl shadow-xl p-4 flex flex-col gap-3 min-w-[220px]"
+              style={{ top: '100%' }}
+            >
+              <div className="text-[12px] font-medium">{tr(lang, 'dash_custom')}</div>
+              <div className="flex flex-col gap-2">
+                <label className="text-[11px] text-muted">{tr(lang, 'dash_from')}</label>
+                <input
+                  type="date"
+                  value={draftFrom}
+                  onChange={(e) => setDraftFrom(e.target.value)}
+                  className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px] outline-none focus:border-accent"
+                />
+                <label className="text-[11px] text-muted">{tr(lang, 'dash_to')}</label>
+                <input
+                  type="date"
+                  value={draftTo}
+                  onChange={(e) => setDraftTo(e.target.value)}
+                  className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px] outline-none focus:border-accent"
+                />
+              </div>
+              <button
+                onClick={applyCustom}
+                className="px-3 py-1.5 text-[12px] bg-accent text-white rounded-md hover:bg-accent-hover font-medium"
+              >{tr(lang, 'dash_apply')}</button>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Custom range label */}
+      {period === 'custom' && (
+        <div className="text-[11px] text-muted mb-3">
+          {customRange.from} → {customRange.to}
+        </div>
+      )}
 
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <KPI label={tr(lang, 'total_tasks')} value={kpis.total} />
         <KPI label={tr(lang, 'in_progress')} value={kpis.inProgress} />
-        <KPI label={tr(lang, 'completed')} value={kpis.completed} accent />
+        {/* Fix #6: completed uses green (#437A22) instead of accent */}
+        <KPI label={tr(lang, 'completed')} value={kpis.completed} success />
         <KPI label={tr(lang, 'overdue')} value={kpis.overdue} danger />
       </div>
 
-      {/* 2x2 equal-width chart grid — Activity, By status (donut), By tags (bar), 12-week heatmap */}
+      {/* 2x2 chart grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 auto-rows-fr gap-3 mb-4">
         <div className="bg-surface border border-border-soft rounded-xl p-4 min-h-[280px] flex flex-col">
           <div className="flex items-center justify-between mb-2">
@@ -145,7 +238,7 @@ export function DashboardPage() {
           </div>
           <div className="flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={activity}>
+              <LineChart data={activityDates}>
                 <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} />
                 <YAxis stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
@@ -243,22 +336,20 @@ export function DashboardPage() {
   );
 }
 
-function KPI({ label, value, accent, danger }: { label: string; value: number; accent?: boolean; danger?: boolean }) {
+function KPI({ label, value, success, danger }: { label: string; value: number; success?: boolean; danger?: boolean }) {
   return (
     <div className="bg-surface border border-border-soft rounded-xl px-4 py-3">
       <div className="text-[11px] uppercase tracking-wider text-muted">{label}</div>
-      <div className={
-        'mt-1 text-[26px] font-display font-bold tabular leading-none ' +
-        (danger ? 'text-[var(--status-important)]' : accent ? 'text-accent' : '')
-      }>{value}</div>
+      <div
+        className={'mt-1 text-[26px] font-display font-bold tabular leading-none '}
+        style={{
+          color: danger ? 'var(--status-important)' : success ? '#437A22' : undefined,
+        }}
+      >{value}</div>
     </div>
   );
 }
 
-/**
- * Renders the slice count centered in each donut segment.
- * Hides the label when the slice is too small to read (< ~7%).
- */
 function renderSliceCount(props: any) {
   const { cx, cy, midAngle, innerRadius, outerRadius, percent, value } = props;
   if (!percent || percent < 0.06) return null;
@@ -266,11 +357,8 @@ function renderSliceCount(props: any) {
   const r = innerRadius + (outerRadius - innerRadius) * 0.5;
   const x = cx + r * Math.cos(-midAngle * RAD);
   const y = cy + r * Math.sin(-midAngle * RAD);
-
-  // Determine readable text color against the slice fill
   const fill = props.fill || '#000';
   const txtFill = isLight(fill) ? '#1a1a1a' : '#ffffff';
-
   return (
     <text
       x={x}
@@ -286,14 +374,12 @@ function renderSliceCount(props: any) {
 }
 
 function isLight(hex: string): boolean {
-  // Quick luminance check; default to dark on parse failure.
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return false;
   const n = parseInt(m[1], 16);
   const r = (n >> 16) & 0xff;
   const g = (n >> 8) & 0xff;
   const b = n & 0xff;
-  // Relative luminance approximation
   const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return lum > 0.62;
 }
