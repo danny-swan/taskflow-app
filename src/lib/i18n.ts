@@ -2,7 +2,7 @@ export type Lang = 'ru' | 'en';
 
 const dict = {
   ru: {
-    brand_sub: 'v1.0',
+    brand_sub: 'Task manager',
     nav_tasks: 'Задачи',
     nav_add: 'Добавить',
     nav_dashboard: 'Дашборд',
@@ -93,7 +93,7 @@ const dict = {
     overdue_word: 'просрочено',
   },
   en: {
-    brand_sub: 'v1.0',
+    brand_sub: 'Task manager',
     nav_tasks: 'Tasks',
     nav_add: 'Add',
     nav_dashboard: 'Dashboard',
