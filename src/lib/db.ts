@@ -69,41 +69,41 @@ async function getTauriDb(): Promise<any> {
 
 async function tauriEnsureSchema(): Promise<void> {
   const d = await getTauriDb();
-  await d.execute(`
-    CREATE TABLE IF NOT EXISTS statuses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      color TEXT NOT NULL,
-      behavior TEXT NOT NULL DEFAULT 'middle',
-      sort_order INTEGER NOT NULL,
-      is_seed INTEGER NOT NULL DEFAULT 0,
-      is_technical INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS tags (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      color TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS tasks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      comment TEXT NOT NULL DEFAULT '',
-      tag_id INTEGER,
-      status_id INTEGER NOT NULL,
-      start_date TEXT,
-      deadline TEXT,
-      finish_date TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      archived INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-  `);
+  // tauri-plugin-sql / sqlx не всегда корректно выполняет multi-statement,
+  // поэтому разбиваем на отдельные вызовы execute().
+  await d.execute(`CREATE TABLE IF NOT EXISTS statuses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    behavior TEXT NOT NULL DEFAULT 'middle',
+    sort_order INTEGER NOT NULL,
+    is_seed INTEGER NOT NULL DEFAULT 0,
+    is_technical INTEGER NOT NULL DEFAULT 0
+  )`);
+  await d.execute(`CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  )`);
+  await d.execute(`CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    tag_id INTEGER,
+    status_id INTEGER NOT NULL,
+    start_date TEXT,
+    deadline TEXT,
+    finish_date TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0
+  )`);
+  await d.execute(`CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`);
 }
 
 async function tauriColumnExists(table: string, col: string): Promise<boolean> {
