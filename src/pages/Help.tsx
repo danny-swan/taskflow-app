@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { ChevronDown } from 'lucide-react';
+import { CHANGELOG } from '../data/changelog';
 
 interface HelpSection {
   title: string;
@@ -9,33 +10,6 @@ interface HelpSection {
 }
 
 const sectionsRu: HelpSection[] = [
-  {
-    title: '🆕 Что нового в v0.8.1',
-    items: [
-      {
-        q: 'Список изменений v0.8.1',
-        a: (
-          <ul className="space-y-1.5 list-disc pl-4">
-            <li>Поповер «Свой период» теперь позиционируется корректно под кнопкой.</li>
-            <li>Тулбар задач: кнопки «Свернуть всё» и «Новая задача» всегда видны, тэги прокручиваются горизонтально.</li>
-            <li>Все native <code>confirm()</code> заменены собственной модалкой — нет больше «Сообщение с tauri.localhost».</li>
-            <li>Двойные «+» на кнопках «Добавить тэг» / «Добавить статус» — исправлено.</li>
-            <li>Статусы: вместо выпадашки «Вверх/Середина/Ниже/Архив» — чекбокс «Архивный». Архивные статусы скрыты на доске задач.</li>
-            <li>Текст welcome-задачи обновлён: «иконка корзины 🗑 в правом верхнем углу».</li>
-            <li>Удаление задачи: убран вопрос-заголовок, осталось две большие кнопки на блюре карточки.</li>
-            <li>DnD не блокирует выделение текста при редактировании названия или комментария.</li>
-            <li>Восстановление задачи из Статистики: иконка ↺ у завершённых/удалённых задач с выбором целевого статуса.</li>
-            <li>Форматы дат: ось X «Активность» — «дд MMM», «Недавно завершённые» — «дд.ММ.гггг», custom range — «дд.ММ.гггг».</li>
-            <li>Хранилище: кнопка «Выбрать…» теперь открывает системный диалог (Tauri plugin-dialog).</li>
-            <li>Импорт: добавлена кнопка «Шаблон» — скачать XLSX-шаблон со структурой импорта.</li>
-            <li>Топбар: чип «Всего» — синий, новый виртуальный чип «Просрочено» (AlertTriangle, красный).</li>
-            <li>Сброс БД перенесён в Настройки → Хранилище → «Опасная зона» с двойным подтверждением.</li>
-            <li>Цитаты обновлены на универсальные мотивирующие для всех четырёх тем.</li>
-          </ul>
-        ),
-      },
-    ],
-  },
   {
     title: '📋 Основы',
     items: [
@@ -52,18 +26,23 @@ const sectionsRu: HelpSection[] = [
         a: (
           <>
             <p>Статусы определяют группировку задач на доске. Порядок задаётся стрелками в Настройки → Статусы.</p>
-            <p className="mt-2">Чекбокс «Архивный» делает статус скрытым на доске задач (но видимым в Статистике и Дашборде). Это удобно для «Выполнено» и «Удалено».</p>
-            <p className="mt-2">Системные статусы по умолчанию: Запланировано, В работе, Приостановлено, Выполнено (архивный), Удалено (технический).</p>
+            <p className="mt-2">
+              <strong>Скрытый</strong> — статус не показывается на доске задач (но виден в Статистике и Дашборде). Используйте для «Удалено».
+            </p>
+            <p className="mt-2">
+              <strong>Свёрнут</strong> — секция статуса показывается на доске, но свёрнута по умолчанию. Нажмите на заголовок секции, чтобы развернуть. Используйте для «Выполнено».
+            </p>
+            <p className="mt-2">Системные статусы по умолчанию: Запланировано, В работе, Приостановлено, Выполнено (свёрнут), Удалено (скрытый).</p>
           </>
         ),
       },
       {
         q: 'Как изменить порядок задач?',
-        a: 'Перетащите карточку мышью — внутри группы или в другую группу. Статус обновится автоматически. При редактировании названия или комментария drag-and-drop автоматически отключается.',
+        a: 'Перетащите карточку мышью — за саму карточку или за иконку ⋮⋮ (drag handle) в правой части. Статус обновится автоматически. При редактировании названия или комментария drag-and-drop автоматически отключается.',
       },
       {
         q: 'Как удалить задачу?',
-        a: 'Нажмите иконку корзины 🗑 в правом верхнем углу карточки. Появятся две кнопки: «Удалить» (красная) и «Оставить». Удалённые задачи помечаются как «Удалено» (мягкое удаление) и видны в Статистике — откуда их можно восстановить.',
+        a: 'Нажмите иконку корзины 🗑 в правом верхнем углу карточки. Появятся две кнопки по центру: «Удалить» (красная) и «Оставить». Удалённые задачи помечаются как «Удалено» (мягкое удаление) и видны в Статистике — откуда их можно восстановить.',
       },
     ],
   },
@@ -72,21 +51,21 @@ const sectionsRu: HelpSection[] = [
     items: [
       {
         q: 'Что показывает Дашборд?',
-        a: 'KPI-карточки (всего/в работе/выполнено/просрочено), график активности, круговую диаграмму по статусам, столбчатую по тэгам, тепловую карту активности за 12 недель и список недавно завершённых задач.',
+        a: 'KPI-карточки (всего/в работе/выполнено/просрочено), график активности, круговую диаграмму по статусам, столбчатую по тегам (только теги с задачами), тепловую карту активности за 12 недель и список недавно завершённых задач.',
       },
       {
         q: 'Как выбрать период?',
         a: (
           <>
             <p>Кнопки «Неделя / Месяц / Квартал / Год / Свой период» в правом верхнем углу Дашборда.</p>
-            <p className="mt-1.5">«Свой период» открывает поповер прямо под кнопкой — введите даты «От» и «До», нажмите «Применить». Поповер закрывается кликом вне него.</p>
-            <p className="mt-1.5">Активный custom-диапазон показывается в формате «дд.ММ.гггг → дд.ММ.гггг».</p>
+            <p className="mt-1.5">«Свой период» открывает поповер — введите даты «От» и «До», нажмите «Применить».</p>
+            <p className="mt-1.5">Tooltip графика «Активность» показывает дату в формате дд.мм.гггг.</p>
           </>
         ),
       },
       {
         q: 'Что такое чипы «Просрочено» и «Всего» в топбаре?',
-        a: '«Всего» (синяя иконка) — общее число задач на доске. «Просрочено» (красный AlertTriangle) — виртуальный счётчик задач с прошедшим дедлайном, которые не выполнены и не удалены. Клик фильтрует доску задач.',
+        a: '«Всего» (синяя иконка) — общее число задач. «Просрочено» (красный AlertTriangle) — задачи с прошедшим дедлайном. Клик фильтрует доску. Текст отображается в tooltip при наведении.',
       },
     ],
   },
@@ -95,11 +74,11 @@ const sectionsRu: HelpSection[] = [
     items: [
       {
         q: 'Как импортировать задачи?',
-        a: 'Настройки → Экспорт/импорт → «Выберите файл». Поддерживаются форматы JSON, CSV, XLSX. Можно добавить к существующим или заменить все (с подтверждением).',
+        a: 'Настройки → Экспорт/импорт → «Выберите файл». Поддерживаются форматы JSON, CSV, XLSX. Предпросмотр показывает все строки в прокручиваемой таблице.',
       },
       {
         q: 'Как скачать шаблон для импорта?',
-        a: 'Настройки → Экспорт/импорт → кнопка «Шаблон» рядом с полем загрузки. Скачивает XLSX-файл taskflow_import_template.xlsx со столбцами: title, description, status, tags, due_date, created_at и примерной строкой.',
+        a: 'Настройки → Экспорт/импорт → кнопка «Шаблон». Скачивает XLSX со столбцами: title, description, status, tags, due_date, created_at. Статус и теги подхватываются автоматически при импорте.',
       },
       {
         q: 'Как экспортировать данные?',
@@ -116,11 +95,11 @@ const sectionsRu: HelpSection[] = [
       },
       {
         q: 'Как изменить путь к файлу БД?',
-        a: 'Настройки → Хранилище → «Выбрать…». Откроется системный диалог выбора папки. Файл taskflow.db будет создан в выбранной папке. Эта функция доступна только в десктопном приложении.',
+        a: 'Настройки → Хранилище → «Выбрать…». Откроется системный диалог выбора папки. Функция доступна только в десктопном приложении; в браузере отображается пояснение.',
       },
       {
         q: 'Что такое «Опасная зона»?',
-        a: 'Настройки → Хранилище → секция «⚠ Опасная зона». Кнопка «Стереть все данные» запрашивает два последовательных подтверждения, после чего полностью очищает БД и создаёт welcome-задачу заново.',
+        a: 'Настройки → Хранилище → «⚠ Опасная зона». Кнопка «Стереть все данные» требует двух подтверждений, после чего полностью очищает БД, пересоздаёт дефолтные статусы и welcome-задачу без перезагрузки страницы.',
       },
     ],
   },
@@ -133,7 +112,7 @@ const sectionsRu: HelpSection[] = [
       },
       {
         q: 'Что такое цитаты в топбаре?',
-        a: 'При каждом запуске (или смене темы/языка) случайно выбирается мотивирующая цитата про продуктивность и фокус. Цитаты уникальны для каждой темы.',
+        a: 'При каждом запуске (или смене темы/языка) случайно выбирается мотивирующая цитата про продуктивность и фокус.',
       },
     ],
   },
@@ -154,60 +133,9 @@ const sectionsRu: HelpSection[] = [
       },
     ],
   },
-  {
-    title: 'ℹ О приложении',
-    items: [
-      {
-        q: 'Версия и GitHub',
-        a: (
-          <>
-            <p><strong>TaskFlow v0.8.1</strong> — менеджер задач с поддержкой Tauri (desktop) и браузерного режима.</p>
-            <p className="mt-1.5">
-              Исходный код и релизы:{' '}
-              <a
-                href="https://github.com/danny-swan/taskflow-app"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-accent underline"
-              >
-                github.com/danny-swan/taskflow-app
-              </a>
-            </p>
-          </>
-        ),
-      },
-    ],
-  },
 ];
 
 const sectionsEn: HelpSection[] = [
-  {
-    title: '🆕 What\'s New in v0.8.1',
-    items: [
-      {
-        q: 'Changelog v0.8.1',
-        a: (
-          <ul className="space-y-1.5 list-disc pl-4">
-            <li>Custom range popover now appears directly below the button — no more scrolling down the page.</li>
-            <li>Tasks toolbar: Collapse All and New Task buttons stay fixed on the right; tags scroll horizontally.</li>
-            <li>All native <code>confirm()</code> dialogs replaced with a custom modal — no more "Message from tauri.localhost".</li>
-            <li>Duplicate "+" icons on "Add tag" / "Add status" buttons fixed.</li>
-            <li>Statuses: replaced Top/Middle/Bottom/Archive dropdown with a single "Archived" checkbox. Archived statuses are hidden from the task board.</li>
-            <li>Welcome task text updated: "trash can icon 🗑 in the top-right corner".</li>
-            <li>Task delete confirmation: removed the question heading — two large buttons remain on the blur overlay.</li>
-            <li>DnD no longer blocks text selection when editing a title or comment.</li>
-            <li>Restore task from Statistics: ↺ icon appears on completed/deleted tasks to restore them with a target status selection.</li>
-            <li>Date formats: Activity X-axis shows "dd MMM", recent completed shows "dd.MM.yyyy", custom range shows "dd.MM.yyyy".</li>
-            <li>Storage: "Choose…" button now opens a system folder picker (Tauri plugin-dialog).</li>
-            <li>Import: "Template" button downloads an XLSX template with import structure.</li>
-            <li>Topbar: Total chip icon is now blue; new virtual Overdue chip (red AlertTriangle).</li>
-            <li>DB reset moved to Settings → Storage → "Danger Zone" with double confirmation.</li>
-            <li>Quotes updated to universal motivational productivity quotes for all four themes.</li>
-          </ul>
-        ),
-      },
-    ],
-  },
   {
     title: '📋 Basics',
     items: [
@@ -224,18 +152,23 @@ const sectionsEn: HelpSection[] = [
         a: (
           <>
             <p>Statuses group tasks on the board. Order is set via arrows in Settings → Statuses.</p>
-            <p className="mt-2">The "Archived" checkbox hides a status from the task board (but it remains visible in Statistics and Dashboard). Useful for "Done" and "Deleted".</p>
-            <p className="mt-2">Default system statuses: Planned, In Progress, On Hold, Done (archived), Deleted (technical).</p>
+            <p className="mt-2">
+              <strong>Hidden</strong> — status is not shown on the task board (but visible in Statistics and Dashboard). Use for "Deleted".
+            </p>
+            <p className="mt-2">
+              <strong>Collapsed</strong> — the status section is shown on the board but collapsed by default. Click the section header to expand. Use for "Done".
+            </p>
+            <p className="mt-2">Default statuses: Planned, In Progress, On Hold, Done (collapsed), Deleted (hidden).</p>
           </>
         ),
       },
       {
         q: 'How do I reorder tasks?',
-        a: 'Drag a card with your mouse — within its group or to another group. The status updates automatically. Drag-and-drop is automatically disabled while editing a title or comment.',
+        a: 'Drag a card by the card body or by the ⋮⋮ (GripVertical) drag handle icon on the right. The status updates automatically. Drag-and-drop is disabled while editing a title or comment.',
       },
       {
         q: 'How do I delete a task?',
-        a: 'Click the trash icon 🗑 in the top-right corner of the card. Two buttons appear: Delete (red) and Keep. Deleted tasks are soft-deleted (status → "Deleted") and remain visible in Statistics where they can be restored.',
+        a: 'Click the trash icon 🗑 in the top-right corner of the card. Two centered buttons appear: Delete (red) and Keep. Deleted tasks are soft-deleted and remain visible in Statistics where they can be restored.',
       },
     ],
   },
@@ -244,21 +177,21 @@ const sectionsEn: HelpSection[] = [
     items: [
       {
         q: 'What does the Dashboard show?',
-        a: 'KPI cards (total/in-progress/completed/overdue), an activity line chart, a status pie chart, a tag bar chart, a 12-week activity heatmap, and a list of recently completed tasks.',
+        a: 'KPI cards (total/in-progress/completed/overdue), an activity line chart, status pie chart, tag bar chart (only tags with tasks), 12-week heatmap, and recently completed tasks.',
       },
       {
         q: 'How do I select a period?',
         a: (
           <>
             <p>Buttons "Week / Month / Quarter / Year / Custom" in the top-right of the Dashboard.</p>
-            <p className="mt-1.5">"Custom" opens a popover directly below the button — enter From/To dates and click Apply. Click outside to close.</p>
-            <p className="mt-1.5">The active custom range is shown as "dd.MM.yyyy → dd.MM.yyyy".</p>
+            <p className="mt-1.5">"Custom" opens a popover — enter From/To dates and click Apply.</p>
+            <p className="mt-1.5">Activity chart tooltip shows dates as dd.mm.yyyy.</p>
           </>
         ),
       },
       {
         q: 'What are the Overdue and Total chips in the topbar?',
-        a: 'Total (blue icon) shows all tasks on the board. Overdue (red AlertTriangle) is a virtual counter of tasks with a past due date that are not completed or deleted. Clicking filters the task board.',
+        a: 'Total (blue icon) shows all tasks. Overdue (red AlertTriangle) counts past-due tasks. Clicking filters the board. Label text appears in the tooltip on hover.',
       },
     ],
   },
@@ -267,11 +200,11 @@ const sectionsEn: HelpSection[] = [
     items: [
       {
         q: 'How do I import tasks?',
-        a: 'Settings → Export/Import → "Choose file". JSON, CSV, and XLSX formats are supported. You can add to existing tasks or replace all (with confirmation).',
+        a: 'Settings → Export/Import → "Choose file". JSON, CSV, and XLSX formats are supported. Preview shows all rows in a scrollable table.',
       },
       {
         q: 'How do I download an import template?',
-        a: 'Settings → Export/Import → "Template" button next to the file upload. Downloads taskflow_import_template.xlsx with columns: title, description, status, tags, due_date, created_at and a sample row.',
+        a: 'Settings → Export/Import → "Template" button. Downloads XLSX with columns: title, description, status, tags, due_date, created_at. Status and tags are matched automatically on import.',
       },
       {
         q: 'How do I export data?',
@@ -288,11 +221,11 @@ const sectionsEn: HelpSection[] = [
       },
       {
         q: 'How do I change the database path?',
-        a: 'Settings → Storage → "Choose…". A system folder picker opens. The file taskflow.db will be created in the chosen folder. This feature is only available in the desktop app.',
+        a: 'Settings → Storage → "Choose…". A system folder picker opens. Only available in the desktop app; browser shows an explanation.',
       },
       {
         q: 'What is the Danger Zone?',
-        a: 'Settings → Storage → "⚠ Danger Zone" section. The "Erase all data" button requires two consecutive confirmations, then completely clears the database and recreates the welcome task.',
+        a: 'Settings → Storage → "⚠ Danger Zone". "Erase all data" requires two confirmations, then clears the DB, recreates default statuses and a welcome task — without a page reload.',
       },
     ],
   },
@@ -305,7 +238,7 @@ const sectionsEn: HelpSection[] = [
       },
       {
         q: 'What are the topbar quotes?',
-        a: 'On each launch (or theme/language change) a random motivational productivity quote is picked. Quotes are unique to each theme.',
+        a: 'On each launch (or theme/language change) a random motivational productivity quote is picked.',
       },
     ],
   },
@@ -326,42 +259,66 @@ const sectionsEn: HelpSection[] = [
       },
     ],
   },
-  {
-    title: 'ℹ About',
-    items: [
-      {
-        q: 'Version & GitHub',
-        a: (
-          <>
-            <p><strong>TaskFlow v0.8.1</strong> — task manager with Tauri (desktop) and browser support.</p>
-            <p className="mt-1.5">
-              Source code and releases:{' '}
-              <a
-                href="https://github.com/danny-swan/taskflow-app"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-accent underline"
-              >
-                github.com/danny-swan/taskflow-app
-              </a>
-            </p>
-          </>
-        ),
-      },
-    ],
-  },
 ];
+
+/** Task 13b: "What's New" section generated from CHANGELOG[0] */
+function WhatsNewSection({ lang }: { lang: 'ru' | 'en' }) {
+  const latest = CHANGELOG[0];
+  const items = latest.items[lang];
+  return (
+    <div>
+      <div className="text-[12px] text-muted uppercase tracking-wider mb-2 font-medium">
+        {lang === 'ru' ? `🆕 Что нового в v${latest.version}` : `🆕 What's New in v${latest.version}`}
+      </div>
+      <div className="bg-surface border border-border-soft rounded-lg p-4">
+        <div className="text-[11px] text-muted mb-3">{latest.date}</div>
+        <ul className="space-y-1.5 list-disc pl-4 text-[13px] text-muted leading-relaxed">
+          {items.map((item, i) => (
+            <li key={i}>{item}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+/** Task 13c: About section */
+function AboutSection({ lang }: { lang: 'ru' | 'en' }) {
+  const latest = CHANGELOG[0];
+  return (
+    <div>
+      <div className="text-[12px] text-muted uppercase tracking-wider mb-2 font-medium">
+        ℹ {lang === 'ru' ? 'О приложении' : 'About'}
+      </div>
+      <div className="bg-surface border border-border-soft rounded-lg p-4 text-[13px] text-muted leading-relaxed">
+        <p><strong>TaskFlow v{latest.version}</strong> — {lang === 'ru' ? 'менеджер задач с поддержкой Tauri (desktop) и браузерного режима.' : 'task manager with Tauri (desktop) and browser mode support.'}</p>
+        <p className="mt-1.5">
+          {lang === 'ru' ? 'Исходный код и релизы:' : 'Source code and releases:'}{' '}
+          <a
+            href="https://github.com/danny-swan/taskflow-app"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent underline"
+          >
+            github.com/danny-swan/taskflow-app
+          </a>
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export function HelpPage() {
   const lang = useStore(s => s.language);
   const sections = lang === 'ru' ? sectionsRu : sectionsEn;
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const latest = CHANGELOG[0];
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
       <div className="max-w-2xl">
         <h2 className="font-display text-[18px] font-semibold mb-1">{tr(lang, 'help_title')}</h2>
-        <div className="text-[12px] text-muted mb-5">TaskFlow v0.8.1</div>
+        <div className="text-[12px] text-muted mb-5">TaskFlow v{latest.version}</div>
         <div className="space-y-6">
           {sections.map((section) => (
             <div key={section.title}>
@@ -395,6 +352,12 @@ export function HelpPage() {
               </div>
             </div>
           ))}
+
+          {/* Task 13c: What's New placed above About section, at the bottom of the page */}
+          <WhatsNewSection lang={lang} />
+
+          {/* About section — always last */}
+          <AboutSection lang={lang} />
         </div>
       </div>
     </div>
