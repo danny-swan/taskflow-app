@@ -7,7 +7,8 @@ import { tr } from '../lib/i18n';
  * Compact metric chips shown in the Topbar on the Tasks screen.
  * Click toggles a status filter that lives in the global store
  * and is consumed by the Tasks page.
- * v0.8.1: Total chip icon is blue, added Overdue virtual chip.
+ * v0.8.2: Icon + count only; text label moved to native tooltip (title).
+ *         Total chip icon is hard-coded blue (#3b82f6) — not var(--accent).
  */
 export function MetricChips() {
   const lang = useStore(s => s.language);
@@ -49,11 +50,11 @@ export function MetricChips() {
   };
 
   const chips = [
-    { key: 'total',      icon: CheckSquare,   value: metrics.total,      label: tr(lang, 'chip_total'),      color: 'var(--accent)' },        // blue (accent)
-    { key: 'inprogress', icon: Loader2,       value: metrics.inProgress, label: tr(lang, 'chip_inprogress'), color: '#D98F2B' },
-    { key: 'overdue',    icon: AlertTriangle, value: metrics.overdue,    label: lang === 'ru' ? 'Просрочено' : 'Overdue',    color: 'var(--status-important)' },
-    { key: 'paused',     icon: PauseCircle,  value: metrics.paused,     label: tr(lang, 'chip_paused'),     color: 'var(--muted)' },
-    { key: 'done',       icon: CheckCircle2, value: metrics.done,       label: tr(lang, 'chip_done'),       color: '#437A22' },
+    { key: 'total',      icon: CheckSquare,   value: metrics.total,      label: tr(lang, 'chip_total'),                                 color: '#3b82f6' }, // always blue
+    { key: 'inprogress', icon: Loader2,       value: metrics.inProgress, label: tr(lang, 'chip_inprogress'),                            color: '#D98F2B' },
+    { key: 'overdue',    icon: AlertTriangle, value: metrics.overdue,    label: lang === 'ru' ? 'Просрочено' : 'Overdue',               color: 'var(--status-important)' },
+    { key: 'paused',     icon: PauseCircle,  value: metrics.paused,     label: tr(lang, 'chip_paused'),                                color: 'var(--muted)' },
+    { key: 'done',       icon: CheckCircle2, value: metrics.done,       label: tr(lang, 'chip_done'),                                  color: '#437A22' },
   ] as const;
 
   return (
@@ -66,27 +67,20 @@ export function MetricChips() {
             onClick={() => onToggle(key)}
             title={label}
             className={
-              'flex items-center gap-1 px-2 py-1 rounded-full border text-[11px] transition-colors ' +
-              (isActive
-                ? 'border-accent bg-accent-soft'
-                : 'border-border-soft hover:bg-surface-alt')
+              'flex items-center gap-1 px-2 py-1 rounded-md hover:bg-surface-alt transition-colors ' +
+              (isActive ? 'bg-accent-soft' : '')
             }
           >
-            <Icon size={11} style={{ color }} />
+            <Icon className="w-4 h-4" style={{ color }} />
             <span
-              className="tabular font-medium"
+              className="text-sm font-medium tabular"
               style={{ color: isActive ? 'var(--accent)' : 'var(--text)' }}
             >
               {value}
             </span>
-            <span className="chip-label hidden-narrow text-muted">{label}</span>
           </button>
         );
       })}
-      <style>{`
-        @media (min-width: 1280px) { .hidden-narrow { display: inline; } }
-        @media (max-width: 1279px) { .hidden-narrow { display: none; } }
-      `}</style>
     </div>
   );
 }
