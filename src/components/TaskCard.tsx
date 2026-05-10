@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Task, useStore } from '../store/useStore';
 import { TagChip } from './TagChip';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
-import { Check, Undo2, Maximize2, Trash2 } from 'lucide-react';
+import { Check, Undo2, Maximize2, Trash2, GripVertical } from 'lucide-react';
 import { tr } from '../lib/i18n';
 import { todayISO } from '../lib/utils';
 
@@ -29,7 +29,6 @@ export function TaskCard({
   const [commentDraft, setCommentDraft] = useState(task.comment || '');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  // Track editing state for parent DnD disabled prop
   const isEditing = editingTitle || editingComment;
 
   useEffect(() => { if (!editingTitle) setTitleDraft(task.title); }, [task.title, editingTitle]);
@@ -115,7 +114,8 @@ export function TaskCard({
   const barColor = status?.color || 'var(--border)';
   const barIsWhite = barColor.toUpperCase() === '#FFFFFF';
 
-  // Drag handle: spread dragHandleProps only when not editing (item 7)
+  // Spread dragHandleProps on the whole card too (preserves drag from card body),
+  // but disable when editing text fields.
   const safeDragProps = isEditing ? {} : (dragHandleProps ?? {});
 
   return (
@@ -151,21 +151,21 @@ export function TaskCard({
         <Trash2 size={12} />
       </button>
 
-      {/* Delete confirmation overlay — only two buttons, no question title (item 6b) */}
+      {/* Task 7: Delete confirmation overlay — buttons centered, medium size, NOT full-width */}
       {confirmDelete && (
         <div
-          className="absolute inset-0 bg-surface/95 backdrop-blur-sm flex items-center justify-center gap-2 z-20 rounded-lg px-3"
+          className="absolute inset-0 backdrop-blur-sm bg-black/30 flex items-center justify-center gap-3 z-20 rounded-lg"
           onClick={stopBubble}
         >
           <button
             onClick={onConfirmDelete}
-            className="flex-1 min-w-0 px-2 py-1.5 text-[12px] bg-[var(--status-important)] text-white rounded-md hover:opacity-90 font-medium truncate"
+            className="px-4 py-1.5 text-sm rounded-md bg-red-500 text-white hover:bg-red-600 font-medium"
           >
             {tr(lang, 'delete')}
           </button>
           <button
             onClick={onCancelDelete}
-            className="flex-1 min-w-0 px-2 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt truncate"
+            className="px-4 py-1.5 text-sm rounded-md bg-zinc-200 dark:bg-zinc-700 hover:opacity-90 font-medium"
           >
             {lang === 'ru' ? 'Оставить' : 'Keep'}
           </button>
@@ -242,8 +242,9 @@ export function TaskCard({
           )}
         </div>
 
-        {/* Right rail: deadline + maximize + done button */}
-        <div className="flex items-center gap-1 shrink-0 self-center mr-5">
+        {/* Right rail: deadline + maximize + drag handle + done button */}
+        {/* Task 12: GripVertical drag handle between maximize and done, gap-3 */}
+        <div className="flex items-center gap-2.5 shrink-0 self-center mr-5">
           <DeadlineBadge deadline={task.deadline} isDone={isDone} />
           <button
             type="button"
@@ -255,6 +256,17 @@ export function TaskCard({
             className="w-7 h-7 rounded-md flex items-center justify-center text-muted opacity-0 group-hover:opacity-100 hover:bg-surface-alt hover:text-text transition-opacity"
           >
             <Maximize2 size={12} />
+          </button>
+          {/* Task 12: explicit drag handle — listeners from parent also stay on root div */}
+          <button
+            type="button"
+            onMouseDown={stopBubble}
+            onPointerDown={(e) => e.stopPropagation()}
+            title={lang === 'ru' ? 'Перетащить' : 'Drag'}
+            aria-label={lang === 'ru' ? 'Перетащить' : 'Drag'}
+            className="w-7 h-7 rounded-md flex items-center justify-center text-zinc-400 opacity-0 group-hover:opacity-100 hover:bg-surface-alt cursor-grab active:cursor-grabbing transition-opacity"
+          >
+            <GripVertical size={14} />
           </button>
           <button
             type="button"
