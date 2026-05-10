@@ -126,6 +126,15 @@ async function tauriMigrate(): Promise<void> {
   if (!(await tauriColumnExists('statuses', 'is_technical'))) {
     await d.execute(`ALTER TABLE statuses ADD COLUMN is_technical INTEGER NOT NULL DEFAULT 0`);
   }
+  // v0.8.2: hidden and default_collapsed
+  if (!(await tauriColumnExists('statuses', 'hidden'))) {
+    await d.execute(`ALTER TABLE statuses ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`);
+    await d.execute(`UPDATE statuses SET hidden=1 WHERE behavior='archive' AND is_technical=1`);
+  }
+  if (!(await tauriColumnExists('statuses', 'default_collapsed'))) {
+    await d.execute(`ALTER TABLE statuses ADD COLUMN default_collapsed INTEGER NOT NULL DEFAULT 0`);
+    await d.execute(`UPDATE statuses SET default_collapsed=1 WHERE behavior='archive' AND is_technical=0`);
+  }
 
   // Ensure technical "Удалено" status exists
   const rows: any[] = await d.select(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
@@ -133,8 +142,8 @@ async function tauriMigrate(): Promise<void> {
     const maxRows: any[] = await d.select(`SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses`);
     const max = maxRows[0]?.m ?? 0;
     await d.execute(
-      `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical) VALUES (?,?,?,?,?,?)`,
-      ['Удалено', '#5A5957', 'archive', max, 1, 1]
+      `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
+      ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]
     );
   }
 }
@@ -149,18 +158,18 @@ async function tauriSeed(): Promise<void> {
   const d = await getTauriDb();
   const now = new Date().toISOString();
   const statuses = [
-    { name: 'Важно', color: '#EE204D', behavior: 'top' },
-    { name: 'Сегодня', color: '#C44A8E', behavior: 'top' },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle' },
-    { name: 'В процессе', color: '#D98F2B', behavior: 'middle' },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom' },
-    { name: 'Выполнено', color: '#437A22', behavior: 'archive' },
+    { name: 'Важно',         color: '#EE204D', behavior: 'top',    hidden: 0, default_collapsed: 0 },
+    { name: 'Сегодня',       color: '#C44A8E', behavior: 'top',    hidden: 0, default_collapsed: 0 },
+    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle', hidden: 0, default_collapsed: 0 },
+    { name: 'В процессе',    color: '#D98F2B', behavior: 'middle', hidden: 0, default_collapsed: 0 },
+    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0 },
+    { name: 'Выполнено',     color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1 },
   ];
   for (let i = 0; i < statuses.length; i++) {
     const s = statuses[i];
     await d.execute(
-      'INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical) VALUES (?,?,?,?,1,0)',
-      [s.name, s.color, s.behavior, i]
+      'INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,0,?,?)',
+      [s.name, s.color, s.behavior, i, s.hidden, s.default_collapsed]
     );
   }
 
@@ -271,6 +280,19 @@ function migrate(d: Database) {
   if (!columnExists(d, 'statuses', 'is_technical')) {
     d.run(`ALTER TABLE statuses ADD COLUMN is_technical INTEGER NOT NULL DEFAULT 0`);
   }
+  // v0.8.2: hidden and default_collapsed columns
+  if (!columnExists(d, 'statuses', 'hidden')) {
+    d.run(`ALTER TABLE statuses ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`);
+    // Migrate: archived=true → hidden=true (old behavior)
+    d.run(`UPDATE statuses SET hidden=1 WHERE behavior='archive' AND is_technical=1`);
+    // "Выполнено" (non-technical archive) → hidden=false, default_collapsed=true
+    // will be set below in the seed check
+  }
+  if (!columnExists(d, 'statuses', 'default_collapsed')) {
+    d.run(`ALTER TABLE statuses ADD COLUMN default_collapsed INTEGER NOT NULL DEFAULT 0`);
+    // "Выполнено" behavior='archive', is_technical=0 → defaultCollapsed=true
+    d.run(`UPDATE statuses SET default_collapsed=1 WHERE behavior='archive' AND is_technical=0`);
+  }
   const exists = (() => {
     const stmt = d.prepare(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
     const has = stmt.step();
@@ -282,24 +304,25 @@ function migrate(d: Database) {
     stmt.step();
     const max = (stmt.getAsObject() as any).m as number;
     stmt.free();
-    d.run(`INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical) VALUES (?,?,?,?,?,?)`,
-      ['Удалено', '#5A5957', 'archive', max, 1, 1]);
+    d.run(`INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
+      ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]);
   }
 }
 
 function seed(d: Database) {
   const now = new Date().toISOString();
+  // v0.8.2: hidden and default_collapsed per status
   const statuses = [
-    { name: 'Важно', color: '#EE204D', behavior: 'top' },
-    { name: 'Сегодня', color: '#C44A8E', behavior: 'top' },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle' },
-    { name: 'В процессе', color: '#D98F2B', behavior: 'middle' },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom' },
-    { name: 'Выполнено', color: '#437A22', behavior: 'archive' },
+    { name: 'Важно',         color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0 },
+    { name: 'Сегодня',       color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0 },
+    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle', hidden: 0, default_collapsed: 0 },
+    { name: 'В процессе',    color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0 },
+    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0 },
+    { name: 'Выполнено',     color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1 }, // visible but collapsed by default
   ];
   statuses.forEach((s, i) => {
-    d.run('INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical) VALUES (?,?,?,?,1,0)',
-      [s.name, s.color, s.behavior, i]);
+    d.run('INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,0,?,?)',
+      [s.name, s.color, s.behavior, i, s.hidden, s.default_collapsed]);
   });
 
   const tags = [
@@ -351,6 +374,38 @@ function seed(d: Database) {
   defaults.forEach(([k, v]) => d.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)', [k, v]));
 }
 
+// ─── resetDatabase: clear all data and re-seed ───────────────────────────────
+export function resetDatabase() {
+  // Clear localStorage
+  tryStorage(() => { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(STORAGE_KEY_TS); return null; }, null);
+
+  // If webDb is alive, wipe tables and re-seed directly (no page reload needed in web mode)
+  if (webDb) {
+    try {
+      webDb.run('DELETE FROM tasks');
+      webDb.run('DELETE FROM tags');
+      webDb.run('DELETE FROM statuses');
+      webDb.run('DELETE FROM settings');
+      seed(webDb);
+      // Insert technical "Удалено" status
+      const stmt = webDb.prepare('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses');
+      stmt.step();
+      const max = (stmt.getAsObject() as any).m as number;
+      stmt.free();
+      webDb.run(
+        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
+        ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]
+      );
+      save();
+    } catch (e) {
+      console.error('resetDatabase error:', e);
+    }
+  }
+
+  // Reset tauri db reference so it re-inits on next load
+  tauriDb = null;
+}
+
 // ─── PUBLIC init ──────────────────────────────────────────────────────────────
 export async function initDb(): Promise<void> {
   // Always initialise the in-memory sql.js database as a synchronous cache layer.
@@ -380,8 +435,8 @@ export async function initDb(): Promise<void> {
     // Populate webDb from Tauri data
     for (const s of statuses) {
       webDb.run(
-        `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical) VALUES (?,?,?,?,?,?,?)`,
-        [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical]
+        `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical,hidden,default_collapsed) VALUES (?,?,?,?,?,?,?,?,?)`,
+        [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical, s.hidden ?? 0, s.default_collapsed ?? 0]
       );
     }
     for (const t of tags) {
@@ -506,12 +561,6 @@ export function exportCsv(): string {
 }
 
 export function isStorageAvailable() { return storageAvailable; }
-
-export function resetDatabase() {
-  tryStorage(() => { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(STORAGE_KEY_TS); return null; }, null);
-  webDb = null;
-  tauriDb = null;
-}
 
 /** Returns whether we're running inside Tauri desktop */
 export function isTauri() { return IS_TAURI; }
