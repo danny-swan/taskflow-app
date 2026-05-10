@@ -11,6 +11,21 @@ type Period = 'week' | 'month' | 'quarter' | 'year' | 'custom';
 
 interface CustomRange { from: string; to: string }
 
+/**
+ * Parse a YYYY-MM-DD string as a LOCAL midnight date (avoids UTC offset shift).
+ */
+function parseLocalDate(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
+}
+
+/**
+ * Return a YYYY-MM-DD key using LOCAL calendar fields (avoids toISOString UTC shift).
+ */
+function localDayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export function DashboardPage() {
   const lang = useStore(s => s.language);
   const allTasks = useStore(s => s.tasks);
@@ -18,8 +33,8 @@ export function DashboardPage() {
   const tags = useStore(s => s.tags);
   const [period, setPeriod] = useState<Period>('week');
   const [customRange, setCustomRange] = useState<CustomRange>({
-    from: (() => { const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10); })(),
-    to: new Date().toISOString().slice(0, 10),
+    from: (() => { const d = new Date(); d.setDate(d.getDate() - 6); return localDayKey(d); })(),
+    to: localDayKey(new Date()),
   });
   const [customOpen, setCustomOpen] = useState(false);
   const [draftFrom, setDraftFrom] = useState(customRange.from);
@@ -61,24 +76,31 @@ export function DashboardPage() {
 
   const activityDates = useMemo(() => {
     if (period === 'custom' && dateRange) {
-      const result: { date: string; count: number }[] = [];
-      const from = new Date(dateRange.from + 'T00:00:00');
-      const to = new Date(dateRange.to + 'T00:00:00');
+      const result: { date: string; count: number; isoDate: string }[] = [];
+      // Use parseLocalDate to avoid UTC shift
+      const from = parseLocalDate(dateRange.from);
+      const to = parseLocalDate(dateRange.to);
       for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
-        const iso = d.toISOString().slice(0, 10);
-        const count = dashTasks.filter(t => t.created_at?.slice(0, 10) === iso).length;
-        result.push({ date: formatMonthDay(iso.slice(5), lang), count });
+        const key = localDayKey(d); // LOCAL key — no UTC shift
+        const count = dashTasks.filter(t => {
+          const taskDay = t.created_at ? t.created_at.slice(0, 10) : '';
+          return taskDay === key;
+        }).length;
+        result.push({ date: formatMonthDay(key.slice(5), lang), count, isoDate: key });
       }
       return result;
     }
-    const days: { date: string; count: number }[] = [];
+    const days: { date: string; count: number; isoDate: string }[] = [];
     const now = new Date();
     for (let i = periodDays - 1; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
-      const iso = d.toISOString().slice(0, 10);
-      const count = dashTasks.filter(t => t.created_at?.slice(0, 10) === iso).length;
-      days.push({ date: formatMonthDay(iso.slice(5), lang), count });
+      const key = localDayKey(d);
+      const count = dashTasks.filter(t => {
+        const taskDay = t.created_at ? t.created_at.slice(0, 10) : '';
+        return taskDay === key;
+      }).length;
+      days.push({ date: formatMonthDay(key.slice(5), lang), count, isoDate: key });
     }
     return days;
   }, [dashTasks, periodDays, period, dateRange, lang]);
@@ -92,7 +114,7 @@ export function DashboardPage() {
       !t.archived && !techIds.has(t.status_id) && !archiveStatusIds.has(t.status_id)
     ).length;
     const completed = dashTasks.filter(t => archiveStatusIds.has(t.status_id)).length;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDayKey(new Date());
     const overdue = dashTasks.filter(t =>
       t.deadline && t.deadline < today &&
       !archiveStatusIds.has(t.status_id) && !techIds.has(t.status_id) && !t.archived
@@ -112,13 +134,15 @@ export function DashboardPage() {
       .filter(x => x.value > 0),
     [dashTasks, allStatuses, deletedStatusIds]);
 
-  const byTag = useMemo(() =>
-    tags.map(t => ({
+  // Task 5: filter tags with count > 0
+  const byTag = useMemo(() => {
+    const all = tags.map(t => ({
       name: t.name,
       value: dashTasks.filter(ts => ts.tag_id === t.id).length,
       color: t.color,
-    })),
-    [dashTasks, tags]);
+    }));
+    return all.filter(x => x.value > 0);
+  }, [dashTasks, tags]);
 
   const heatmap = useMemo(() => {
     const weeks: { date: string; count: number }[][] = [];
@@ -130,9 +154,13 @@ export function DashboardPage() {
       for (let d = 0; d < 7; d++) {
         const date = new Date(start);
         date.setDate(start.getDate() + w * 7 + d);
-        const iso = date.toISOString().slice(0, 10);
-        const count = dashTasks.filter(t => t.created_at?.slice(0, 10) === iso || t.updated_at?.slice(0, 10) === iso).length;
-        days.push({ date: iso, count });
+        const key = localDayKey(date); // LOCAL key
+        const count = dashTasks.filter(t => {
+          const cr = t.created_at ? t.created_at.slice(0, 10) : '';
+          const up = t.updated_at ? t.updated_at.slice(0, 10) : '';
+          return cr === key || up === key;
+        }).length;
+        days.push({ date: key, count });
       }
       weeks.push(days);
     }
@@ -157,6 +185,18 @@ export function DashboardPage() {
   const applyCustom = () => {
     setCustomRange({ from: draftFrom, to: draftTo });
     setCustomOpen(false);
+  };
+
+  // Task 3: custom tooltip label formatter using formatDate
+  const activityTooltipLabelFormatter = (label: string, payload: any[]) => {
+    // Try to find the isoDate from payload entry
+    if (payload && payload.length > 0) {
+      const entry = payload[0]?.payload;
+      if (entry?.isoDate) {
+        return formatDate(entry.isoDate);
+      }
+    }
+    return label;
   };
 
   return (
@@ -187,7 +227,6 @@ export function DashboardPage() {
 
           {/* Custom period popover — positioned relative to the trigger wrapper */}
           <div ref={triggerRef} className="relative">
-            {/* Custom popover: absolute, top-100%, right-0, z-50, mt-2 */}
             {period === 'custom' && customOpen && (
               <div
                 ref={popoverRef}
@@ -248,11 +287,13 @@ export function DashboardPage() {
                 <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} />
                 <YAxis stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
+                {/* Task 3: custom labelFormatter showing dd.mm.yyyy */}
                 <Tooltip
                   contentStyle={{
                     background: 'var(--surface)', border: '1px solid var(--border)',
                     borderRadius: 8, fontSize: 12,
                   }}
+                  labelFormatter={activityTooltipLabelFormatter}
                 />
                 <Line type="monotone" dataKey="count" stroke="var(--accent)" strokeWidth={2} dot={false} />
               </LineChart>
@@ -302,17 +343,23 @@ export function DashboardPage() {
         <div className="bg-surface border border-border-soft rounded-xl p-4 min-h-[280px] flex flex-col">
           <div className="text-[12px] text-muted uppercase tracking-wider mb-2">{tr(lang, 'by_tag')}</div>
           <div className="flex-1 min-h-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={byTag}>
-                <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="name" stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
-                <Tooltip contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }} />
-                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                  {byTag.map((e, i) => <Cell key={i} fill={e.color} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            {byTag.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-muted text-[13px]">
+                {lang === 'ru' ? 'Нет данных за выбранный период' : 'No data for the selected period'}
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={byTag}>
+                  <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="name" stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} />
+                  <YAxis stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
+                  <Tooltip contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }} />
+                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                    {byTag.map((e, i) => <Cell key={i} fill={e.color} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
