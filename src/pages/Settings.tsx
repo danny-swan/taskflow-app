@@ -110,7 +110,6 @@ function TagsSection() {
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-display text-[16px] font-semibold">{tr(lang, 'settings_tags')}</h3>
-        {/* Single + icon + text, no duplicate */}
         <button
           onClick={() => addTag('NEW' + (tags.length + 1), '#5B7FB8')}
           className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
@@ -169,7 +168,6 @@ function StatusesSection() {
 
   const move = (i: number, dir: -1 | 1) => {
     const ids = statuses.map(s => s.id);
-    // Find actual index in full statuses array
     const fullIdx = statuses.findIndex(s => s.id === nonTech[i]?.id);
     const j = fullIdx + dir;
     if (j < 0 || j >= ids.length) return;
@@ -181,7 +179,6 @@ function StatusesSection() {
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-display text-[16px] font-semibold">{tr(lang, 'settings_statuses')}</h3>
-        {/* Single + icon + text */}
         <button
           onClick={() => addStatus('Новый', '#5B7FB8', 'middle')}
           className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
@@ -192,7 +189,7 @@ function StatusesSection() {
       </div>
       <div className="border border-border-soft rounded-lg max-h-[60vh] overflow-y-auto bg-surface">
         {nonTech.map((s, i) => (
-          <div key={s.id} className="flex items-center gap-3 px-3 py-2 border-b border-border-soft last:border-b-0">
+          <div key={s.id} className="flex items-center gap-2 px-3 py-2 border-b border-border-soft last:border-b-0">
             <div className="flex flex-col">
               <button onClick={() => move(i, -1)} className="text-muted hover:text-text leading-none text-[10px]">▲</button>
               <button onClick={() => move(i, 1)} className="text-muted hover:text-text leading-none text-[10px]">▼</button>
@@ -208,15 +205,24 @@ function StatusesSection() {
               onChange={(e) => updateStatus(s.id, { name: e.target.value })}
               className="flex-1 bg-transparent border-0 outline-none text-[13px]"
             />
-            {/* Archived checkbox instead of behavior dropdown */}
-            <label className="flex items-center gap-1.5 text-[12px] text-muted cursor-pointer select-none shrink-0">
+            {/* Task 8: TWO independent checkboxes: hidden + default_collapsed */}
+            <label className="flex items-center gap-1 text-[11px] text-muted cursor-pointer select-none shrink-0">
               <input
                 type="checkbox"
-                checked={s.behavior === 'archive'}
-                onChange={(e) => updateStatus(s.id, { behavior: e.target.checked ? 'archive' : 'middle' })}
+                checked={!!s.hidden}
+                onChange={(e) => updateStatus(s.id, { hidden: e.target.checked ? 1 : 0 })}
                 className="w-3.5 h-3.5 accent-[var(--accent)] cursor-pointer"
               />
-              {lang === 'ru' ? 'Архивный' : 'Archived'}
+              {lang === 'ru' ? 'Скрытый' : 'Hidden'}
+            </label>
+            <label className="flex items-center gap-1 text-[11px] text-muted cursor-pointer select-none shrink-0">
+              <input
+                type="checkbox"
+                checked={!!s.default_collapsed}
+                onChange={(e) => updateStatus(s.id, { default_collapsed: e.target.checked ? 1 : 0 })}
+                className="w-3.5 h-3.5 accent-[var(--accent)] cursor-pointer"
+              />
+              {lang === 'ru' ? 'Свёрнут' : 'Collapsed'}
             </label>
             <button
               onClick={() => setConfirmId(s.id)}
@@ -227,8 +233,8 @@ function StatusesSection() {
       </div>
       <p className="text-[11px] text-muted mt-2">
         {lang === 'ru'
-          ? 'Архивные статусы скрыты на доске задач. Порядок задаётся стрелками.'
-          : 'Archived statuses are hidden from the task board. Order is set by the arrows.'}
+          ? '«Скрытый» — статус не показывается на доске задач. «Свёрнут» — секция свёрнута по умолчанию.'
+          : '"Hidden" — status is hidden from the task board. "Collapsed" — section is collapsed by default.'}
       </p>
 
       <ConfirmDialog
@@ -329,22 +335,27 @@ interface ImportedTask {
   title: string;
   comment?: string;
   tag?: string;
+  tags?: string; // comma-separated tags from XLSX template
   status?: string;
   start_date?: string;
   deadline?: string;
+  due_date?: string; // alias for deadline in XLSX template
   finish_date?: string;
 }
 
 function normalizeImported(rows: Record<string, any>[]): ImportedTask[] {
-  return rows.map(r => ({
-    title: r['title'] ?? r['Название'] ?? r['Задача'] ?? '',
-    comment: r['comment'] ?? r['Комментарий'] ?? '',
-    tag: r['tag'] ?? r['Тэг'] ?? '',
-    status: r['status'] ?? r['Статус'] ?? '',
-    start_date: r['start_date'] ?? r['Старт'] ?? '',
-    deadline: r['deadline'] ?? r['Дедлайн'] ?? '',
-    finish_date: r['finish_date'] ?? r['Финиш'] ?? '',
-  })).filter(t => t.title);
+  return rows.map(r => {
+    // Task 9a: support XLSX template columns: title, description, status, tags, due_date, created_at
+    const title = r['title'] ?? r['Название'] ?? r['Задача'] ?? '';
+    const comment = r['description'] ?? r['comment'] ?? r['Комментарий'] ?? '';
+    // tags column (comma-separated) or tag column
+    const tags = r['tags'] ?? r['tag'] ?? r['Тэг'] ?? '';
+    const status = r['status'] ?? r['Статус'] ?? '';
+    const start_date = r['created_at'] ?? r['start_date'] ?? r['Старт'] ?? '';
+    const deadline = r['due_date'] ?? r['deadline'] ?? r['Дедлайн'] ?? '';
+    const finish_date = r['finish_date'] ?? r['Финиш'] ?? '';
+    return { title, comment, tags, status, start_date, deadline, finish_date };
+  }).filter(t => t.title);
 }
 
 function IOSection() {
@@ -352,6 +363,7 @@ function IOSection() {
   const pushToast = useStore(s => s.pushToast);
   const statuses = useStore(s => s.statuses);
   const tags = useStore(s => s.tags);
+  const addTag = useStore(s => s.addTag);
   const addTask = useStore(s => s.addTask);
   const tasks = useStore(s => s.tasks);
 
@@ -421,19 +433,33 @@ function IOSection() {
     e.target.value = '';
   };
 
+  // Task 9a: resolve tag — find by name or create; handles comma-separated tags (use first)
+  const resolveTagId = (tagStr: string): number | null => {
+    if (!tagStr) return null;
+    // Support comma-separated; use the first one
+    const firstName = tagStr.split(',')[0].trim();
+    if (!firstName) return null;
+    const existing = tags.find(tg => tg.name.toLowerCase() === firstName.toLowerCase());
+    if (existing) return existing.id;
+    // Create new tag
+    const newId = addTag(firstName.toUpperCase(), '#5B7FB8');
+    return newId;
+  };
+
   const resolveTaskFields = (t: ImportedTask) => {
     const defaultStatus = statuses.find(s => s.behavior === 'top' || s.behavior === 'middle');
+    // Task 9a: match status by name (case-insensitive)
     const statusMatch = t.status
-      ? statuses.find(s => s.name.toLowerCase() === t.status!.toLowerCase())
+      ? statuses.find(s => s.name.toLowerCase() === t.status!.trim().toLowerCase())
       : null;
-    const tagMatch = t.tag
-      ? tags.find(tg => tg.name.toLowerCase() === t.tag!.toLowerCase())
-      : null;
+    // Task 9a: resolve tags (support both 'tags' and 'tag' fields)
+    const tagStr = t.tags ?? t.tag ?? '';
+    const tagId = resolveTagId(tagStr);
     const today = new Date().toISOString();
     return {
       title: t.title,
       comment: t.comment ?? '',
-      tag_id: tagMatch?.id ?? null,
+      tag_id: tagId,
       status_id: statusMatch?.id ?? defaultStatus?.id ?? (statuses[0]?.id ?? 1),
       start_date: t.start_date || today.slice(0, 10),
       deadline: t.deadline || null,
@@ -496,7 +522,6 @@ function IOSection() {
               <Upload size={15} />
               {tr(lang, 'import_json_csv_xlsx')}
             </button>
-            {/* XLSX template download */}
             <button
               onClick={handleDownloadTemplate}
               title={lang === 'ru' ? 'Скачать шаблон XLSX' : 'Download XLSX template'}
@@ -513,11 +538,29 @@ function IOSection() {
                 <span className="font-medium text-text">{preview.filename}</span>
                 {' '}— {tr(lang, 'import_preview')}: {preview.rows.length} {tr(lang, 'import_rows')}
               </div>
-              {preview.rows.slice(0, 3).map((r, i) => (
-                <div key={i} className="text-[12px] text-muted px-2 py-1 bg-surface-alt rounded truncate">
-                  {i + 1}. {r.title}
-                </div>
-              ))}
+              {/* Task 9b: scrollable preview — show ALL rows, not just 3 */}
+              <div className="max-h-[300px] overflow-y-auto border border-border-soft rounded">
+                <table className="w-full text-[12px]">
+                  <thead className="sticky top-0 bg-surface-alt">
+                    <tr>
+                      <th className="text-left px-2 py-1 text-muted font-medium">#</th>
+                      <th className="text-left px-2 py-1 text-muted font-medium">{lang === 'ru' ? 'Название' : 'Title'}</th>
+                      <th className="text-left px-2 py-1 text-muted font-medium">{lang === 'ru' ? 'Статус' : 'Status'}</th>
+                      <th className="text-left px-2 py-1 text-muted font-medium">{lang === 'ru' ? 'Тэг' : 'Tag'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.rows.map((r, i) => (
+                      <tr key={i} className="border-t border-border-soft">
+                        <td className="px-2 py-1 text-muted">{i + 1}</td>
+                        <td className="px-2 py-1 truncate max-w-[200px]">{r.title}</td>
+                        <td className="px-2 py-1 text-muted">{r.status || '—'}</td>
+                        <td className="px-2 py-1 text-muted">{r.tags || r.tag || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={() => doImport(false)}
@@ -563,9 +606,9 @@ function StorageSection() {
   const [dbPath, setDbPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const pushToast = useStore(s => s.pushToast);
+  const refresh = useStore(s => s.refresh);
   const isDesktop = isTauri();
 
-  // Double-confirm state for danger zone
   const [dangerStep, setDangerStep] = useState<0 | 1 | 2>(0);
 
   const loadPath = async () => {
@@ -576,12 +619,12 @@ function StorageSection() {
       const path = await invoke<string>('get_db_path');
       setDbPath(path);
     } catch (e) {
+      console.error('get_db_path error:', e);
       setDbPath('(error loading path)');
     }
     setLoading(false);
   };
 
-  // Load on mount
   useState(() => { loadPath(); });
 
   const handleChoose = async () => {
@@ -591,15 +634,15 @@ function StorageSection() {
       const selected = await open({ directory: true, multiple: false });
       if (selected) {
         const { invoke } = await import('@tauri-apps/api/core');
-        // selected is a directory; combine with filename
         const newPath = String(selected).replace(/\/$/, '') + '/taskflow.db';
         await invoke('set_db_path', { path: newPath });
         setDbPath(newPath);
         pushToast(tr(lang, 'saved'));
       }
     } catch (e) {
-      console.warn('Dialog error:', e);
-      pushToast(lang === 'ru' ? 'Ошибка выбора пути' : 'Path selection error');
+      // Task 10: always log + show toast, don't silently swallow
+      console.error('Dialog open error:', e);
+      pushToast(lang === 'ru' ? 'Ошибка выбора пути: ' + String(e) : 'Path selection error: ' + String(e));
     }
   };
 
@@ -611,9 +654,22 @@ function StorageSection() {
     pushToast(tr(lang, 'saved'));
   };
 
+  // Task 11: properly reset all data and reload store state
   const handleDangerReset = () => {
-    resetDatabase();
-    window.location.reload();
+    try {
+      resetDatabase();
+      // After reset, reload store from the freshly seeded DB
+      useStore.getState().init().then(() => {
+        useStore.getState().refresh();
+        pushToast(lang === 'ru' ? 'Данные стёрты' : 'Data erased');
+      }).catch(() => {
+        // Fallback: hard reload
+        window.location.reload();
+      });
+    } catch (e) {
+      console.error('handleDangerReset error:', e);
+      window.location.reload();
+    }
   };
 
   return (
@@ -627,6 +683,12 @@ function StorageSection() {
         <div className="px-4 py-3 border border-border-soft rounded-lg bg-surface-alt">
           <div className="text-[12px] text-muted">{tr(lang, 'db_path_label')}</div>
           <div className="text-[13px] font-mono mt-1">localStorage</div>
+          {/* Task 10: Web fallback — explain that path selection is desktop-only */}
+          <div className="text-[11px] text-muted mt-2">
+            {lang === 'ru'
+              ? 'Выбор пути доступен только в десктопном приложении.'
+              : 'Path selection is only available in the desktop app.'}
+          </div>
         </div>
       ) : (
         <div className="space-y-3">
