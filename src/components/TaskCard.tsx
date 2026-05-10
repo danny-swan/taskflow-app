@@ -29,6 +29,9 @@ export function TaskCard({
   const [commentDraft, setCommentDraft] = useState(task.comment || '');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // Track editing state for parent DnD disabled prop
+  const isEditing = editingTitle || editingComment;
+
   useEffect(() => { if (!editingTitle) setTitleDraft(task.title); }, [task.title, editingTitle]);
   useEffect(() => { if (!editingComment) setCommentDraft(task.comment || ''); }, [task.comment, editingComment]);
 
@@ -112,10 +115,13 @@ export function TaskCard({
   const barColor = status?.color || 'var(--border)';
   const barIsWhite = barColor.toUpperCase() === '#FFFFFF';
 
+  // Drag handle: spread dragHandleProps only when not editing (item 7)
+  const safeDragProps = isEditing ? {} : (dragHandleProps ?? {});
+
   return (
     <div
       onClick={onCardClick}
-      {...dragHandleProps}
+      {...safeDragProps}
       className={
         'fade-up group relative bg-surface border border-border-soft hover:border-border rounded-lg ' +
         'cursor-pointer transition-shadow hover:shadow-sm overflow-hidden ' + (dragging ? 'opacity-40' : '')
@@ -137,6 +143,7 @@ export function TaskCard({
         type="button"
         onClick={onDeleteClick}
         onMouseDown={stopBubble}
+        onPointerDown={(e) => e.stopPropagation()}
         title={tr(lang, 'delete_task_q')}
         aria-label={tr(lang, 'delete')}
         className="absolute top-1.5 right-1.5 w-6 h-6 rounded flex items-center justify-center text-muted opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-[var(--status-important)] transition-opacity z-10"
@@ -144,23 +151,24 @@ export function TaskCard({
         <Trash2 size={12} />
       </button>
 
-      {/* Delete confirmation popover */}
+      {/* Delete confirmation overlay — only two buttons, no question title (item 6b) */}
       {confirmDelete && (
         <div
-          className="absolute inset-0 bg-surface/95 backdrop-blur-sm flex flex-col items-center justify-center gap-2 z-20 rounded-lg"
+          className="absolute inset-0 bg-surface/95 backdrop-blur-sm flex items-center justify-center gap-2 z-20 rounded-lg px-3"
           onClick={stopBubble}
         >
-          <div className="text-[13px] font-medium">{tr(lang, 'delete_task_q')}</div>
-          <div className="flex gap-2">
-            <button
-              onClick={onConfirmDelete}
-              className="px-3 py-1 text-[12px] bg-[var(--status-important)] text-white rounded-md hover:opacity-90"
-            >{tr(lang, 'delete')}</button>
-            <button
-              onClick={onCancelDelete}
-              className="px-3 py-1 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
-            >{tr(lang, 'cancel')}</button>
-          </div>
+          <button
+            onClick={onConfirmDelete}
+            className="flex-1 min-w-0 px-2 py-1.5 text-[12px] bg-[var(--status-important)] text-white rounded-md hover:opacity-90 font-medium truncate"
+          >
+            {tr(lang, 'delete')}
+          </button>
+          <button
+            onClick={onCancelDelete}
+            className="flex-1 min-w-0 px-2 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt truncate"
+          >
+            {lang === 'ru' ? 'Оставить' : 'Keep'}
+          </button>
         </div>
       )}
 
@@ -177,6 +185,7 @@ export function TaskCard({
             <div
               className="block w-full text-[13.5px] font-semibold text-text leading-snug inline-edit-target cursor-text rounded px-2 -mx-2 py-1 -my-1 hover:bg-surface-alt/40"
               onMouseDown={stopBubble}
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); setEditingTitle(true); }}
               title={lang === 'ru' ? 'Нажмите, чтобы изменить' : 'Click to edit'}
               style={{ wordBreak: 'break-word', paddingRight: '1.5rem' }}
@@ -184,11 +193,12 @@ export function TaskCard({
               {task.title}
             </div>
           ) : (
-            <div onMouseDown={stopBubble} onClick={stopBubble} className="-mx-2">
+            <div onMouseDown={stopBubble} onPointerDown={(e) => e.stopPropagation()} onClick={stopBubble} className="-mx-2">
               <AutoGrowTextarea
                 autoFocus
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
+                onFocus={() => setEditingTitle(true)}
                 onBlur={saveTitle}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); (e.currentTarget as HTMLTextAreaElement).blur(); }
@@ -205,6 +215,7 @@ export function TaskCard({
               <div
                 className="block w-full text-[12px] text-muted mt-1 inline-edit-target inline-edit-comment cursor-text rounded px-2 -mx-2 py-0.5 hover:bg-surface-alt/40"
                 onMouseDown={stopBubble}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => { e.stopPropagation(); setEditingComment(true); }}
                 title={lang === 'ru' ? 'Нажмите, чтобы изменить' : 'Click to edit'}
                 style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
@@ -213,11 +224,12 @@ export function TaskCard({
               </div>
             ) : null
           ) : (
-            <div onMouseDown={stopBubble} onClick={stopBubble} className="mt-1 -mx-2">
+            <div onMouseDown={stopBubble} onPointerDown={(e) => e.stopPropagation()} onClick={stopBubble} className="mt-1 -mx-2">
               <AutoGrowTextarea
                 autoFocus
                 value={commentDraft}
                 onChange={(e) => setCommentDraft(e.target.value)}
+                onFocus={() => setEditingComment(true)}
                 onBlur={saveComment}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); (e.currentTarget as HTMLTextAreaElement).blur(); }
@@ -230,13 +242,14 @@ export function TaskCard({
           )}
         </div>
 
-        {/* Right rail: deadline + maximize + done button — shifted left to give space for × */}
+        {/* Right rail: deadline + maximize + done button */}
         <div className="flex items-center gap-1 shrink-0 self-center mr-5">
           <DeadlineBadge deadline={task.deadline} isDone={isDone} />
           <button
             type="button"
             onClick={onOpenModalClick}
             onMouseDown={stopBubble}
+            onPointerDown={(e) => e.stopPropagation()}
             title={lang === 'ru' ? 'Открыть полностью' : 'Open full editor'}
             aria-label={lang === 'ru' ? 'Открыть полностью' : 'Open full editor'}
             className="w-7 h-7 rounded-md flex items-center justify-center text-muted opacity-0 group-hover:opacity-100 hover:bg-surface-alt hover:text-text transition-opacity"
@@ -247,6 +260,7 @@ export function TaskCard({
             type="button"
             onClick={onToggleDone}
             onMouseDown={stopBubble}
+            onPointerDown={(e) => e.stopPropagation()}
             title={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
             aria-label={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
             className={
