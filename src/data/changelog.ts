@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.4',
+    date: '2026-05-10',
+    items: {
+      ru: [
+        'Исправлена ошибка миграции старых БД: «table statuses has no column named hidden».',
+        'Миграция теперь выполняется ДО seed/INSERT — старые базы данных корректно дополняются новыми колонками.',
+        'ALTER TABLE сделаны идемпотентными: повторный запуск не падает, частичные миграции автоматически восстанавливаются.',
+        'После обновления установщика ваши задачи и теги снова появятся без ручного сброса БД.',
+      ],
+      en: [
+        'Fixed old-database migration error: "table statuses has no column named hidden".',
+        'Migration now runs BEFORE seed/INSERT — old databases get the new columns added correctly.',
+        'ALTER TABLE statements are now idempotent: repeated runs no longer fail, and partial migrations self-heal.',
+        'After installing the update, your tasks and tags reappear without needing a manual DB reset.',
+      ],
+    },
+  },
+  {
     version: '0.8.3',
     date: '2026-05-10',
     items: {

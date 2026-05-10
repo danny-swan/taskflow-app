@@ -115,37 +115,45 @@ async function tauriColumnExists(table: string, col: string): Promise<boolean> {
 async function tauriMigrate(): Promise<void> {
   const d = await getTauriDb();
 
-  if (!(await tauriColumnExists('tasks', 'deadline'))) {
-    await d.execute(`ALTER TABLE tasks ADD COLUMN deadline TEXT`);
-    await d.execute(`UPDATE tasks SET deadline = finish_date WHERE deadline IS NULL AND finish_date IS NOT NULL`);
-    await d.execute(`UPDATE tasks SET finish_date = NULL WHERE status_id NOT IN (SELECT id FROM statuses WHERE behavior='archive')`);
-  }
-  if (!(await tauriColumnExists('tasks', 'archived'))) {
-    await d.execute(`ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
-  }
-  if (!(await tauriColumnExists('statuses', 'is_technical'))) {
-    await d.execute(`ALTER TABLE statuses ADD COLUMN is_technical INTEGER NOT NULL DEFAULT 0`);
-  }
-  // v0.8.2: hidden and default_collapsed
-  if (!(await tauriColumnExists('statuses', 'hidden'))) {
-    await d.execute(`ALTER TABLE statuses ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`);
-    await d.execute(`UPDATE statuses SET hidden=1 WHERE behavior='archive' AND is_technical=1`);
-  }
-  if (!(await tauriColumnExists('statuses', 'default_collapsed'))) {
-    await d.execute(`ALTER TABLE statuses ADD COLUMN default_collapsed INTEGER NOT NULL DEFAULT 0`);
-    await d.execute(`UPDATE statuses SET default_collapsed=1 WHERE behavior='archive' AND is_technical=0`);
-  }
+  // Идемпотентный ALTER: пытаемся добавить колонку; если она уже есть — игнорируем ошибку.
+  // Это надёжнее, чем PRAGMA table_info(), и переживает частичные миграции.
+  const safeAlter = async (sql: string) => {
+    try { await d.execute(sql); }
+    catch (e: any) {
+      const msg = String(e?.message || e || '');
+      if (!/duplicate column|already exists/i.test(msg)) {
+        console.warn('[migrate] ALTER warning:', msg);
+      }
+    }
+  };
+  const safeExec = async (sql: string) => {
+    try { await d.execute(sql); }
+    catch (e) { console.warn('[migrate] exec warning:', e); }
+  };
+
+  await safeAlter(`ALTER TABLE tasks ADD COLUMN deadline TEXT`);
+  await safeAlter(`ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
+  await safeAlter(`ALTER TABLE statuses ADD COLUMN is_technical INTEGER NOT NULL DEFAULT 0`);
+  await safeAlter(`ALTER TABLE statuses ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`);
+  await safeAlter(`ALTER TABLE statuses ADD COLUMN default_collapsed INTEGER NOT NULL DEFAULT 0`);
+
+  // Пост-миграция: разовые UPDATE-ы (безопасно выполнять повторно).
+  await safeExec(`UPDATE tasks SET deadline = finish_date WHERE deadline IS NULL AND finish_date IS NOT NULL`);
+  await safeExec(`UPDATE statuses SET hidden=1 WHERE behavior='archive' AND is_technical=1 AND hidden=0`);
+  await safeExec(`UPDATE statuses SET default_collapsed=1 WHERE behavior='archive' AND is_technical=0 AND default_collapsed=0`);
 
   // Ensure technical "Удалено" status exists
-  const rows: any[] = await d.select(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
-  if (rows.length === 0) {
-    const maxRows: any[] = await d.select(`SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses`);
-    const max = maxRows[0]?.m ?? 0;
-    await d.execute(
-      `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
-      ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]
-    );
-  }
+  try {
+    const rows: any[] = await d.select(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
+    if (rows.length === 0) {
+      const maxRows: any[] = await d.select(`SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses`);
+      const max = maxRows[0]?.m ?? 0;
+      await d.execute(
+        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
+        ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]
+      );
+    }
+  } catch (e) { console.warn('[migrate] ensure Удалено:', e); }
 }
 
 async function tauriIsEmpty(): Promise<boolean> {
@@ -417,9 +425,11 @@ export async function initDb(): Promise<void> {
   if (IS_TAURI) {
     // Set up native SQLite
     await tauriEnsureSchema();
+    // ВАЖНО: мигрируем ДО seed, иначе для старых БД INSERT из seed падает
+    // на отсутствующих колонках (hidden / default_collapsed / is_technical).
+    await tauriMigrate();
     const empty = await tauriIsEmpty();
     if (empty) await tauriSeed();
-    await tauriMigrate();
 
     // Pull data from Tauri DB into webDb (in-memory) so sync calls work
     const d = await getTauriDb();
@@ -456,8 +466,8 @@ export async function initDb(): Promise<void> {
     const stored = loadFromStorage();
     webDb = stored ? new SQL.Database(stored) : new SQL.Database();
     ensureSchema(webDb);
+    migrate(webDb); // migrate BEFORE seed — по тем же причинам, что и в Tauri-ветке
     if (!stored) seed(webDb);
-    migrate(webDb);
     save();
   }
 }
