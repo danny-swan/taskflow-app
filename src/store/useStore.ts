@@ -124,11 +124,23 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async init() {
-    await db.initDb();
-    get().refresh();
-    const settings = db.all<{ key: string; value: string }>('SELECT * FROM settings');
-    const map: Record<string, string> = {};
-    settings.forEach(s => map[s.key] = s.value);
+    // Safety-net: если инициализация БД падает — всё равно покажем UI с сообщением
+    // об ошибке, чтобы пользователь мог зайти в Настройки → Опасная зона и сбросить БД.
+    let initError: string | null = null;
+    try {
+      await db.initDb();
+      get().refresh();
+    } catch (e: any) {
+      initError = String(e?.message || e || 'Unknown error');
+      console.error('[init] DB init failed:', e);
+    }
+    let map: Record<string, string> = {};
+    try {
+      const settings = db.all<{ key: string; value: string }>('SELECT * FROM settings');
+      settings.forEach(s => map[s.key] = s.value);
+    } catch (e) {
+      console.error('[init] failed to read settings:', e);
+    }
     const theme = (map.theme as ThemeName) || 'light';
     const language = (map.language as Lang) || 'ru';
     const cwRaw = map.column_widths || '{}';
@@ -145,6 +157,11 @@ export const useStore = create<State>((set, get) => ({
       quote,
       columnWidths,
     });
+    if (initError) {
+      // Сохраняем в возможное поле store для показа в UI; если поля нет — хотя бы в консоль.
+      (window as any).__taskflow_init_error = initError;
+      console.error('[TaskFlow] init error:', initError);
+    }
   },
 
   refresh() {

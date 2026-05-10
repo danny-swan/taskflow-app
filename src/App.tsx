@@ -33,6 +33,8 @@ function App() {
     );
   }
 
+  const initError = (typeof window !== 'undefined' ? (window as any).__taskflow_init_error : null) as string | null;
+
   return (
     <ThemeProvider>
       <div className="flex h-full bg-bg text-text">
@@ -41,6 +43,11 @@ function App() {
           <ThemeWatermarks />
           <RouteTopbar />
           <KeyboardShortcuts />
+          {initError && (
+            <div className="px-4 py-2 bg-red-500/10 border-b border-red-500/30 text-red-400 text-[12px]">
+              <strong>Ошибка инициализации БД:</strong> {initError}. Попробуйте Настройки → Хранилище → «Стереть все данные» или удалите файл %APPDATA%\TaskFlow\data.db.
+            </div>
+          )}
           <Routes>
             <Route path="/" element={<Navigate to={`/${defaultTab}`} replace />} />
             <Route path="/tasks" element={<TasksPage />} />

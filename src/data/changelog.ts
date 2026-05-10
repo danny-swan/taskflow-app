@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.3',
+    date: '2026-05-10',
+    items: {
+      ru: [
+        'Исправлено зависание на экране «Загрузка...» при запуске (регрессия v0.8.2).',
+        'Разбивка multi-statement SQL-запросов на отдельные execute() для tauri-plugin-sql.',
+        'Добавлен safety-net: при ошибке инициализации UI всё равно открывается с баннером и возможностью сбросить БД.',
+        'DevTools включены в production-сборке (Ctrl+Shift+I) — для диагностики проблем.',
+      ],
+      en: [
+        'Fixed app hanging on the "Loading…" screen at startup (regression from v0.8.2).',
+        'Multi-statement SQL queries split into separate execute() calls for tauri-plugin-sql compatibility.',
+        'Added safety-net: if init fails, UI still opens with an error banner so user can reset DB.',
+        'DevTools enabled in production builds (Ctrl+Shift+I) for easier troubleshooting.',
+      ],
+    },
+  },
+  {
     version: '0.8.2',
     date: '2026-05-10',
     items: {
