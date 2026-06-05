@@ -402,35 +402,66 @@ function seed(d: Database) {
 }
 
 // ─── resetDatabase: clear all data and re-seed ───────────────────────────────
-export function resetDatabase() {
+// v0.8.7: async + full Tauri support. Old version only reset webDb ref in Tauri,
+// leaving the actual native SQLite untouched (bug 5 from v0.8.6 feedback).
+export async function resetDatabase(): Promise<void> {
   // Clear localStorage
   tryStorage(() => { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(STORAGE_KEY_TS); return null; }, null);
 
-  // If webDb is alive, wipe tables and re-seed directly (no page reload needed in web mode)
-  if (webDb) {
+  if (IS_TAURI) {
     try {
-      webDb.run('DELETE FROM tasks');
-      webDb.run('DELETE FROM tags');
-      webDb.run('DELETE FROM statuses');
-      webDb.run('DELETE FROM settings');
-      seed(webDb);
-      // Insert technical "Удалено" status
-      const stmt = webDb.prepare('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses');
-      stmt.step();
-      const max = (stmt.getAsObject() as any).m as number;
-      stmt.free();
-      webDb.run(
-        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
-        ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]
-      );
-      save();
+      const d = await getTauriDb();
+      await d.execute('DELETE FROM tasks');
+      await d.execute('DELETE FROM tags');
+      await d.execute('DELETE FROM statuses');
+      await d.execute('DELETE FROM settings');
+      try { await d.execute(`DELETE FROM sqlite_sequence WHERE name IN ('tasks','tags','statuses')`); } catch { /* may not exist */ }
+      await tauriSeed();
     } catch (e) {
-      console.error('resetDatabase error:', e);
+      console.error('resetDatabase (tauri) error:', e);
+      throw e;
     }
   }
 
-  // Reset tauri db reference so it re-inits on next load
-  tauriDb = null;
+  // Always rebuild webDb (sync cache) from scratch
+  if (SQL) {
+    try {
+      webDb = new SQL.Database();
+      ensureSchema(webDb);
+      migrate(webDb);
+      if (IS_TAURI) {
+        // Hydrate webDb from freshly seeded Tauri DB
+        const d = await getTauriDb();
+        const statuses: any[] = await d.select('SELECT * FROM statuses ORDER BY sort_order');
+        const tags: any[] = await d.select('SELECT * FROM tags ORDER BY sort_order');
+        const tasks: any[] = await d.select('SELECT * FROM tasks ORDER BY sort_order');
+        const settings: any[] = await d.select('SELECT * FROM settings');
+        for (const s of statuses) {
+          webDb.run(
+            `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical,hidden,default_collapsed) VALUES (?,?,?,?,?,?,?,?,?)`,
+            [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical, s.hidden ?? 0, s.default_collapsed ?? 0]
+          );
+        }
+        for (const t of tags) {
+          webDb.run(`INSERT OR REPLACE INTO tags (id,name,color,sort_order) VALUES (?,?,?,?)`, [t.id, t.name, t.color, t.sort_order]);
+        }
+        for (const t of tasks) {
+          webDb.run(
+            `INSERT OR REPLACE INTO tasks (id,title,comment,tag_id,status_id,start_date,deadline,finish_date,created_at,updated_at,sort_order,archived) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [t.id, t.title, t.comment, t.tag_id, t.status_id, t.start_date, t.deadline, t.finish_date, t.created_at, t.updated_at, t.sort_order, t.archived]
+          );
+        }
+        for (const s of settings) {
+          webDb.run(`INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)`, [s.key, s.value]);
+        }
+      } else {
+        seed(webDb);
+        save();
+      }
+    } catch (e) {
+      console.error('resetDatabase (webDb rebuild) error:', e);
+    }
+  }
 }
 
 // ─── PUBLIC init ──────────────────────────────────────────────────────────────
@@ -593,3 +624,163 @@ export function isStorageAvailable() { return storageAvailable; }
 
 /** Returns whether we're running inside Tauri desktop */
 export function isTauri() { return IS_TAURI; }
+
+// ─── v0.8.7: full backup/restore (tasks + tags + statuses + settings) ──────────
+export interface BackupPayload {
+  version: string;
+  exported_at: string;
+  include?: { tasks?: boolean; tags?: boolean; statuses?: boolean };
+  statuses?: any[];
+  tags?: any[];
+  tasks?: any[];
+}
+
+/** Build a full backup JSON containing only the selected entity kinds */
+export function buildBackup(include: { tasks: boolean; tags: boolean; statuses: boolean }): BackupPayload {
+  const payload: BackupPayload = {
+    version: '0.8.7',
+    exported_at: new Date().toISOString(),
+    include,
+  };
+  if (include.statuses) payload.statuses = all('SELECT * FROM statuses ORDER BY sort_order');
+  if (include.tags)     payload.tags     = all('SELECT * FROM tags ORDER BY sort_order');
+  if (include.tasks)    payload.tasks    = all('SELECT * FROM tasks ORDER BY sort_order');
+  return payload;
+}
+
+/**
+ * Apply backup payload to the live DB.
+ * mode='replace' — wipes selected tables first; mode='merge' — inserts skipping duplicates by name (statuses/tags) or by (title, created_at) for tasks.
+ * Returns count of rows actually applied per entity.
+ */
+export async function applyBackup(
+  payload: BackupPayload,
+  mode: 'replace' | 'merge'
+): Promise<{ statuses: number; tags: number; tasks: number }> {
+  const counts = { statuses: 0, tags: 0, tasks: 0 };
+  const has = {
+    statuses: Array.isArray(payload.statuses),
+    tags: Array.isArray(payload.tags),
+    tasks: Array.isArray(payload.tasks),
+  };
+
+  // Helper to do the run in both Tauri and web modes
+  const sync = async (sql: string, params: any[] = []) => {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      await d.execute(sql, params);
+    }
+    if (webDb) webDb.run(sql, params);
+  };
+
+  if (mode === 'replace') {
+    // Order matters: tasks reference statuses & tags via FK-like fields (no real FK, but logical)
+    if (has.tasks) await sync('DELETE FROM tasks');
+    if (has.tags) await sync('DELETE FROM tags');
+    if (has.statuses) await sync('DELETE FROM statuses');
+  }
+
+  // Apply in order: statuses → tags → tasks (so referenced ids exist)
+  if (has.statuses) {
+    // Existing names for merge dedup
+    const existing = mode === 'merge'
+      ? new Set(all<any>('SELECT name FROM statuses').map(r => String(r.name).toLowerCase()))
+      : new Set<string>();
+    for (const s of payload.statuses!) {
+      const name = String(s.name ?? '').trim();
+      if (!name) continue;
+      if (mode === 'merge' && existing.has(name.toLowerCase())) continue;
+      await sync(
+        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
+        [name, s.color ?? '#888', s.behavior ?? 'middle', s.sort_order ?? 0, s.is_seed ?? 0, s.is_technical ?? 0, s.hidden ?? 0, s.default_collapsed ?? 0]
+      );
+      counts.statuses++;
+    }
+  }
+
+  if (has.tags) {
+    const existing = mode === 'merge'
+      ? new Set(all<any>('SELECT name FROM tags').map(r => String(r.name).toLowerCase()))
+      : new Set<string>();
+    for (const t of payload.tags!) {
+      const name = String(t.name ?? '').trim();
+      if (!name) continue;
+      if (mode === 'merge' && existing.has(name.toLowerCase())) continue;
+      await sync(
+        `INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)`,
+        [name, t.color ?? '#888', t.sort_order ?? 0]
+      );
+      counts.tags++;
+    }
+  }
+
+  if (has.tasks) {
+    // Build name→id maps for statuses and tags (current state, after status/tag import)
+    const statusByName = new Map<string, number>();
+    for (const r of all<any>('SELECT id, name FROM statuses')) statusByName.set(String(r.name).toLowerCase(), r.id);
+    const tagByName = new Map<string, number>();
+    for (const r of all<any>('SELECT id, name FROM tags')) tagByName.set(String(r.name).toLowerCase(), r.id);
+
+    // For dedup in merge mode
+    const existingTasks = mode === 'merge'
+      ? new Set(all<any>('SELECT title || "|" || COALESCE(created_at, "") AS k FROM tasks').map(r => String(r.k)))
+      : new Set<string>();
+
+    // Original payload status/tag id→name mapping (so we can re-resolve by name in the new DB)
+    const origStatuses = new Map<number, string>();
+    if (has.statuses) for (const s of payload.statuses!) origStatuses.set(s.id, String(s.name ?? ''));
+    const origTags = new Map<number, string>();
+    if (has.tags) for (const t of payload.tags!) origTags.set(t.id, String(t.name ?? ''));
+
+    const now = new Date().toISOString();
+    const fallbackStatus = all<any>(`SELECT id FROM statuses WHERE behavior IN ('top','middle') ORDER BY sort_order LIMIT 1`)[0]?.id
+                       ?? all<any>('SELECT id FROM statuses ORDER BY id LIMIT 1')[0]?.id ?? 1;
+
+    for (const t of payload.tasks!) {
+      const title = String(t.title ?? '').trim();
+      if (!title) continue;
+      const key = `${title}|${t.created_at ?? ''}`;
+      if (mode === 'merge' && existingTasks.has(key)) continue;
+
+      // Re-resolve status_id by name (id→name from payload, name→id from current DB)
+      let statusId: number = fallbackStatus;
+      if (t.status_id != null) {
+        const origName = origStatuses.get(t.status_id);
+        if (origName) {
+          const newId = statusByName.get(origName.toLowerCase());
+          if (newId) statusId = newId;
+        }
+      }
+      // Re-resolve tag_id by name
+      let tagId: number | null = null;
+      if (t.tag_id != null) {
+        const origName = origTags.get(t.tag_id);
+        if (origName) {
+          tagId = tagByName.get(origName.toLowerCase()) ?? null;
+        }
+      }
+
+      await sync(
+        `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          title,
+          t.comment ?? '',
+          tagId,
+          statusId,
+          t.start_date ?? null,
+          t.deadline ?? null,
+          t.finish_date ?? null,
+          t.created_at ?? now,
+          t.updated_at ?? now,
+          t.sort_order ?? 0,
+          t.archived ?? 0,
+        ]
+      );
+      counts.tasks++;
+    }
+  }
+
+  // Persist webDb to localStorage in web mode
+  if (!IS_TAURI) save();
+  return counts;
+}

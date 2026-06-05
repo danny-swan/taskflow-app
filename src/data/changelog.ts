@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.7',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Экспорт в 3 форматах: CSV, JSON, XLSX. При экспорте открывается диалог с чекбоксами: задачи / тэги / статусы.',
+        'Импорт полной резервной копии (задачи + тэги + статусы) из JSON/CSV/XLSX с выбором «Слить» / «Заменить всё».',
+        '«Стереть все данные» теперь реально очищает базу и в десктопной версии (раньше очищался только кэш в памяти), и восстанавливает дефолтные статусы + приветственную задачу.',
+        'Подсветка дедлайна: убран жёлтый цвет для 4–5 дней. Остались: синий «сегодня», оранжевый жирный 1–3 дня, серый 4+ дней, красный жирный для просроченных.',
+      ],
+      en: [
+        'Export to 3 formats: CSV, JSON, XLSX. The export dialog now lets you choose which entities to include: tasks / tags / statuses.',
+        'Import a full backup (tasks + tags + statuses) from JSON/CSV/XLSX with a Merge / Replace-all choice.',
+        '“Erase all data” now actually wipes the database in the desktop build too (previously only the in-memory cache was reset) and restores default statuses + the welcome task.',
+        'Deadline highlighting: removed the yellow tier for 4–5 days. Now: blue “today”, bold orange 1–3 days, muted gray 4+ days, bold red overdue.',
+      ],
+    },
+  },
+  {
     version: '0.8.6',
     date: '2026-06-05',
     items: {

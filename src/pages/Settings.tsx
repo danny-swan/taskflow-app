@@ -3,7 +3,7 @@ import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle } from 'lucide-react';
 import { downloadFile } from '../lib/utils';
-import { exportJson, exportCsv, resetDatabase, isTauri } from '../lib/db';
+import { resetDatabase, isTauri, buildBackup, applyBackup, type BackupPayload } from '../lib/db';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
@@ -366,20 +366,70 @@ function IOSection() {
   const addTag = useStore(s => s.addTag);
   const addTask = useStore(s => s.addTask);
   const tasks = useStore(s => s.tasks);
+  const refresh = useStore(s => s.refresh);
 
+  // ─── Export state ─────────────────────────────────────────────────────────
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<'json' | 'csv' | 'xlsx' | null>(null);
+  const [exportInc, setExportInc] = useState({ tasks: true, tags: true, statuses: true });
+
+  const openExportDialog = (format: 'json' | 'csv' | 'xlsx') => {
+    setExportFormat(format);
+    setExportInc({ tasks: true, tags: true, statuses: true });
+    setExportOpen(true);
+  };
+
+  const doExport = () => {
+    if (!exportFormat) return;
+    const payload = buildBackup(exportInc);
+    const stamp = new Date().toISOString().slice(0, 10);
+    if (exportFormat === 'json') {
+      downloadFile(`taskflow-${stamp}.json`, JSON.stringify(payload, null, 2), 'application/json');
+    } else if (exportFormat === 'csv') {
+      // CSV: один файл, секции через пустую строку и заголовок
+      const parts: string[] = [];
+      if (payload.statuses?.length) {
+        parts.push('# STATUSES');
+        parts.push(['id', 'name', 'color', 'behavior', 'sort_order', 'hidden', 'default_collapsed', 'is_technical'].join(','));
+        for (const s of payload.statuses) {
+          parts.push([s.id, s.name, s.color, s.behavior, s.sort_order, s.hidden ?? 0, s.default_collapsed ?? 0, s.is_technical ?? 0]
+            .map(csvEscape).join(','));
+        }
+        parts.push('');
+      }
+      if (payload.tags?.length) {
+        parts.push('# TAGS');
+        parts.push(['id', 'name', 'color', 'sort_order'].join(','));
+        for (const t of payload.tags) parts.push([t.id, t.name, t.color, t.sort_order].map(csvEscape).join(','));
+        parts.push('');
+      }
+      if (payload.tasks?.length) {
+        parts.push('# TASKS');
+        parts.push(['id', 'title', 'comment', 'tag_id', 'status_id', 'start_date', 'deadline', 'finish_date', 'archived', 'created_at', 'updated_at'].join(','));
+        for (const t of payload.tasks) parts.push([t.id, t.title, t.comment, t.tag_id, t.status_id, t.start_date, t.deadline, t.finish_date, t.archived, t.created_at, t.updated_at].map(csvEscape).join(','));
+      }
+      downloadFile(`taskflow-${stamp}.csv`, parts.join('\n'), 'text/csv');
+    } else if (exportFormat === 'xlsx') {
+      const wb = XLSX.utils.book_new();
+      if (payload.statuses?.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(payload.statuses), 'Statuses');
+      if (payload.tags?.length)     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(payload.tags), 'Tags');
+      if (payload.tasks?.length)    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(payload.tasks), 'Tasks');
+      XLSX.writeFile(wb, `taskflow-${stamp}.xlsx`);
+    }
+    pushToast(tr(lang, 'exported'));
+    setExportOpen(false);
+    setExportFormat(null);
+  };
+
+  // ─── Import state ─────────────────────────────────────────────────────────
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Простой импорт задач (старый, для XLSX-таблиц со столбцами)
   const [preview, setPreview] = useState<{ rows: ImportedTask[]; filename: string } | null>(null);
+  // Полный импорт backup-JSON (новый, v0.8.7)
+  const [backupPreview, setBackupPreview] = useState<{ payload: BackupPayload; filename: string } | null>(null);
   const [importing, setImporting] = useState(false);
   const [confirmReplace, setConfirmReplace] = useState(false);
-
-  const handleExportCsv = () => {
-    downloadFile('taskflow.csv', exportCsv(), 'text/csv');
-    pushToast(tr(lang, 'exported'));
-  };
-  const handleExportJson = () => {
-    downloadFile('taskflow.json', JSON.stringify(exportJson(), null, 2), 'application/json');
-    pushToast(tr(lang, 'exported'));
-  };
+  const [confirmBackupReplace, setConfirmBackupReplace] = useState(false);
 
   /** Download XLSX import template */
   const handleDownloadTemplate = () => {
@@ -393,20 +443,29 @@ function IOSection() {
     pushToast(lang === 'ru' ? 'Шаблон скачан' : 'Template downloaded');
   };
 
-  const parseFile = async (file: File): Promise<ImportedTask[]> => {
+  const parseFile = async (file: File): Promise<{ kind: 'backup'; payload: BackupPayload } | { kind: 'tasks'; rows: ImportedTask[] }> => {
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext === 'json') {
       const text = await file.text();
       const data = JSON.parse(text);
+      // v0.8.7 backup format: object with version + statuses/tags/tasks
+      if (data && typeof data === 'object' && !Array.isArray(data) && (data.version || data.statuses || data.tags)) {
+        return { kind: 'backup', payload: data as BackupPayload };
+      }
       const rows = Array.isArray(data) ? data : (data.tasks ?? []);
-      return normalizeImported(rows);
+      return { kind: 'tasks', rows: normalizeImported(rows) };
     }
     if (ext === 'csv') {
+      const text = await file.text();
+      // v0.8.7 backup CSV: имеет секции # STATUSES / # TAGS / # TASKS
+      if (text.includes('# TASKS') || text.includes('# STATUSES') || text.includes('# TAGS')) {
+        return { kind: 'backup', payload: parseBackupCsv(text) };
+      }
       return new Promise((resolve, reject) => {
         Papa.parse(file, {
           header: true,
           skipEmptyLines: true,
-          complete: (res) => resolve(normalizeImported(res.data as Record<string, any>[])),
+          complete: (res) => resolve({ kind: 'tasks', rows: normalizeImported(res.data as Record<string, any>[]) }),
           error: reject,
         });
       });
@@ -414,9 +473,21 @@ function IOSection() {
     if (ext === 'xlsx' || ext === 'xls') {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: 'array' });
+      // v0.8.7 backup XLSX: несколько листов Statuses/Tags/Tasks
+      const sheetNames = wb.SheetNames.map(n => n.toLowerCase());
+      if (sheetNames.includes('statuses') || sheetNames.includes('tags') || (sheetNames.includes('tasks') && sheetNames.length > 1)) {
+        const payload: BackupPayload = { version: 'xlsx', exported_at: new Date().toISOString() };
+        for (const name of wb.SheetNames) {
+          const data = XLSX.utils.sheet_to_json<any>(wb.Sheets[name]);
+          if (name.toLowerCase() === 'statuses') payload.statuses = data;
+          else if (name.toLowerCase() === 'tags') payload.tags = data;
+          else if (name.toLowerCase() === 'tasks') payload.tasks = data;
+        }
+        return { kind: 'backup', payload };
+      }
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet);
-      return normalizeImported(rows);
+      return { kind: 'tasks', rows: normalizeImported(rows) };
     }
     throw new Error('Unsupported file format');
   };
@@ -425,34 +496,35 @@ function IOSection() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const rows = await parseFile(file);
-      setPreview({ rows, filename: file.name });
+      const parsed = await parseFile(file);
+      if (parsed.kind === 'backup') {
+        setBackupPreview({ payload: parsed.payload, filename: file.name });
+        setPreview(null);
+      } else {
+        setPreview({ rows: parsed.rows, filename: file.name });
+        setBackupPreview(null);
+      }
     } catch (err) {
       pushToast('Ошибка парсинга файла: ' + String(err));
     }
     e.target.value = '';
   };
 
-  // Task 9a: resolve tag — find by name or create; handles comma-separated tags (use first)
+  // Old simple-tasks import path
   const resolveTagId = (tagStr: string): number | null => {
     if (!tagStr) return null;
-    // Support comma-separated; use the first one
     const firstName = tagStr.split(',')[0].trim();
     if (!firstName) return null;
     const existing = tags.find(tg => tg.name.toLowerCase() === firstName.toLowerCase());
     if (existing) return existing.id;
-    // Create new tag
-    const newId = addTag(firstName.toUpperCase(), '#5B7FB8');
-    return newId;
+    return addTag(firstName.toUpperCase(), '#5B7FB8');
   };
 
   const resolveTaskFields = (t: ImportedTask) => {
     const defaultStatus = statuses.find(s => s.behavior === 'top' || s.behavior === 'middle');
-    // Task 9a: match status by name (case-insensitive)
     const statusMatch = t.status
       ? statuses.find(s => s.name.toLowerCase() === t.status!.trim().toLowerCase())
       : null;
-    // Task 9a: resolve tags (support both 'tags' and 'tag' fields)
     const tagStr = t.tags ?? t.tag ?? '';
     const tagId = resolveTagId(tagStr);
     const today = new Date().toISOString();
@@ -484,6 +556,26 @@ function IOSection() {
     pushToast(`${tr(lang, 'imported_n')} ${count} ${tr(lang, 'import_rows')}`);
   };
 
+  // v0.8.7 — backup import
+  const doBackupImport = async (mode: 'replace' | 'merge') => {
+    if (!backupPreview) return;
+    setImporting(true);
+    try {
+      const counts = await applyBackup(backupPreview.payload, mode);
+      await useStore.getState().init();
+      refresh();
+      const total = counts.statuses + counts.tags + counts.tasks;
+      pushToast(lang === 'ru'
+        ? `Импортировано: ${counts.tasks} задач, ${counts.tags} тэгов, ${counts.statuses} статусов (всего ${total})`
+        : `Imported: ${counts.tasks} tasks, ${counts.tags} tags, ${counts.statuses} statuses (total ${total})`);
+    } catch (e) {
+      console.error('backup import error:', e);
+      pushToast(lang === 'ru' ? 'Ошибка импорта: ' + String(e) : 'Import error: ' + String(e));
+    }
+    setImporting(false);
+    setBackupPreview(null);
+  };
+
   return (
     <div className="max-w-xl space-y-6">
       <h3 className="font-display text-[16px] font-semibold">{tr(lang, 'settings_io')}</h3>
@@ -493,12 +585,15 @@ function IOSection() {
         <div className="text-[12px] text-muted uppercase tracking-wider mb-2">
           {lang === 'ru' ? 'Экспорт' : 'Export'}
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <button onClick={handleExportCsv} className="flex items-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
-            <Download size={16} /> {tr(lang, 'export_csv')}
+        <div className="grid grid-cols-3 gap-3">
+          <button onClick={() => openExportDialog('csv')} className="flex items-center justify-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
+            <Download size={16} /> CSV
           </button>
-          <button onClick={handleExportJson} className="flex items-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
-            <Download size={16} /> {tr(lang, 'export_json')}
+          <button onClick={() => openExportDialog('json')} className="flex items-center justify-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
+            <Download size={16} /> JSON
+          </button>
+          <button onClick={() => openExportDialog('xlsx')} className="flex items-center justify-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
+            <Download size={16} /> XLSX
           </button>
         </div>
       </div>
@@ -532,13 +627,13 @@ function IOSection() {
             </button>
           </div>
 
+          {/* Old simple-tasks preview */}
           {preview && (
             <div className="space-y-3">
               <div className="text-[12px] text-muted">
                 <span className="font-medium text-text">{preview.filename}</span>
                 {' '}— {tr(lang, 'import_preview')}: {preview.rows.length} {tr(lang, 'import_rows')}
               </div>
-              {/* Task 9b: scrollable preview — show ALL rows, not just 3 */}
               <div className="max-h-[300px] overflow-y-auto border border-border-soft rounded">
                 <table className="w-full text-[12px]">
                   <thead className="sticky top-0 bg-surface-alt">
@@ -582,10 +677,77 @@ function IOSection() {
               </button>
             </div>
           )}
+
+          {/* v0.8.7 — full backup preview */}
+          {backupPreview && (
+            <div className="space-y-3">
+              <div className="text-[12px] text-muted">
+                <span className="font-medium text-text">{backupPreview.filename}</span>
+                {' '}— {lang === 'ru' ? 'Резервная копия' : 'Backup'}
+                {backupPreview.payload.version ? ` v${backupPreview.payload.version}` : ''}
+              </div>
+              <div className="px-3 py-2 border border-border-soft rounded bg-surface-alt text-[12px] space-y-1">
+                {(['statuses', 'tags', 'tasks'] as const).map(k => (
+                  <div key={k} className="flex justify-between">
+                    <span className="capitalize">{k}</span>
+                    <span className="text-muted">{backupPreview.payload[k]?.length ?? 0}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => doBackupImport('merge')}
+                  disabled={importing}
+                  className="flex-1 px-3 py-2 text-[12px] bg-accent text-white rounded-md hover:bg-accent-hover font-medium disabled:opacity-50"
+                >
+                  {lang === 'ru' ? 'Слить (добавить новое)' : 'Merge (add new)'}
+                </button>
+                <button
+                  onClick={() => setConfirmBackupReplace(true)}
+                  disabled={importing}
+                  className="flex-1 px-3 py-2 text-[12px] border border-[var(--status-important)] text-[var(--status-important)] rounded-md hover:bg-[var(--status-important)] hover:text-white font-medium disabled:opacity-50"
+                >
+                  {lang === 'ru' ? 'Заменить всё' : 'Replace all'}
+                </button>
+              </div>
+              <button onClick={() => setBackupPreview(null)} className="text-[11px] text-muted hover:text-text">
+                {tr(lang, 'cancel')}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Confirm replace dialog */}
+      {/* Export dialog: pick entities */}
+      <ConfirmDialog
+        open={exportOpen}
+        title={lang === 'ru' ? `Экспорт в ${(exportFormat ?? '').toUpperCase()}` : `Export to ${(exportFormat ?? '').toUpperCase()}`}
+        message=""
+        confirmLabel={lang === 'ru' ? 'Экспортировать' : 'Export'}
+        cancelLabel={tr(lang, 'cancel')}
+        onConfirm={doExport}
+        onCancel={() => { setExportOpen(false); setExportFormat(null); }}
+      >
+        <div className="space-y-2 mt-2 text-[13px]">
+          <div className="text-muted text-[12px] mb-1">
+            {lang === 'ru' ? 'Что включить в файл:' : 'What to include:'}
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={exportInc.tasks} onChange={e => setExportInc(p => ({ ...p, tasks: e.target.checked }))} />
+            <span>{lang === 'ru' ? 'Задачи' : 'Tasks'} <span className="text-muted">({tasks.length})</span></span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={exportInc.tags} onChange={e => setExportInc(p => ({ ...p, tags: e.target.checked }))} />
+            <span>{lang === 'ru' ? 'Тэги' : 'Tags'} <span className="text-muted">({tags.length})</span></span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={exportInc.statuses} onChange={e => setExportInc(p => ({ ...p, statuses: e.target.checked }))} />
+            <span>{lang === 'ru' ? 'Статусы' : 'Statuses'} <span className="text-muted">({statuses.length})</span></span>
+          </label>
+        </div>
+      </ConfirmDialog>
+
+      {/* Confirm replace (simple tasks) */}
       <ConfirmDialog
         open={confirmReplace}
         title={lang === 'ru' ? 'Заменить все задачи?' : 'Replace all tasks?'}
@@ -596,8 +758,51 @@ function IOSection() {
         onConfirm={() => { setConfirmReplace(false); doImport(true); }}
         onCancel={() => setConfirmReplace(false)}
       />
+
+      {/* Confirm replace (full backup) */}
+      <ConfirmDialog
+        open={confirmBackupReplace}
+        title={lang === 'ru' ? 'Заменить все данные?' : 'Replace all data?'}
+        message={lang === 'ru'
+          ? 'Выбранные сущности из файла полностью заменят текущие данные. Это действие необратимо. Продолжить?'
+          : 'Selected entities from the file will completely replace your current data. This cannot be undone. Continue?'}
+        confirmLabel={lang === 'ru' ? 'Заменить' : 'Replace'}
+        cancelLabel={tr(lang, 'cancel')}
+        danger
+        onConfirm={() => { setConfirmBackupReplace(false); doBackupImport('replace'); }}
+        onCancel={() => setConfirmBackupReplace(false)}
+      />
     </div>
   );
+}
+
+// CSV escape helper (used by export)
+function csvEscape(v: any): string {
+  const s = v == null ? '' : String(v);
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+// Parse v0.8.7 backup CSV with # STATUSES / # TAGS / # TASKS sections
+function parseBackupCsv(text: string): BackupPayload {
+  const payload: BackupPayload = { version: 'csv', exported_at: new Date().toISOString() };
+  const lines = text.split(/\r?\n/);
+  let currentSection: 'statuses' | 'tags' | 'tasks' | null = null;
+  let headers: string[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    if (line.startsWith('# STATUSES')) { currentSection = 'statuses'; headers = []; payload.statuses = []; continue; }
+    if (line.startsWith('# TAGS'))     { currentSection = 'tags';     headers = []; payload.tags = []; continue; }
+    if (line.startsWith('# TASKS'))    { currentSection = 'tasks';    headers = []; payload.tasks = []; continue; }
+    if (!currentSection) continue;
+    // Simple CSV split (Papa would be more robust but the export is well-formed)
+    const parsed = Papa.parse<string[]>(line, { header: false }).data[0] as string[];
+    if (!headers.length) { headers = parsed; continue; }
+    const row: any = {};
+    headers.forEach((h, i) => { row[h] = parsed[i] ?? ''; });
+    (payload[currentSection]! as any[]).push(row);
+  }
+  return payload;
 }
 
 // ─── Storage section ──────────────────────────────────────────────────────────
@@ -654,20 +859,16 @@ function StorageSection() {
     pushToast(tr(lang, 'saved'));
   };
 
-  // Task 11: properly reset all data and reload store state
-  const handleDangerReset = () => {
+  // v0.8.7: properly reset all data (both Tauri & web), then refresh store
+  const handleDangerReset = async () => {
     try {
-      resetDatabase();
-      // After reset, reload store from the freshly seeded DB
-      useStore.getState().init().then(() => {
-        useStore.getState().refresh();
-        pushToast(lang === 'ru' ? 'Данные стёрты' : 'Data erased');
-      }).catch(() => {
-        // Fallback: hard reload
-        window.location.reload();
-      });
+      await resetDatabase();
+      await useStore.getState().init();
+      useStore.getState().refresh();
+      pushToast(lang === 'ru' ? 'Данные стёрты' : 'Data erased');
     } catch (e) {
       console.error('handleDangerReset error:', e);
+      // Fallback: hard reload (so user sees a clean state at least)
       window.location.reload();
     }
   };
@@ -754,7 +955,7 @@ function StorageSection() {
         confirmLabel={lang === 'ru' ? 'Да, стереть всё' : 'Yes, erase everything'}
         cancelLabel={tr(lang, 'cancel')}
         danger
-        onConfirm={() => { setDangerStep(0); handleDangerReset(); }}
+        onConfirm={() => { setDangerStep(0); void handleDangerReset(); }}
         onCancel={() => setDangerStep(0)}
       />
     </div>
