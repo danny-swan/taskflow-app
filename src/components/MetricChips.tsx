@@ -28,7 +28,10 @@ export function MetricChips() {
       statuses.filter(s => s.behavior === 'bottom' || s.behavior === 'paused').map(s => s.id),
     );
     const today = new Date().toISOString().slice(0, 10);
-    let total = 0, inProgress = 0, paused = 0, done = 0, overdue = 0;
+    // v0.8.6: «внимание» — дедлайн в интервале [today; today+3], не просрочен, активная задача
+    const dToday = new Date(today + 'T00:00:00');
+    const attentionMaxMs = dToday.getTime() + 3 * 86400000;
+    let total = 0, inProgress = 0, paused = 0, done = 0, overdue = 0, attention = 0;
     for (const t of allTasks) {
       if (t.archived || techIds.has(t.status_id)) continue;
       total++;
@@ -39,19 +42,28 @@ export function MetricChips() {
       } else {
         inProgress++;
         // Overdue: due_date < today, not archived/done/deleted
-        if (t.deadline && t.deadline < today) overdue++;
+        if (t.deadline && t.deadline < today) {
+          overdue++;
+        } else if (t.deadline) {
+          const dDL = new Date(t.deadline + 'T00:00:00');
+          if (dDL.getTime() >= dToday.getTime() && dDL.getTime() <= attentionMaxMs) {
+            attention++;
+          }
+        }
       }
     }
-    return { total, inProgress, paused, done, overdue };
+    return { total, inProgress, paused, done, overdue, attention };
   }, [allTasks, statuses]);
 
   const onToggle = (key: string) => {
     setFilter(activeFilter === key ? null : key);
   };
 
+  // v0.8.6: новый чип «Внимание» между «В работе» и «Просрочено» — треугольник, оранжевый
   const chips = [
     { key: 'total',      icon: CheckSquare,   value: metrics.total,      label: tr(lang, 'chip_total'),                                 color: '#3b82f6' }, // always blue
     { key: 'inprogress', icon: Loader2,       value: metrics.inProgress, label: tr(lang, 'chip_inprogress'),                            color: '#D98F2B' },
+    { key: 'attention',  icon: AlertTriangle, value: metrics.attention,  label: lang === 'ru' ? 'Внимание' : 'Attention',             color: 'var(--status-progress)' },
     { key: 'overdue',    icon: AlertTriangle, value: metrics.overdue,    label: lang === 'ru' ? 'Просрочено' : 'Overdue',               color: 'var(--status-important)' },
     { key: 'paused',     icon: PauseCircle,  value: metrics.paused,     label: tr(lang, 'chip_paused'),                                color: 'var(--muted)' },
     { key: 'done',       icon: CheckCircle2, value: metrics.done,       label: tr(lang, 'chip_done'),                                  color: '#437A22' },

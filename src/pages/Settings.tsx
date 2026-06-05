@@ -87,8 +87,8 @@ function GeneralSection() {
           onChange={(e) => setDefaultTab(e.target.value)}
           className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
         >
+          {/* v0.8.6: «Добавить» убрана из вкладок-по-умолчанию */}
           <option value="tasks">{tr(lang, 'nav_tasks')}</option>
-          <option value="add">{tr(lang, 'nav_add')}</option>
           <option value="dashboard">{tr(lang, 'nav_dashboard')}</option>
           <option value="stats">{tr(lang, 'nav_stats')}</option>
         </select>

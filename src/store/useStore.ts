@@ -153,7 +153,8 @@ export const useStore = create<State>((set, get) => ({
       theme,
       statsEnabled: map.stats_enabled !== '0',
       fontSize: parseInt(map.font_size || '14', 10),
-      defaultTab: map.default_tab || 'tasks',
+      // v0.8.6: вкладка «add» больше не существует — падаем на 'tasks' для старых настроек
+      defaultTab: (map.default_tab === 'add' || !map.default_tab) ? 'tasks' : map.default_tab,
       quote,
       columnWidths,
     });

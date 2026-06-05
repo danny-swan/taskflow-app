@@ -87,6 +87,7 @@
   --status-paused: #7A7974;
   --status-done: #437A22;
   --status-overdue: #EE204D;
+  --status-warn: #E5C100;
 
   color-scheme: light;
 }
@@ -113,6 +114,7 @@
   --status-paused: #797876;
   --status-done: #5BA138;
   --status-overdue: #FF6B7A;
+  --status-warn: #F0CC2E;
 
   color-scheme: dark;
 }
@@ -139,6 +141,7 @@
   --status-paused: #8A7F9C;
   --status-done: #5BA138;
   --status-overdue: #FF6B7A;
+  --status-warn: #F0CC2E;
 
   color-scheme: dark;
 }
@@ -165,6 +168,7 @@
   --status-paused: #7A6F4E;
   --status-done: #5B8C3E;
   --status-overdue: #C8324A;
+  --status-warn: #C9A800;
 
   color-scheme: light;
 }
