@@ -13,6 +13,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.9',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Дашборд переработан: топбар из 6 метрик (Всего, В работе, Приостановлено, Выполнено, Просрочено, «Больше всего задач: <тэг>»), под ним По статусу и По тэгам в строку — это «текущий срез». Ниже «За период»: график Активность во всю ширину с тремя сериями (новые — синяя, выполнено — зелёная, просрочено — красная), затем 12W и Недавно завершённые в строку.',
+        'Хранилище в Настройках: кнопка «Открыть папку» открывает проводник на текущей папке БД. Добавлена подсказка с описанием data.db / taskflow_config.json / %APPDATA%\\TaskFlow и предупреждением о нерекомендуемом хранении в OneDrive/Dropbox/Google Drive.',
+        'Вкладка Помощь переписана под актуальное состояние: убраны устаревшие упоминания CSV-экспорта, вкладки «Добавить» и шортката N; добавлены разделы про эмодзи-пикер, кнопку «Открыть папку», drag-and-drop, цвета дедлайнов, чип «Внимание», JSON/XLSX импорт-экспорт.',
+      ],
+      en: [
+        'Dashboard restructured: a 6-metric topbar (Total, In progress, Paused, Done, Overdue, “Most tasks: <tag>”), followed by By status and By tags side-by-side — this is the “current snapshot”. Below, the “Over period” section: an Activity chart full-width with three series (created — blue, completed — green, overdue — red), then 12W and Recently completed in a row.',
+        'Storage section in Settings: an “Open folder” button reveals the current database folder in the OS file manager. A new hint describes data.db / taskflow_config.json / %APPDATA%\\TaskFlow and warns against storing the DB in OneDrive/Dropbox/Google Drive.',
+        'Help tab rewritten to match the current state: removed stale mentions of CSV export, the “Add” sidebar tab and the N shortcut; added sections on the emoji picker, “Open folder”, drag-and-drop, deadline colors, the “Attention” chip and JSON/XLSX import-export.',
+      ],
+    },
+  },
+  {
     version: '0.8.8',
     date: '2026-06-06',
     items: {

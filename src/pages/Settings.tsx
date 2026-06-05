@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info } from 'lucide-react';
 import { downloadFile } from '../lib/utils';
 import { resetDatabase, isTauri, buildBackup, applyBackup, type BackupPayload } from '../lib/db';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -861,6 +861,18 @@ function StorageSection() {
     pushToast(tr(lang, 'saved'));
   };
 
+  // v0.8.9: открыть папку с БД в системном файловом менеджере
+  const handleOpenFolder = async () => {
+    if (!isDesktop || !dbPath) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('open_in_explorer', { path: dbPath });
+    } catch (e) {
+      console.error('open_in_explorer error:', e);
+      pushToast(lang === 'ru' ? 'Не удалось открыть папку: ' + String(e) : 'Failed to open folder: ' + String(e));
+    }
+  };
+
   // v0.8.7: properly reset all data (both Tauri & web), then refresh store
   const handleDangerReset = async () => {
     try {
@@ -897,9 +909,18 @@ function StorageSection() {
         <div className="space-y-3">
           <div className="text-[12px] text-muted">{tr(lang, 'db_path_label')}</div>
           <div className="flex gap-2 items-center">
-            <div className="flex-1 px-3 py-2 bg-surface-alt border border-border-soft rounded-lg text-[12px] font-mono truncate">
+            <div className="flex-1 px-3 py-2 bg-surface-alt border border-border-soft rounded-lg text-[12px] font-mono truncate" title={dbPath ?? ''}>
               {loading ? '…' : (dbPath ?? '(loading)')}
             </div>
+            <button
+              onClick={handleOpenFolder}
+              disabled={!dbPath || loading}
+              className="flex items-center gap-1.5 px-3 py-2 text-[12px] border border-border-soft rounded-lg hover:bg-surface-alt disabled:opacity-50"
+              title={lang === 'ru' ? 'Открыть папку с БД в проводнике' : 'Open folder in file manager'}
+            >
+              <FolderOpen size={13} />
+              <span>{lang === 'ru' ? 'Открыть папку' : 'Open folder'}</span>
+            </button>
           </div>
           <div className="flex gap-2">
             <button
@@ -910,6 +931,47 @@ function StorageSection() {
               onClick={handleReset}
               className="px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt text-muted"
             >{tr(lang, 'db_path_reset')}</button>
+          </div>
+
+          {/* v0.8.9: блок-подсказка по хранению */}
+          <div className="mt-2 px-3.5 py-3 rounded-lg border border-border-soft bg-surface-alt/60 text-[12px] leading-relaxed space-y-2">
+            <div className="flex items-center gap-2 font-semibold text-text">
+              <Info size={13} className="text-muted" />
+              {lang === 'ru' ? 'Где хранятся ваши данные' : 'Where your data lives'}
+            </div>
+            {lang === 'ru' ? (
+              <>
+                <div className="text-muted">
+                  TaskFlow хранит два файла в папке профиля пользователя:
+                  <ul className="list-disc ml-5 mt-1 space-y-0.5">
+                    <li><span className="font-mono text-text">data.db</span> — все задачи, тэги, статусы, настройки (SQLite)</li>
+                    <li><span className="font-mono text-text">taskflow_config.json</span> — только путь к БД, если вы выбрали свой</li>
+                  </ul>
+                </div>
+                <div className="text-muted">
+                  На Windows это: <span className="font-mono text-text">%APPDATA%\TaskFlow</span> — открыть вручную можно через <span className="font-mono text-text">Win+R</span> → <span className="font-mono text-text">%APPDATA%\TaskFlow</span>.
+                </div>
+                <div className="text-muted">
+                  ⚠️ Размещать <span className="font-mono text-text">data.db</span> в облачных папках (OneDrive, Dropbox, Яндекс.Диск, Google Drive) не рекомендуется: SQLite блокирует файл во время работы, и синхронизация может повредить базу. Для переноса на другой ПК используйте <span className="text-text">Экспорт/Импорт</span> в формате JSON/XLSX.
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-muted">
+                  TaskFlow stores two files in your user profile folder:
+                  <ul className="list-disc ml-5 mt-1 space-y-0.5">
+                    <li><span className="font-mono text-text">data.db</span> — all tasks, tags, statuses and settings (SQLite)</li>
+                    <li><span className="font-mono text-text">taskflow_config.json</span> — only the DB path override, if you picked a custom one</li>
+                  </ul>
+                </div>
+                <div className="text-muted">
+                  On Windows that's <span className="font-mono text-text">%APPDATA%\TaskFlow</span> — you can open it manually via <span className="font-mono text-text">Win+R</span> → <span className="font-mono text-text">%APPDATA%\TaskFlow</span>.
+                </div>
+                <div className="text-muted">
+                  ⚠️ Placing <span className="font-mono text-text">data.db</span> inside cloud-synced folders (OneDrive, Dropbox, Google Drive, Yandex.Disk) is not recommended: SQLite locks the file while the app runs and sync can corrupt the database. To move data to another PC, use <span className="text-text">Export/Import</span> in JSON or XLSX format.
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

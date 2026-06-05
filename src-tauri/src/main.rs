@@ -34,6 +34,48 @@ fn get_db_path(state: tauri::State<AppState>, app: tauri::AppHandle) -> String {
         .into_owned()
 }
 
+/// v0.8.9: Открывает системный файл-менеджер на папке текущей БД.
+/// Принимает путь к файлу или папке; выбирает родительскую для файла.
+#[tauri::command]
+fn open_in_explorer(path: String) -> Result<(), String> {
+    use std::path::Path;
+    let p = Path::new(&path);
+    let dir = if p.is_file() {
+        p.parent().map(|x| x.to_path_buf()).unwrap_or_else(|| p.to_path_buf())
+    } else {
+        p.to_path_buf()
+    };
+    // Гарантируем, что папка существует (если БД ещё не создана).
+    let _ = std::fs::create_dir_all(&dir);
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(dir.as_os_str())
+            .spawn()
+            .map_err(|e| format!("explorer failed: {}", e))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(dir.as_os_str())
+            .spawn()
+            .map_err(|e| format!("open failed: {}", e))?;
+        return Ok(());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(dir.as_os_str())
+            .spawn()
+            .map_err(|e| format!("xdg-open failed: {}", e))?;
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    Err("unsupported platform".into())
+}
+
 /// Persists a custom DB path. Pass empty string to reset to default.
 #[tauri::command]
 fn set_db_path(path: String, state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
@@ -72,7 +114,7 @@ fn main() {
             app.manage(AppState { db_path: Mutex::new(saved) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_db_path, set_db_path])
+        .invoke_handler(tauri::generate_handler![get_db_path, set_db_path, open_in_explorer])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
     let _ = app;
