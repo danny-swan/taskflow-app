@@ -1,12 +1,14 @@
 // v0.8.6: модалка «Новая задача» — заменяет старую вкладку «Добавить».
 // Вызывается с вкладки «Задачи» при клике на «+ Новая задача».
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { StatusPill } from './StatusPill';
 import { TagChip } from './TagChip';
 import { Modal } from './Modal';
+import { EmojiPicker, useEmojiPicker } from './EmojiPicker';
+import { Smile } from 'lucide-react';
 
 export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const lang = useStore(s => s.language);
@@ -18,6 +20,11 @@ export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => 
 
   const [title, setTitle] = useState('');
   const [comment, setComment] = useState('');
+  // v0.8.8: emoji-picker для Название/Комментарий
+  const titleRef = useRef<HTMLTextAreaElement | null>(null);
+  const commentRef = useRef<HTMLTextAreaElement | null>(null);
+  const titleEmoji = useEmojiPicker(titleRef, title, setTitle);
+  const commentEmoji = useEmojiPicker(commentRef, comment, setComment);
   // По умолчанию — «Взять в работу» (третий статус), как в старой странице
   const defaultStatusId = statuses.filter(s => s.is_technical !== 1)[2]?.id
     ?? statuses.filter(s => s.is_technical !== 1)[0]?.id
@@ -115,25 +122,27 @@ export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => 
           </Field>
         </div>
 
-        <Field label={tr(lang, 'title')}>
+        <FieldWithEmoji label={tr(lang, 'title')} onEmojiClick={titleEmoji.emojiButtonProps.onClick} emojiRef={titleEmoji.buttonRef}>
           <AutoGrowTextarea
+            ref={titleRef}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder={lang === 'ru' ? 'Название задачи' : 'Task title'}
             className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[14px] font-semibold"
             rows={1}
           />
-        </Field>
+        </FieldWithEmoji>
 
-        <Field label={tr(lang, 'comment')}>
+        <FieldWithEmoji label={tr(lang, 'comment')} onEmojiClick={commentEmoji.emojiButtonProps.onClick} emojiRef={commentEmoji.buttonRef}>
           <AutoGrowTextarea
+            ref={commentRef}
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             placeholder={lang === 'ru' ? 'Описание, заметки, контекст...' : 'Description, notes, context…'}
             className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] min-h-[60px]"
             rows={3}
           />
-        </Field>
+        </FieldWithEmoji>
 
         <div className="grid grid-cols-2 gap-4">
           <Field label={tr(lang, 'start')}>
@@ -179,6 +188,10 @@ export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => 
           className="px-4 py-1.5 text-[13px] bg-accent hover:bg-accent-hover disabled:opacity-50 text-white rounded-md font-medium"
         >{tr(lang, 'add_task')}</button>
       </div>
+
+      {/* v0.8.8: emoji-pickers */}
+      <EmojiPicker {...titleEmoji.emojiPickerProps} />
+      <EmojiPicker {...commentEmoji.emojiPickerProps} />
     </Modal>
   );
 }
@@ -189,5 +202,35 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div className="text-[11px] text-muted uppercase tracking-wider mb-1">{label}</div>
       {children}
     </label>
+  );
+}
+
+function FieldWithEmoji({
+  label,
+  children,
+  onEmojiClick,
+  emojiRef,
+}: {
+  label: string;
+  children: React.ReactNode;
+  onEmojiClick: () => void;
+  emojiRef: React.Ref<HTMLButtonElement>;
+}) {
+  return (
+    <div className="block">
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[11px] text-muted uppercase tracking-wider">{label}</div>
+        <button
+          ref={emojiRef}
+          type="button"
+          onClick={onEmojiClick}
+          className="text-muted hover:text-text p-0.5 rounded transition-colors"
+          title="Emoji"
+        >
+          <Smile size={14} />
+        </button>
+      </div>
+      {children}
+    </div>
   );
 }

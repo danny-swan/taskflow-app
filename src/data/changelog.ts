@@ -13,6 +13,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.8',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Эмодзи-пикер в полях Название и Комментарий (кнопка 😊 рядом с заголовком поля): панель недавних (до 12) + полный picker с поиском и категориями.',
+        'Убран CSV-экспорт (некорректно восстанавливал статусы при обратном импорте); остались JSON и XLSX.',
+        'При импорте задачи без указанного статуса попадают в «Взять в работу» (раньше в первый top/middle).',
+      ],
+      en: [
+        'Emoji picker in Title and Comment fields (😊 button next to the field label): recent panel (up to 12) plus a full picker with search and categories.',
+        'CSV export removed (it didn’t restore statuses correctly on re-import); JSON and XLSX remain.',
+        'On import, tasks without a status now land in “Взять в работу” (previously the first top/middle status).',
+      ],
+    },
+  },
+  {
     version: '0.8.7',
     date: '2026-06-06',
     items: {

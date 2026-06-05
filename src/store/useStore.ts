@@ -53,6 +53,7 @@ interface State {
   quote: string;
   columnWidths: Record<string, number>;
   taskStatusFilter: string | null; // for metric chips: 'total' | 'inprogress' | 'paused' | 'done' | null
+  recentEmojis: string[];          // v0.8.8: недавние эмодзи для пикера (макс. 12)
 
   // Derived helpers
   getDeletedStatusId(): number | undefined;
@@ -89,6 +90,8 @@ interface State {
 
   setColumnWidth(key: string, w: number): void;
   setTaskStatusFilter(f: string | null): void;
+
+  pushRecentEmoji(emoji: string): void;
 }
 
 let toastId = 0;
@@ -107,6 +110,7 @@ export const useStore = create<State>((set, get) => ({
   quote: '',
   columnWidths: {},
   taskStatusFilter: null,
+  recentEmojis: [],
 
   getDeletedStatusId() {
     return get().statuses.find(s => s.is_technical === 1 && s.name === 'Удалено')?.id;
@@ -146,6 +150,11 @@ export const useStore = create<State>((set, get) => ({
     const cwRaw = map.column_widths || '{}';
     let columnWidths: Record<string, number> = {};
     try { columnWidths = JSON.parse(cwRaw); } catch {}
+    let recentEmojis: string[] = [];
+    try {
+      const parsed = JSON.parse(map.recent_emojis || '[]');
+      if (Array.isArray(parsed)) recentEmojis = parsed.filter((x): x is string => typeof x === 'string').slice(0, 12);
+    } catch {}
     const quote = pickQuote(quoteSetFor(theme), language);
     set({
       ready: true,
@@ -157,6 +166,7 @@ export const useStore = create<State>((set, get) => ({
       defaultTab: (map.default_tab === 'add' || !map.default_tab) ? 'tasks' : map.default_tab,
       quote,
       columnWidths,
+      recentEmojis,
     });
     if (initError) {
       // Сохраняем в возможное поле store для показа в UI; если поля нет — хотя бы в консоль.
@@ -334,5 +344,17 @@ export const useStore = create<State>((set, get) => ({
 
   setTaskStatusFilter(f) {
     set({ taskStatusFilter: f });
+  },
+
+  pushRecentEmoji(emoji) {
+    if (!emoji) return;
+    const cur = get().recentEmojis;
+    const next = [emoji, ...cur.filter(e => e !== emoji)].slice(0, 12);
+    try {
+      db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['recent_emojis', JSON.stringify(next)]);
+    } catch (e) {
+      console.error('[pushRecentEmoji] failed to persist:', e);
+    }
+    set({ recentEmojis: next });
   },
 }));
