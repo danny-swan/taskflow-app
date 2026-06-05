@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.5',
+    date: '2026-05-10',
+    items: {
+      ru: [
+        'Исправлена регрессия v0.8.4: при первом запуске после чистой установки не создавались базовые статусы, теги и welcome-задача.',
+        'Причина: миграция вставляла технический статус «Удалено» в пустую БД, из-за чего isEmpty() возвращал false и seed пропускался.',
+        'Теперь «Удалено» создаётся в seed вместе с базовыми статусами (в топбаре не отображается, hidden=1).',
+        'Миграция добавляет «Удалено» только в уже инициализированные БД (обратная совместимость со старыми базами).',
+      ],
+      en: [
+        'Fixed v0.8.4 regression: on first launch after a clean install, default statuses, tags and the welcome task were not created.',
+        'Root cause: migration inserted the technical "Deleted" status into the empty DB, so isEmpty() returned false and seed was skipped.',
+        'Now "Deleted" is created as part of seed alongside the default statuses (hidden from the topbar via hidden=1).',
+        'Migration only adds "Deleted" to already-initialised DBs (preserves backward compatibility with older databases).',
+      ],
+    },
+  },
+  {
     version: '0.8.4',
     date: '2026-05-10',
     items: {
