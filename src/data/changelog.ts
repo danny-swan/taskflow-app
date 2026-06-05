@@ -13,6 +13,28 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.6',
+    date: '2026-06-05',
+    items: {
+      ru: [
+        'Исправлен drag-n-drop карточек: ручка ·· теперь перетаскивает, клик по карточке открывает модалку (раньше эти жесты конфликтовали).',
+        'DnD поддерживает как перестановку внутри одного статуса, так и перенос между статусами.',
+        'Новый чип «Внимание» в топбаре — оранжевый, между «В работе» и «Просрочено»; показывает задачи с дедлайном в ближайшие 3 дня.',
+        'Подсветка дедлайна: сегодня — синий, 1–3 дня — оранжевый жирный, 4–5 дней — жёлтый жирный, просрочено — красный.',
+        '«Недавно завершённые» в Дашборде — фиксированная высота на 5 задач + внутренний скролл (вместо жёсткого лимита в 6).',
+        'Вкладка «Добавить» убрана из сайдбара. Кнопка «+ Новая задача» на вкладке Задачи открывает модальное окно (старая ссылка /add редиректит на /tasks).',
+      ],
+      en: [
+        'Fixed task card drag-n-drop: the ·· handle now actually drags, clicking the card still opens the modal (previously these gestures collided).',
+        'DnD supports both reordering inside one status and moving cards between statuses.',
+        'New topbar chip “Attention” — orange triangle, sits between “In progress” and “Overdue”; shows tasks with a deadline in the next 3 days.',
+        'Deadline coloring: today — blue, 1–3 days — bold orange, 4–5 days — bold yellow, overdue — red.',
+        'Dashboard “Recently completed” — fixed 5-row height with internal scroll (instead of hard cap at 6).',
+        'Sidebar “Add” tab removed. The “+ New task” button on the Tasks page now opens a modal (old /add URL redirects to /tasks).',
+      ],
+    },
+  },
+  {
     version: '0.8.5',
     date: '2026-05-10',
     items: {

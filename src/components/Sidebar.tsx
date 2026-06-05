@@ -14,9 +14,9 @@ export function Sidebar() {
   const setTheme = useStore(s => s.setTheme);
   const statsEnabled = useStore(s => s.statsEnabled);
 
+  // v0.8.6: «Добавить» убран из сайдбара — теперь всё через модалку «+ Новая задача» на вкладке Оадачи
   const items = [
     { to: '/tasks', label: tr(lang, 'nav_tasks'), icon: ListChecks, key: 'tasks' },
-    { to: '/add', label: tr(lang, 'nav_add'), icon: Plus, key: 'add' },
     { to: '/dashboard', label: tr(lang, 'nav_dashboard'), icon: LayoutDashboard, key: 'dashboard' },
     { to: '/stats', label: tr(lang, 'nav_stats'), icon: BarChart3, key: 'stats', hidden: !statsEnabled },
     { to: '/settings', label: tr(lang, 'nav_settings'), icon: Settings, key: 'settings' },

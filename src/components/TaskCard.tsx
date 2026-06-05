@@ -114,14 +114,13 @@ export function TaskCard({
   const barColor = status?.color || 'var(--border)';
   const barIsWhite = barColor.toUpperCase() === '#FFFFFF';
 
-  // Spread dragHandleProps on the whole card too (preserves drag from card body),
-  // but disable when editing text fields.
-  const safeDragProps = isEditing ? {} : (dragHandleProps ?? {});
+  // v0.8.6: НЕ навешиваем dragHandleProps на всю карточку — это ломало клик по карточке (открытие модалки)
+  // и конфликтовало с inline-редактированием полей. dragHandleProps теперь идёт ТОЛЬКО на кнопку-ручку ··.
+  const handleProps = isEditing ? {} : (dragHandleProps ?? {});
 
   return (
     <div
       onClick={onCardClick}
-      {...safeDragProps}
       className={
         'fade-up group relative bg-surface border border-border-soft hover:border-border rounded-lg ' +
         'cursor-pointer transition-shadow hover:shadow-sm overflow-hidden ' + (dragging ? 'opacity-40' : '')
@@ -257,14 +256,14 @@ export function TaskCard({
           >
             <Maximize2 size={12} />
           </button>
-          {/* Task 12: explicit drag handle — listeners from parent also stay on root div */}
+          {/* v0.8.6: drag handle — единственный элемент с dnd-kit listeners. НЕ гасим pointerdown,
+              иначе dnd-kit не увидит начало drag-жеста. Остальная карточка обрабатывает click в модалку. */}
           <button
             type="button"
-            onMouseDown={stopBubble}
-            onPointerDown={(e) => e.stopPropagation()}
+            {...handleProps}
             title={lang === 'ru' ? 'Перетащить' : 'Drag'}
             aria-label={lang === 'ru' ? 'Перетащить' : 'Drag'}
-            className="w-7 h-7 rounded-md flex items-center justify-center text-zinc-400 opacity-0 group-hover:opacity-100 hover:bg-surface-alt cursor-grab active:cursor-grabbing transition-opacity"
+            className="w-7 h-7 rounded-md flex items-center justify-center text-zinc-400 opacity-0 group-hover:opacity-100 hover:bg-surface-alt cursor-grab active:cursor-grabbing transition-opacity touch-none select-none"
           >
             <GripVertical size={14} />
           </button>
@@ -300,16 +299,18 @@ function DeadlineBadge({ deadline, isDone }: { deadline: string | null; isDone: 
   const diff = Math.round((dEnd.getTime() - dStart.getTime()) / 86400000);
 
   if (diff === 0) {
+    // v0.8.6: сегодня — синий
     return (
-      <span className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>
+      <span className="text-[11px] font-medium whitespace-nowrap" style={{ color: 'var(--accent)' }}>
         {tr(lang, 'today_word')}
       </span>
     );
   }
   if (diff < 0) {
+    // Просрочено — красный
     return (
       <span
-        className="text-[11px] font-bold"
+        className="text-[11px] font-bold whitespace-nowrap"
         style={{ color: 'var(--status-overdue)' }}
         title={`${tr(lang, 'overdue_word')} ${Math.abs(diff)} ${tr(lang, 'days_short')}`}
       >
@@ -317,8 +318,21 @@ function DeadlineBadge({ deadline, isDone }: { deadline: string | null; isDone: 
       </span>
     );
   }
+  // v0.8.6: 1–3 дня осталось — оранжевый; 4–5 — жёлтый; 6+ — серый по умолчанию
+  let color: string | undefined;
+  let bold = false;
+  if (diff >= 1 && diff <= 3) {
+    color = 'var(--status-progress)';
+    bold = true;
+  } else if (diff >= 4 && diff <= 5) {
+    color = 'var(--status-warn)';
+    bold = true;
+  }
   return (
-    <span className="text-[11px] text-muted whitespace-nowrap">
+    <span
+      className={'text-[11px] whitespace-nowrap ' + (bold ? 'font-semibold' : 'text-muted')}
+      style={color ? { color } : undefined}
+    >
       {tr(lang, 'days_left')} {diff} {tr(lang, 'days_short')}
     </span>
   );

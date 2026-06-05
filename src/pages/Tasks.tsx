@@ -3,6 +3,7 @@ import { useStore, Task } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { StatusGroup } from '../components/StatusGroup';
 import { TaskModal } from '../components/TaskModal';
+import { NewTaskModal } from '../components/NewTaskModal';
 import {
   Search, Filter, ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
@@ -47,6 +48,8 @@ export function TasksPage() {
   const [tagFilter, setTagFilter] = useState<number | null>(null);
   const statusFilter = useStore(s => s.taskStatusFilter);
   const [openTask, setOpenTask] = useState<Task | null>(null);
+  // v0.8.6: модалка «+ Новая задача» вместо вкладки /add
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
 
@@ -74,7 +77,7 @@ export function TasksPage() {
       if ((e.target as HTMLElement)?.tagName.match(/INPUT|TEXTAREA|SELECT/)) return;
       if ((e.target as HTMLElement)?.isContentEditable) return;
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); }
-      if (e.key.toLowerCase() === 'n') navigate('/add');
+      if (e.key.toLowerCase() === 'n') setNewTaskOpen(true);
     };
     window.addEventListener('keydown', fn);
     return () => window.removeEventListener('keydown', fn);
@@ -100,6 +103,14 @@ export function TasksPage() {
       if (statusFilter === 'inprogress' && (archiveStatusIds.has(t.status_id) || pausedStatusIds.has(t.status_id))) return false;
       if (statusFilter === 'overdue') {
         if (!t.deadline || t.deadline >= today || archiveStatusIds.has(t.status_id) || pausedStatusIds.has(t.status_id)) return false;
+      }
+      // v0.8.6: «внимание» — дедлайн в [today, today+3], исключая архив/паузу/просрочку
+      if (statusFilter === 'attention') {
+        if (!t.deadline || t.deadline < today || archiveStatusIds.has(t.status_id) || pausedStatusIds.has(t.status_id)) return false;
+        const dToday = new Date(today + 'T00:00:00');
+        const dDL = new Date(t.deadline + 'T00:00:00');
+        const diffDays = Math.round((dDL.getTime() - dToday.getTime()) / 86400000);
+        if (diffDays < 0 || diffDays > 3) return false;
       }
       if (statusFilter === 'paused' && !pausedStatusIds.has(t.status_id)) return false;
       if (statusFilter === 'done' && !archiveStatusIds.has(t.status_id)) return false;
@@ -256,7 +267,7 @@ export function TasksPage() {
               <span>{allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}</span>
             </button>
             <button
-              onClick={() => navigate('/add')}
+              onClick={() => setNewTaskOpen(true)}
               className="px-3 py-1.5 text-[13px] bg-accent hover:bg-accent-hover text-white rounded-md font-medium"
             >{tr(lang, 'new_task')}</button>
           </div>
@@ -295,6 +306,7 @@ export function TasksPage() {
       </div>
 
       <TaskModal task={openTask} onClose={() => setOpenTask(null)} />
+      <NewTaskModal open={newTaskOpen} onClose={() => setNewTaskOpen(false)} />
     </div>
   );
 }

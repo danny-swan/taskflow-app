@@ -6,7 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { ToastStack } from './components/Toast';
 import { TasksPage } from './pages/Tasks';
-import { AddTaskPage } from './pages/AddTask';
+// v0.8.6: AddTaskPage больше не подключается — заменена на NewTaskModal
 import { DashboardPage } from './pages/Dashboard';
 import { StatsPage } from './pages/Stats';
 import { SettingsPage } from './pages/Settings';
@@ -51,7 +51,8 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to={`/${defaultTab}`} replace />} />
             <Route path="/tasks" element={<TasksPage />} />
-            <Route path="/add" element={<AddTaskPage />} />
+            {/* v0.8.6: старый путь /add редиректит на /tasks — бывшие bookmark не приводят к 404 */}
+            <Route path="/add" element={<Navigate to="/tasks" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/stats" element={statsEnabled ? <StatsPage /> : <Navigate to="/tasks" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
@@ -78,9 +79,10 @@ function KeyboardShortcuts() {
       const t = e.target as HTMLElement;
       if (t?.tagName?.match(/INPUT|TEXTAREA|SELECT/) || t?.isContentEditable) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // v0.8.6: прямая цифровая навигация пересобрана — без /add
       const map: Record<string, string> = {
-        '1': '/tasks', '2': '/add', '3': '/dashboard',
-        '4': '/stats', '5': '/settings', '6': '/help',
+        '1': '/tasks', '2': '/dashboard', '3': '/stats',
+        '4': '/settings', '5': '/help',
       };
       if (map[e.key]) { e.preventDefault(); navigate(map[e.key]); }
     };

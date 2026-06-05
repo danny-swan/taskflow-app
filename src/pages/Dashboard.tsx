@@ -167,11 +167,11 @@ export function DashboardPage() {
     return weeks;
   }, [dashTasks]);
 
+  // v0.8.6: все завершённые задачи (не срезаем по 6) — в UI покажем 5 видимых + скролл
   const recentDone = useMemo(() => {
     const archiveIds = new Set(allStatuses.filter(s => s.behavior === 'archive' && s.is_technical !== 1).map(s => s.id));
     return dashTasks.filter(t => archiveIds.has(t.status_id))
-      .sort((a, b) => (b.finish_date || b.updated_at || '').localeCompare(a.finish_date || a.updated_at || ''))
-      .slice(0, 6);
+      .sort((a, b) => (b.finish_date || b.updated_at || '').localeCompare(a.finish_date || a.updated_at || ''));
   }, [dashTasks, allStatuses]);
 
   const periods: { key: Period; label: string }[] = [
@@ -374,12 +374,14 @@ export function DashboardPage() {
         {recentDone.length === 0 ? (
           <div className="text-faint text-[13px]">—</div>
         ) : (
-          <ul className="space-y-2">
+          // v0.8.6: фикс высоты для показа ровно 5 задач + скролл вниз
+          // 5 строк по ~22px (line-height + space-y-2 = 22+8=30; 5*30 - 8 = 142)
+          <ul className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: 142 }}>
             {recentDone.map(t => (
               <li key={t.id} className="flex items-center gap-2.5 text-[13px]">
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--status-done)' }} />
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--status-done)' }} />
                 <span className="flex-1 truncate">{t.title}</span>
-                <span className="text-muted text-[11px] mono">
+                <span className="text-muted text-[11px] mono shrink-0">
                   {formatDate(t.finish_date || t.updated_at)}
                 </span>
               </li>
