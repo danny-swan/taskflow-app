@@ -318,14 +318,11 @@ function DeadlineBadge({ deadline, isDone }: { deadline: string | null; isDone: 
       </span>
     );
   }
-  // v0.8.6: 1–3 дня осталось — оранжевый; 4–5 — жёлтый; 6+ — серый по умолчанию
+  // v0.8.7: 1–3 дня осталось — оранжевый; 4+ — серый по умолчанию
   let color: string | undefined;
   let bold = false;
   if (diff >= 1 && diff <= 3) {
     color = 'var(--status-progress)';
-    bold = true;
-  } else if (diff >= 4 && diff <= 5) {
-    color = 'var(--status-warn)';
     bold = true;
   }
   return (
