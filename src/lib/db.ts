@@ -142,16 +142,23 @@ async function tauriMigrate(): Promise<void> {
   await safeExec(`UPDATE statuses SET hidden=1 WHERE behavior='archive' AND is_technical=1 AND hidden=0`);
   await safeExec(`UPDATE statuses SET default_collapsed=1 WHERE behavior='archive' AND is_technical=0 AND default_collapsed=0`);
 
-  // Ensure technical "Удалено" status exists
+  // Ensure technical "Удалено" status exists — НО ТОЛЬКО для уже инициализированных БД.
+  // На свежеустановленной (пустой) БД пропускаем — иначе tauriIsEmpty() вернёт false,
+  // и seed (6 базовых статусов + теги + welcome-задача) не выполнится.
+  // Для пустой БД статус «Удалено» создаст сам seed.
   try {
-    const rows: any[] = await d.select(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
-    if (rows.length === 0) {
-      const maxRows: any[] = await d.select(`SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses`);
-      const max = maxRows[0]?.m ?? 0;
-      await d.execute(
-        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
-        ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]
-      );
+    const cntRows: any[] = await d.select(`SELECT COUNT(*) AS c FROM statuses`);
+    const cnt = cntRows[0]?.c ?? 0;
+    if (cnt > 0) {
+      const rows: any[] = await d.select(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
+      if (rows.length === 0) {
+        const maxRows: any[] = await d.select(`SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses`);
+        const max = maxRows[0]?.m ?? 0;
+        await d.execute(
+          `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
+          ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]
+        );
+      }
     }
   } catch (e) { console.warn('[migrate] ensure Удалено:', e); }
 }
@@ -166,18 +173,20 @@ async function tauriSeed(): Promise<void> {
   const d = await getTauriDb();
   const now = new Date().toISOString();
   const statuses = [
-    { name: 'Важно',         color: '#EE204D', behavior: 'top',    hidden: 0, default_collapsed: 0 },
-    { name: 'Сегодня',       color: '#C44A8E', behavior: 'top',    hidden: 0, default_collapsed: 0 },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle', hidden: 0, default_collapsed: 0 },
-    { name: 'В процессе',    color: '#D98F2B', behavior: 'middle', hidden: 0, default_collapsed: 0 },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0 },
-    { name: 'Выполнено',     color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1 },
+    { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
+    // Технический статус «Удалено» — создаём сразу, чтобы работало удаление.
+    { name: 'Удалено',         color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
   ];
   for (let i = 0; i < statuses.length; i++) {
     const s = statuses[i];
     await d.execute(
-      'INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,0,?,?)',
-      [s.name, s.color, s.behavior, i, s.hidden, s.default_collapsed]
+      'INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,?,?,?)',
+      [s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed]
     );
   }
 
@@ -301,19 +310,27 @@ function migrate(d: Database) {
     // "Выполнено" behavior='archive', is_technical=0 → defaultCollapsed=true
     d.run(`UPDATE statuses SET default_collapsed=1 WHERE behavior='archive' AND is_technical=0`);
   }
-  const exists = (() => {
-    const stmt = d.prepare(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
-    const has = stmt.step();
-    stmt.free();
-    return has;
-  })();
-  if (!exists) {
-    const stmt = d.prepare(`SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses`);
-    stmt.step();
-    const max = (stmt.getAsObject() as any).m as number;
-    stmt.free();
-    d.run(`INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
-      ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]);
+  // Создаём технический статус «Удалено» ТОЛЬКО для уже инициализированных БД.
+  // На пустой БД пропускаем — иначе isEmpty() вернёт false и seed не выполнится.
+  const cntStmt = d.prepare(`SELECT COUNT(*) AS c FROM statuses`);
+  cntStmt.step();
+  const cnt = (cntStmt.getAsObject() as any).c as number;
+  cntStmt.free();
+  if (cnt > 0) {
+    const exists = (() => {
+      const stmt = d.prepare(`SELECT id FROM statuses WHERE is_technical=1 LIMIT 1`);
+      const has = stmt.step();
+      stmt.free();
+      return has;
+    })();
+    if (!exists) {
+      const stmt = d.prepare(`SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses`);
+      stmt.step();
+      const max = (stmt.getAsObject() as any).m as number;
+      stmt.free();
+      d.run(`INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
+        ['Удалено', '#5A5957', 'archive', max, 1, 1, 1, 0]);
+    }
   }
 }
 
@@ -321,16 +338,18 @@ function seed(d: Database) {
   const now = new Date().toISOString();
   // v0.8.2: hidden and default_collapsed per status
   const statuses = [
-    { name: 'Важно',         color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0 },
-    { name: 'Сегодня',       color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0 },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle', hidden: 0, default_collapsed: 0 },
-    { name: 'В процессе',    color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0 },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0 },
-    { name: 'Выполнено',     color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1 }, // visible but collapsed by default
+    { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
+    // Технический статус «Удалено» — скрыт в списке задач и в топбаре (hidden=1).
+    { name: 'Удалено',         color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
   ];
   statuses.forEach((s, i) => {
-    d.run('INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,0,?,?)',
-      [s.name, s.color, s.behavior, i, s.hidden, s.default_collapsed]);
+    d.run('INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,?,?,?)',
+      [s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed]);
   });
 
   const tags = [
