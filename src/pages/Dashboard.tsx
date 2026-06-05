@@ -3,7 +3,7 @@ import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { formatDate, formatMonthDay } from '../lib/format';
 import {
-  ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
   PieChart, Pie, Cell, BarChart, Bar,
 } from 'recharts';
 
@@ -11,17 +11,13 @@ type Period = 'week' | 'month' | 'quarter' | 'year' | 'custom';
 
 interface CustomRange { from: string; to: string }
 
-/**
- * Parse a YYYY-MM-DD string as a LOCAL midnight date (avoids UTC offset shift).
- */
+/** Parse a YYYY-MM-DD string as a LOCAL midnight date (avoids UTC offset shift). */
 function parseLocalDate(s: string): Date {
   const [y, m, d] = s.split('-').map(Number);
   return new Date(y, m - 1, d, 0, 0, 0, 0);
 }
 
-/**
- * Return a YYYY-MM-DD key using LOCAL calendar fields (avoids toISOString UTC shift).
- */
+/** Return a YYYY-MM-DD key using LOCAL calendar fields (avoids toISOString UTC shift). */
 function localDayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -59,68 +55,104 @@ export function DashboardPage() {
 
   const periodDays = period === 'week' ? 7 : period === 'month' ? 30 : period === 'quarter' ? 90 : period === 'year' ? 365 : 0;
 
-  const techIds = useMemo(() => new Set(allStatuses.filter(s => s.is_technical === 1).map(s => s.id)), [allStatuses]);
+  const techIds = useMemo(
+    () => new Set(allStatuses.filter(s => s.is_technical === 1).map(s => s.id)),
+    [allStatuses],
+  );
   const deletedStatusIds = useMemo(
     () => new Set(allStatuses.filter(s => s.is_technical === 1 && s.name === 'Удалено').map(s => s.id)),
     [allStatuses],
   );
+  const archiveStatusIds = useMemo(
+    () => new Set(allStatuses.filter(s => s.behavior === 'archive' && s.is_technical !== 1).map(s => s.id)),
+    [allStatuses],
+  );
+  // v0.8.9: статусы «Приостановлено» — все non-archive non-technical статусы, помеченные behavior='hold'? нет —
+  // используем имя «Приостановлено»/«On hold», т.к. в схеме нет отдельного флага.
+  const pausedStatusIds = useMemo(
+    () => new Set(
+      allStatuses
+        .filter(s => s.is_technical !== 1 && /приостановл|on\s*hold|paused/i.test(s.name))
+        .map(s => s.id),
+    ),
+    [allStatuses],
+  );
+
+  // Без «Удалено» — общий набор для всех расчётов
   const dashTasks = useMemo(
     () => allTasks.filter(t => !deletedStatusIds.has(t.status_id)),
     [allTasks, deletedStatusIds],
   );
 
+  // ─── Период (для Активности) ─────────────────────────────────────────────
   const dateRange = useMemo<{ from: string; to: string } | null>(() => {
     if (period !== 'custom') return null;
     return customRange;
   }, [period, customRange]);
 
+  // v0.8.9: серии «новые / выполненные / просроченные» по дню за период
   const activityDates = useMemo(() => {
-    if (period === 'custom' && dateRange) {
-      const result: { date: string; count: number; isoDate: string }[] = [];
-      // Use parseLocalDate to avoid UTC shift
-      const from = parseLocalDate(dateRange.from);
-      const to = parseLocalDate(dateRange.to);
+    const todayKey = localDayKey(new Date());
+    const buildPoints = (from: Date, to: Date) => {
+      const result: { date: string; created: number; completed: number; overdue: number; isoDate: string }[] = [];
       for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
-        const key = localDayKey(d); // LOCAL key — no UTC shift
-        const count = dashTasks.filter(t => {
-          const taskDay = t.created_at ? t.created_at.slice(0, 10) : '';
-          return taskDay === key;
-        }).length;
-        result.push({ date: formatMonthDay(key.slice(5), lang), count, isoDate: key });
+        const key = localDayKey(d);
+        let created = 0;
+        let completed = 0;
+        let overdue = 0;
+        for (const t of dashTasks) {
+          const cr = t.created_at ? t.created_at.slice(0, 10) : '';
+          if (cr === key) created++;
+          const fin = t.finish_date ? t.finish_date.slice(0, 10) : '';
+          if (fin === key && archiveStatusIds.has(t.status_id)) completed++;
+          // Просрочено в этот день: дедлайн == key, не выполнено к этому дню, day <= today
+          if (t.deadline && t.deadline === key && key <= todayKey && !archiveStatusIds.has(t.status_id)) {
+            overdue++;
+          }
+        }
+        result.push({
+          date: formatMonthDay(key.slice(5), lang),
+          created, completed, overdue,
+          isoDate: key,
+        });
       }
       return result;
-    }
-    const days: { date: string; count: number; isoDate: string }[] = [];
-    const now = new Date();
-    for (let i = periodDays - 1; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
-      const key = localDayKey(d);
-      const count = dashTasks.filter(t => {
-        const taskDay = t.created_at ? t.created_at.slice(0, 10) : '';
-        return taskDay === key;
-      }).length;
-      days.push({ date: formatMonthDay(key.slice(5), lang), count, isoDate: key });
-    }
-    return days;
-  }, [dashTasks, periodDays, period, dateRange, lang]);
+    };
 
-  const kpis = useMemo(() => {
+    if (period === 'custom' && dateRange) {
+      return buildPoints(parseLocalDate(dateRange.from), parseLocalDate(dateRange.to));
+    }
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - (periodDays - 1));
+    return buildPoints(from, to);
+  }, [dashTasks, periodDays, period, dateRange, lang, archiveStatusIds]);
+
+  // ─── Текущий срез (не зависит от периода) ────────────────────────────────
+  const snapshot = useMemo(() => {
     const total = dashTasks.length;
-    const archiveStatusIds = new Set(
-      allStatuses.filter(s => s.behavior === 'archive' && s.is_technical !== 1).map(s => s.id)
-    );
     const inProgress = dashTasks.filter(t =>
-      !t.archived && !techIds.has(t.status_id) && !archiveStatusIds.has(t.status_id)
+      !t.archived && !techIds.has(t.status_id) && !archiveStatusIds.has(t.status_id) && !pausedStatusIds.has(t.status_id)
     ).length;
+    const paused = dashTasks.filter(t => pausedStatusIds.has(t.status_id) && !t.archived).length;
     const completed = dashTasks.filter(t => archiveStatusIds.has(t.status_id)).length;
     const today = localDayKey(new Date());
     const overdue = dashTasks.filter(t =>
       t.deadline && t.deadline < today &&
       !archiveStatusIds.has(t.status_id) && !techIds.has(t.status_id) && !t.archived
     ).length;
-    return { total, inProgress, completed, overdue };
-  }, [dashTasks, allStatuses, techIds]);
+
+    // Самый частый тэг (по количеству задач, исключая Удалено)
+    let topTag: { name: string; count: number; color: string } | null = null;
+    for (const tag of tags) {
+      const count = dashTasks.filter(t => t.tag_id === tag.id).length;
+      if (count > 0 && (!topTag || count > topTag.count)) {
+        topTag = { name: tag.name, count, color: tag.color };
+      }
+    }
+
+    return { total, inProgress, paused, completed, overdue, topTag };
+  }, [dashTasks, techIds, archiveStatusIds, pausedStatusIds, tags]);
 
   const byStatus = useMemo(() =>
     allStatuses
@@ -134,7 +166,6 @@ export function DashboardPage() {
       .filter(x => x.value > 0),
     [dashTasks, allStatuses, deletedStatusIds]);
 
-  // Task 5: filter tags with count > 0
   const byTag = useMemo(() => {
     const all = tags.map(t => ({
       name: t.name,
@@ -154,7 +185,7 @@ export function DashboardPage() {
       for (let d = 0; d < 7; d++) {
         const date = new Date(start);
         date.setDate(start.getDate() + w * 7 + d);
-        const key = localDayKey(date); // LOCAL key
+        const key = localDayKey(date);
         const count = dashTasks.filter(t => {
           const cr = t.created_at ? t.created_at.slice(0, 10) : '';
           const up = t.updated_at ? t.updated_at.slice(0, 10) : '';
@@ -167,12 +198,10 @@ export function DashboardPage() {
     return weeks;
   }, [dashTasks]);
 
-  // v0.8.6: все завершённые задачи (не срезаем по 6) — в UI покажем 5 видимых + скролл
   const recentDone = useMemo(() => {
-    const archiveIds = new Set(allStatuses.filter(s => s.behavior === 'archive' && s.is_technical !== 1).map(s => s.id));
-    return dashTasks.filter(t => archiveIds.has(t.status_id))
+    return dashTasks.filter(t => archiveStatusIds.has(t.status_id))
       .sort((a, b) => (b.finish_date || b.updated_at || '').localeCompare(a.finish_date || a.updated_at || ''));
-  }, [dashTasks, allStatuses]);
+  }, [dashTasks, archiveStatusIds]);
 
   const periods: { key: Period; label: string }[] = [
     { key: 'week', label: tr(lang, 'week') },
@@ -187,23 +216,36 @@ export function DashboardPage() {
     setCustomOpen(false);
   };
 
-  // Task 3: custom tooltip label formatter using formatDate
   const activityTooltipLabelFormatter = (label: string, payload: any[]) => {
-    // Try to find the isoDate from payload entry
     if (payload && payload.length > 0) {
       const entry = payload[0]?.payload;
-      if (entry?.isoDate) {
-        return formatDate(entry.isoDate);
-      }
+      if (entry?.isoDate) return formatDate(entry.isoDate);
     }
     return label;
   };
 
+  // Подписи на русском/английском (без расширения i18n)
+  const L = {
+    snapshotCaption: lang === 'ru' ? 'Текущий срез' : 'Current snapshot',
+    periodCaption: lang === 'ru' ? 'За период' : 'For the selected period',
+    paused: lang === 'ru' ? 'Приостановлено' : 'On hold',
+    topTag: lang === 'ru' ? 'Самый частый тэг' : 'Top tag',
+    noTag: lang === 'ru' ? 'нет' : 'none',
+    series_created: lang === 'ru' ? 'Новые' : 'Created',
+    series_completed: lang === 'ru' ? 'Выполнено' : 'Completed',
+    series_overdue: lang === 'ru' ? 'Просрочено' : 'Overdue',
+    noTagData: lang === 'ru' ? 'Нет задач с тэгами' : 'No tagged tasks',
+  };
+
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5 relative z-10">
+      {/* Заголовок + переключатель периода */}
       <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
         <h2 className="font-display text-[18px] font-semibold">{tr(lang, 'nav_dashboard')}</h2>
         <div className="flex items-center gap-2">
+          <div className="text-[11px] text-muted uppercase tracking-wider mr-1 hidden md:block">
+            {lang === 'ru' ? 'Период · Активность' : 'Period · Activity'}
+          </div>
           <div className="flex items-center bg-surface-alt rounded-md p-0.5 border border-border-soft">
             {periods.map(p => (
               <button
@@ -225,7 +267,7 @@ export function DashboardPage() {
             ))}
           </div>
 
-          {/* Custom period popover — positioned relative to the trigger wrapper */}
+          {/* Custom period popover */}
           <div ref={triggerRef} className="relative">
             {period === 'custom' && customOpen && (
               <div
@@ -260,47 +302,32 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Custom range label — formatted as dd.MM.yyyy */}
       {period === 'custom' && (
         <div className="text-[11px] text-muted mb-3">
           {formatDate(customRange.from)} → {formatDate(customRange.to)}
         </div>
       )}
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <KPI label={tr(lang, 'total_tasks')} value={kpis.total} />
-        <KPI label={tr(lang, 'in_progress')} value={kpis.inProgress} />
-        <KPI label={tr(lang, 'completed')} value={kpis.completed} success />
-        <KPI label={tr(lang, 'overdue')} value={kpis.overdue} danger />
+      {/* ─── ТЕКУЩИЙ СРЕЗ ───────────────────────────────────────────────── */}
+      <SectionCaption text={L.snapshotCaption} />
+
+      {/* KPI row: 6 metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+        <KPI label={tr(lang, 'total_tasks')} value={snapshot.total} />
+        <KPI label={tr(lang, 'in_progress')} value={snapshot.inProgress} />
+        <KPI label={L.paused} value={snapshot.paused} muted />
+        <KPI label={tr(lang, 'completed')} value={snapshot.completed} success />
+        <KPI label={tr(lang, 'overdue')} value={snapshot.overdue} danger />
+        <KPI
+          label={L.topTag}
+          value={snapshot.topTag ? snapshot.topTag.count : 0}
+          subLabel={snapshot.topTag ? snapshot.topTag.name : L.noTag}
+          subColor={snapshot.topTag?.color}
+        />
       </div>
 
-      {/* 2x2 chart grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 auto-rows-fr gap-3 mb-4">
-        <div className="bg-surface border border-border-soft rounded-xl p-4 min-h-[280px] flex flex-col">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-[12px] text-muted uppercase tracking-wider">{tr(lang, 'activity')}</div>
-          </div>
-          <div className="flex-1 min-h-0">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={activityDates}>
-                <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
-                {/* Task 3: custom labelFormatter showing dd.mm.yyyy */}
-                <Tooltip
-                  contentStyle={{
-                    background: 'var(--surface)', border: '1px solid var(--border)',
-                    borderRadius: 8, fontSize: 12,
-                  }}
-                  labelFormatter={activityTooltipLabelFormatter}
-                />
-                <Line type="monotone" dataKey="count" stroke="var(--accent)" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
+      {/* По статусу + По тэгам — статичные */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 auto-rows-fr gap-3 mb-6">
         <div className="bg-surface border border-border-soft rounded-xl p-4 min-h-[280px] flex flex-col">
           <div className="text-[12px] text-muted uppercase tracking-wider mb-2">{tr(lang, 'by_status')}</div>
           <div className="flex-1 flex items-center gap-4 min-h-0">
@@ -345,7 +372,7 @@ export function DashboardPage() {
           <div className="flex-1 min-h-0">
             {byTag.length === 0 ? (
               <div className="flex items-center justify-center h-full text-muted text-[13px]">
-                {lang === 'ru' ? 'Нет данных за выбранный период' : 'No data for the selected period'}
+                {L.noTagData}
               </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
@@ -362,47 +389,114 @@ export function DashboardPage() {
             )}
           </div>
         </div>
+      </div>
 
-        <div className="bg-surface border border-border-soft rounded-xl p-4 min-h-[280px] flex flex-col overflow-hidden">
-          <div className="text-[12px] text-muted uppercase tracking-wider mb-3">{tr(lang, 'activity')} · 12w</div>
-          <Heatmap weeks={heatmap} lang={lang} />
+      {/* ─── ЗА ПЕРИОД ──────────────────────────────────────────────────── */}
+      <SectionCaption text={L.periodCaption} />
+
+      {/* Activity — full width, 3 series */}
+      <div className="bg-surface border border-border-soft rounded-xl p-4 min-h-[320px] flex flex-col mb-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[12px] text-muted uppercase tracking-wider">{tr(lang, 'activity')}</div>
+        </div>
+        <div className="flex-1 min-h-0" style={{ height: 300 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={activityDates} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="date" stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
+              <Tooltip
+                contentStyle={{
+                  background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 8, fontSize: 12,
+                }}
+                labelFormatter={activityTooltipLabelFormatter}
+              />
+              <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
+              <Line type="monotone" dataKey="created" name={L.series_created} stroke="var(--accent)" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="completed" name={L.series_completed} stroke="#22A06B" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="overdue" name={L.series_overdue} stroke="var(--status-important)" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       </div>
 
-      <div className="bg-surface border border-border-soft rounded-xl p-4">
-        <div className="text-[12px] text-muted uppercase tracking-wider mb-3">{tr(lang, 'recent')}</div>
-        {recentDone.length === 0 ? (
-          <div className="text-faint text-[13px]">—</div>
-        ) : (
-          // v0.8.6: фикс высоты для показа ровно 5 задач + скролл вниз
-          // 5 строк по ~22px (line-height + space-y-2 = 22+8=30; 5*30 - 8 = 142)
-          <ul className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: 142 }}>
-            {recentDone.map(t => (
-              <li key={t.id} className="flex items-center gap-2.5 text-[13px]">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--status-done)' }} />
-                <span className="flex-1 truncate">{t.title}</span>
-                <span className="text-muted text-[11px] mono shrink-0">
-                  {formatDate(t.finish_date || t.updated_at)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
+      {/* 12W heatmap + Recently completed in a row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 auto-rows-fr gap-3">
+        <div className="bg-surface border border-border-soft rounded-xl p-4 min-h-[200px] flex flex-col overflow-hidden">
+          <div className="text-[12px] text-muted uppercase tracking-wider mb-3">{tr(lang, 'activity')} · 12w</div>
+          <Heatmap weeks={heatmap} lang={lang} />
+        </div>
+
+        <div className="bg-surface border border-border-soft rounded-xl p-4 min-h-[200px] flex flex-col">
+          <div className="text-[12px] text-muted uppercase tracking-wider mb-3">{tr(lang, 'recent')}</div>
+          {recentDone.length === 0 ? (
+            <div className="text-faint text-[13px]">—</div>
+          ) : (
+            <ul className="space-y-2 overflow-y-auto pr-1 flex-1" style={{ maxHeight: 200 }}>
+              {recentDone.map(t => (
+                <li key={t.id} className="flex items-center gap-2.5 text-[13px]">
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--status-done)' }} />
+                  <span className="flex-1 truncate">{t.title}</span>
+                  <span className="text-muted text-[11px] mono shrink-0">
+                    {formatDate(t.finish_date || t.updated_at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function KPI({ label, value, success, danger }: { label: string; value: number; success?: boolean; danger?: boolean }) {
+// ─── small components ────────────────────────────────────────────────────────
+
+function SectionCaption({ text }: { text: string }) {
   return (
-    <div className="bg-surface border border-border-soft rounded-xl px-4 py-3">
-      <div className="text-[11px] uppercase tracking-wider text-muted">{label}</div>
+    <div className="flex items-center gap-2 mb-2">
+      <div className="h-px flex-1 bg-border-soft" />
+      <div className="text-[10.5px] uppercase tracking-[0.12em] text-muted font-medium">{text}</div>
+      <div className="h-px flex-1 bg-border-soft" />
+    </div>
+  );
+}
+
+function KPI({
+  label, value, success, danger, muted, subLabel, subColor,
+}: {
+  label: string;
+  value: number;
+  success?: boolean;
+  danger?: boolean;
+  muted?: boolean;
+  subLabel?: string;
+  subColor?: string;
+}) {
+  return (
+    <div className="bg-surface border border-border-soft rounded-xl px-4 py-3 min-w-0">
+      <div className="text-[11px] uppercase tracking-wider text-muted truncate">{label}</div>
       <div
-        className={'mt-1 text-[26px] font-display font-bold tabular leading-none '}
+        className="mt-1 text-[22px] font-display font-bold tabular leading-none"
         style={{
-          color: danger ? 'var(--status-important)' : success ? '#437A22' : undefined,
+          color: danger ? 'var(--status-important)'
+            : success ? '#437A22'
+            : muted ? 'var(--muted)'
+            : undefined,
         }}
       >{value}</div>
+      {subLabel && (
+        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted truncate">
+          {subColor && (
+            <span
+              className="inline-block w-2 h-2 rounded-full shrink-0"
+              style={{ background: subColor }}
+            />
+          )}
+          <span className="truncate">{subLabel}</span>
+        </div>
+      )}
     </div>
   );
 }

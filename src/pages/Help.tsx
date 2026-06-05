@@ -9,17 +9,18 @@ interface HelpSection {
   items: { q: string; a: React.ReactNode }[];
 }
 
+// ─── RU ──────────────────────────────────────────────────────────────────────
 const sectionsRu: HelpSection[] = [
   {
     title: '📋 Основы',
     items: [
       {
         q: 'Как добавить задачу?',
-        a: 'Откройте вкладку «Добавить» или нажмите клавишу N. Заполните название, выберите статус и тэг — внизу формы есть живой предпросмотр карточки.',
+        a: 'На вкладке «Задачи» нажмите кнопку «+ Новая задача» в правом верхнем углу — откроется модальное окно. Заполните название, выберите статус и тэг (можно создать новый через «+»), при необходимости задайте даты начала и дедлайн. Внизу формы — живой предпросмотр карточки.',
       },
       {
         q: 'Как работают тэги?',
-        a: 'Тэги — это метки для категоризации задач. Их можно создавать в Настройки → Тэги, задавать цвет и название. На доске задач доступна фильтрация по тэгу через горизонтально прокручиваемую панель.',
+        a: 'Тэги — это метки для категоризации задач. Создавайте их в Настройки → Тэги (имя + цвет) или прямо из модалки задачи кнопкой «+». На доске задач есть горизонтально прокручиваемая панель фильтрации по тэгу.',
       },
       {
         q: 'Как работают статусы?',
@@ -27,22 +28,31 @@ const sectionsRu: HelpSection[] = [
           <>
             <p>Статусы определяют группировку задач на доске. Порядок задаётся стрелками в Настройки → Статусы.</p>
             <p className="mt-2">
-              <strong>Скрытый</strong> — статус не показывается на доске задач (но виден в Статистике и Дашборде). Используйте для «Удалено».
+              <strong>Скрытый</strong> — статус не показывается на доске, но виден в Статистике и Дашборде. По умолчанию — у «Удалено».
             </p>
             <p className="mt-2">
-              <strong>Свёрнут</strong> — секция статуса показывается на доске, но свёрнута по умолчанию. Нажмите на заголовок секции, чтобы развернуть. Используйте для «Выполнено».
+              <strong>Свёрнут по умолчанию</strong> — секция статуса видна на доске, но свёрнута. Кликните по заголовку, чтобы раскрыть. По умолчанию — у «Выполнено».
             </p>
-            <p className="mt-2">Системные статусы по умолчанию: Запланировано, В работе, Приостановлено, Выполнено (свёрнут), Удалено (скрытый).</p>
+            <p className="mt-2">Стандартные статусы: Запланировано, Взять в работу, В работе, Приостановлено, Выполнено (свёрнут), Удалено (скрытый).</p>
           </>
         ),
       },
       {
-        q: 'Как изменить порядок задач?',
-        a: 'Перетащите карточку мышью — за саму карточку или за иконку ⋮⋮ (drag handle) в правой части. Статус обновится автоматически. При редактировании названия или комментария drag-and-drop автоматически отключается.',
+        q: 'Как перетащить задачу в другой статус?',
+        a: 'Перетащите карточку за иконку ⋮⋮ (drag handle) с правой стороны. Поддерживаются перестановка внутри статуса и перенос между статусами. Клик по самой карточке открывает модалку редактирования — эти жесты не конфликтуют (исправлено в v0.8.6).',
       },
       {
         q: 'Как удалить задачу?',
-        a: 'Нажмите иконку корзины 🗑 в правом верхнем углу карточки. Появятся две кнопки по центру: «Удалить» (красная) и «Оставить». Удалённые задачи помечаются как «Удалено» (мягкое удаление) и видны в Статистике — откуда их можно восстановить.',
+        a: 'В модалке задачи — кнопка «Удалить» внизу слева, затем подтверждение. Задача мягко удаляется (статус «Удалено») и видна в Статистике, откуда её можно восстановить.',
+      },
+      {
+        q: 'Что такое эмодзи-пикер в полях задачи? (v0.8.8)',
+        a: (
+          <>
+            <p>Рядом с заголовком полей <strong>Название</strong> и <strong>Комментарий</strong> есть кнопка 😊. Клик — открывается панель: сначала «Недавние» (до 12), потом кнопка «Больше…» раскрывает полный picker с поиском и 8 категориями (Смайлы, Жесты, Объекты, Символы, Природа, Еда, Действия, Транспорт).</p>
+            <p className="mt-2">Эмодзи вставляется в позицию каретки, фокус сохраняется. Недавние сохраняются между запусками.</p>
+          </>
+        ),
       },
     ],
   },
@@ -51,38 +61,55 @@ const sectionsRu: HelpSection[] = [
     items: [
       {
         q: 'Что показывает Дашборд?',
-        a: 'KPI-карточки (всего/в работе/выполнено/просрочено), график активности, круговую диаграмму по статусам, столбчатую по тегам (только теги с задачами), тепловую карту активности за 12 недель и список недавно завершённых задач.',
+        a: (
+          <>
+            <p>Дашборд разделён на две зоны:</p>
+            <p className="mt-2"><strong>Текущий срез</strong> (не зависит от периода): топбар с метриками (Всего / В работе / Приостановлено / Выполнено / Просрочено / Самый частый тэг), круговая диаграмма «По статусу» и столбчатая «По тэгам».</p>
+            <p className="mt-2"><strong>За период</strong> (период выбирается в правом верхнем углу): график «Активность» во всю ширину с тремя линиями — новые (синяя), выполненные (зелёная), просроченные (красная) — и тепловая карта «12 недель».</p>
+            <p className="mt-2">Внизу — список «Недавно завершённые».</p>
+          </>
+        ),
       },
       {
         q: 'Как выбрать период?',
         a: (
           <>
-            <p>Кнопки «Неделя / Месяц / Квартал / Год / Свой период» в правом верхнем углу Дашборда.</p>
-            <p className="mt-1.5">«Свой период» открывает поповер — введите даты «От» и «До», нажмите «Применить».</p>
-            <p className="mt-1.5">Tooltip графика «Активность» показывает дату в формате дд.мм.гггг.</p>
+            <p>Кнопки «Неделя / Месяц / Квартал / Год / Свой период» в правом верхнем углу Дашборда. Период влияет только на график «Активность» (и связанные счётчики за период, если они присутствуют).</p>
+            <p className="mt-1.5">«Свой период» открывает поповер — даты «От» и «До», затем «Применить».</p>
+            <p className="mt-1.5">Метрики в шапке и графики «По статусу» / «По тэгам» показывают текущее состояние всех задач и не зависят от периода.</p>
           </>
         ),
       },
       {
-        q: 'Что такое чипы «Просрочено» и «Всего» в топбаре?',
-        a: '«Всего» (синяя иконка) — общее число задач. «Просрочено» (красный AlertTriangle) — задачи с прошедшим дедлайном. Клик фильтрует доску. Текст отображается в tooltip при наведении.',
+        q: 'Что за чипы в топбаре вкладки «Задачи»?',
+        a: 'Всего (синий), В работе (зелёный), Внимание (оранжевый — дедлайн в ближайшие 3 дня), Просрочено (красный). Клик по чипу фильтрует доску по соответствующим задачам.',
+      },
+      {
+        q: 'Как читать подсветку дедлайна?',
+        a: 'Синий «сегодня», оранжевый жирный — 1–3 дня до дедлайна, серый — 4+ дней, красный жирный — просрочено. Жёлтый промежуточный цвет убран в v0.8.7 для большей контрастности.',
       },
     ],
   },
   {
-    title: '📥 Импорт / Экспорт',
+    title: '📥 Экспорт / Импорт',
     items: [
       {
-        q: 'Как импортировать задачи?',
-        a: 'Настройки → Экспорт/импорт → «Выберите файл». Поддерживаются форматы JSON, CSV, XLSX. Предпросмотр показывает все строки в прокручиваемой таблице.',
+        q: 'В каких форматах можно экспортировать?',
+        a: (
+          <>
+            <p><strong>JSON</strong> — полная резервная копия (задачи + тэги + статусы), идеальный формат для переноса между ПК.</p>
+            <p className="mt-1.5"><strong>XLSX</strong> — удобный для просмотра в Excel/Google Sheets.</p>
+            <p className="mt-1.5">CSV-экспорт убран в v0.8.8: он некорректно восстанавливал статусы при обратном импорте.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как импортировать?',
+        a: 'Настройки → Экспорт/Импорт → «Выберите файл». Поддерживаются JSON и XLSX. После выбора показывается предпросмотр и выбор стратегии: «Слить» (добавить к существующим) или «Заменить всё». При импорте задачи без указанного статуса попадают в «Взять в работу» (v0.8.8).',
       },
       {
         q: 'Как скачать шаблон для импорта?',
-        a: 'Настройки → Экспорт/импорт → кнопка «Шаблон». Скачивает XLSX со столбцами: title, description, status, tags, due_date, created_at. Статус и теги подхватываются автоматически при импорте.',
-      },
-      {
-        q: 'Как экспортировать данные?',
-        a: 'Настройки → Экспорт/импорт → «Экспорт CSV» или «Экспорт JSON». CSV удобен для Excel, JSON — для резервной копии.',
+        a: 'Настройки → Экспорт/Импорт → кнопка «Шаблон». Скачивает XLSX-файл со столбцами: title, comment, status, tag, start_date, deadline. Статусы и тэги по умолчанию подбираются автоматически.',
       },
     ],
   },
@@ -91,28 +118,42 @@ const sectionsRu: HelpSection[] = [
     items: [
       {
         q: 'Где хранятся данные?',
-        a: 'В браузере — в IndexedDB/localStorage через sql.js (SQLite WASM). В десктопном приложении Tauri — в файле SQLite на диске.',
+        a: (
+          <>
+            <p>В десктопной версии — два файла в папке профиля пользователя: <code>data.db</code> (SQLite со всеми данными) и <code>taskflow_config.json</code> (только переопределение пути, если задано).</p>
+            <p className="mt-1.5">На Windows это <code>%APPDATA%\TaskFlow</code> — можно открыть через <code>Win+R</code> → <code>%APPDATA%\TaskFlow</code>, либо нажать кнопку <strong>«Открыть папку»</strong> в Настройки → Хранилище (v0.8.9).</p>
+            <p className="mt-1.5">В браузерной версии — IndexedDB через sql.js (SQLite WASM).</p>
+          </>
+        ),
+      },
+      {
+        q: 'Можно ли держать БД в OneDrive / Dropbox / Яндекс.Диске?',
+        a: 'Не рекомендуется. SQLite блокирует файл во время работы приложения, и облачная синхронизация может повредить базу. Для переноса данных между устройствами используйте Экспорт/Импорт в JSON или XLSX.',
       },
       {
         q: 'Как изменить путь к файлу БД?',
-        a: 'Настройки → Хранилище → «Выбрать…». Откроется системный диалог выбора папки. Функция доступна только в десктопном приложении; в браузере отображается пояснение.',
+        a: 'Настройки → Хранилище → «Выбрать…». Откроется системный диалог выбора папки — новый <code>taskflow.db</code> будет создан внутри. «Сбросить к умолчанию» возвращает <code>%APPDATA%\\TaskFlow\\data.db</code>. Функция доступна только в десктопной версии.',
       },
       {
         q: 'Что такое «Опасная зона»?',
-        a: 'Настройки → Хранилище → «⚠ Опасная зона». Кнопка «Стереть все данные» требует двух подтверждений, после чего полностью очищает БД, пересоздаёт дефолтные статусы и welcome-задачу без перезагрузки страницы.',
+        a: 'Настройки → Хранилище → «⚠ Опасная зона». Кнопка «Стереть все данные» требует двух подтверждений, затем полностью очищает БД, пересоздаёт стандартные статусы и welcome-задачу — без перезагрузки страницы. Исправлено в v0.8.7: раньше в десктопе очищался только кэш в памяти.',
       },
     ],
   },
   {
-    title: '🎨 Темы и цитаты',
+    title: '🎨 Темы и язык',
     items: [
       {
         q: 'Как переключить тему?',
-        a: 'Внизу левого сайдбара — кнопка с иконкой солнца/луны — открывает список из 4 тем: Светлая, Тёмная, Акацуки, Деревня листа.',
+        a: 'Внизу левого сайдбара — кнопка с иконкой солнца/луны. Доступны 4 темы: Светлая, Тёмная, Акацуки, Деревня листа.',
       },
       {
-        q: 'Что такое цитаты в топбаре?',
-        a: 'При каждом запуске (или смене темы/языка) случайно выбирается мотивирующая цитата про продуктивность и фокус.',
+        q: 'Как сменить язык?',
+        a: 'Настройки → Общие → Язык: русский / English. Цитаты и подсказки переключаются вместе с языком.',
+      },
+      {
+        q: 'Что за цитаты в топбаре?',
+        a: 'При каждом запуске (и при смене темы/языка) случайно выбирается мотивирующая цитата. Набор зависит от темы (для Акацуки и Деревни листа — тематические).',
       },
     ],
   },
@@ -123,11 +164,14 @@ const sectionsRu: HelpSection[] = [
         q: 'Список горячих клавиш',
         a: (
           <ul className="space-y-1 list-disc pl-4">
-            <li><code>N</code> — новая задача</li>
-            <li><code>/</code> — фокус на поле поиска</li>
-            <li><code>1–6</code> — переключение вкладок (Задачи, Добавить, Дашборд, Статистика, Настройки, Помощь)</li>
-            <li><code>ESC</code> — закрыть модальное окно или отменить редактирование</li>
-            <li><code>Enter</code> (в полях карточки) — сохранить изменение</li>
+            <li><code>1</code> — Задачи</li>
+            <li><code>2</code> — Дашборд</li>
+            <li><code>3</code> — Статистика</li>
+            <li><code>4</code> — Настройки</li>
+            <li><code>5</code> — Помощь</li>
+            <li><code>/</code> — фокус на поле поиска (на вкладке Задачи)</li>
+            <li><code>Esc</code> — закрыть модальное окно / отменить редактирование / закрыть эмодзи-пикер</li>
+            <li><code>Enter</code> в полях карточки — сохранить inline-правку</li>
           </ul>
         ),
       },
@@ -135,40 +179,50 @@ const sectionsRu: HelpSection[] = [
   },
 ];
 
+// ─── EN ──────────────────────────────────────────────────────────────────────
 const sectionsEn: HelpSection[] = [
   {
     title: '📋 Basics',
     items: [
       {
         q: 'How do I add a task?',
-        a: 'Open the "Add" tab or press N. Fill in the title, choose a status and tag — the live preview below shows how the card will look.',
+        a: 'On the Tasks tab, click "+ New task" in the top right — a modal opens. Fill in the title, pick a status and tag (you can create a new one with "+"), optionally set start/deadline dates. The live card preview is at the bottom of the form.',
       },
       {
         q: 'How do tags work?',
-        a: 'Tags are labels for categorising tasks. Create them in Settings → Tags with a name and color. The task board supports filtering by tag via a horizontally scrollable bar.',
+        a: 'Tags are labels for categorising tasks. Create them in Settings → Tags (name + colour) or right from the task modal via the "+" button. The board has a horizontally scrollable filter strip.',
       },
       {
         q: 'How do statuses work?',
         a: (
           <>
-            <p>Statuses group tasks on the board. Order is set via arrows in Settings → Statuses.</p>
+            <p>Statuses group tasks on the board. Order is set with arrows in Settings → Statuses.</p>
             <p className="mt-2">
-              <strong>Hidden</strong> — status is not shown on the task board (but visible in Statistics and Dashboard). Use for "Deleted".
+              <strong>Hidden</strong> — the status is not shown on the board but is visible in Statistics and Dashboard. Default for "Deleted".
             </p>
             <p className="mt-2">
-              <strong>Collapsed</strong> — the status section is shown on the board but collapsed by default. Click the section header to expand. Use for "Done".
+              <strong>Collapsed by default</strong> — the section is visible on the board but collapsed. Click the header to expand. Default for "Done".
             </p>
-            <p className="mt-2">Default statuses: Planned, In Progress, On Hold, Done (collapsed), Deleted (hidden).</p>
+            <p className="mt-2">Default statuses: Planned, Take into work, In progress, On hold, Done (collapsed), Deleted (hidden).</p>
           </>
         ),
       },
       {
-        q: 'How do I reorder tasks?',
-        a: 'Drag a card by the card body or by the ⋮⋮ (GripVertical) drag handle icon on the right. The status updates automatically. Drag-and-drop is disabled while editing a title or comment.',
+        q: 'How do I drag a task between statuses?',
+        a: 'Drag the card by the ⋮⋮ handle on the right. Both reordering inside one status and moving between statuses are supported. Clicking the card body opens the edit modal — these gestures no longer conflict (fixed in v0.8.6).',
       },
       {
         q: 'How do I delete a task?',
-        a: 'Click the trash icon 🗑 in the top-right corner of the card. Two centered buttons appear: Delete (red) and Keep. Deleted tasks are soft-deleted and remain visible in Statistics where they can be restored.',
+        a: 'In the task modal — the "Delete" button at the bottom left, then confirm. The task is soft-deleted (moved to "Deleted") and stays visible in Statistics where it can be restored.',
+      },
+      {
+        q: 'What is the emoji picker in task fields? (v0.8.8)',
+        a: (
+          <>
+            <p>Next to the labels of the <strong>Title</strong> and <strong>Comment</strong> fields there's a 😊 button. Click it to open a panel: first the recent emojis (up to 12), then a "More…" button expanding the full picker with search and 8 categories (Smileys, Gestures, Objects, Symbols, Nature, Food, Activities, Travel).</p>
+            <p className="mt-2">The emoji is inserted at the caret position and focus is preserved. Recent emojis are remembered across launches.</p>
+          </>
+        ),
       },
     ],
   },
@@ -177,38 +231,55 @@ const sectionsEn: HelpSection[] = [
     items: [
       {
         q: 'What does the Dashboard show?',
-        a: 'KPI cards (total/in-progress/completed/overdue), an activity line chart, status pie chart, tag bar chart (only tags with tasks), 12-week heatmap, and recently completed tasks.',
-      },
-      {
-        q: 'How do I select a period?',
         a: (
           <>
-            <p>Buttons "Week / Month / Quarter / Year / Custom" in the top-right of the Dashboard.</p>
-            <p className="mt-1.5">"Custom" opens a popover — enter From/To dates and click Apply.</p>
-            <p className="mt-1.5">Activity chart tooltip shows dates as dd.mm.yyyy.</p>
+            <p>The Dashboard has two zones:</p>
+            <p className="mt-2"><strong>Current snapshot</strong> (does NOT depend on the period): top bar with metrics (Total / In progress / On hold / Done / Overdue / Most-used tag), pie chart "By status" and bar chart "By tag".</p>
+            <p className="mt-2"><strong>For the selected period</strong> (picked in the top-right): full-width "Activity" chart with three lines — created (blue), completed (green), overdue (red) — plus the 12-week heatmap.</p>
+            <p className="mt-2">At the bottom — the "Recently completed" list.</p>
           </>
         ),
       },
       {
-        q: 'What are the Overdue and Total chips in the topbar?',
-        a: 'Total (blue icon) shows all tasks. Overdue (red AlertTriangle) counts past-due tasks. Clicking filters the board. Label text appears in the tooltip on hover.',
+        q: 'How do I pick a period?',
+        a: (
+          <>
+            <p>Buttons "Week / Month / Quarter / Year / Custom" in the top right. The period only affects the Activity chart (and any period-scoped counters there).</p>
+            <p className="mt-1.5">"Custom" opens a popover — pick From/To dates and click Apply.</p>
+            <p className="mt-1.5">The top-bar metrics and "By status" / "By tag" charts always show the current state of all tasks regardless of period.</p>
+          </>
+        ),
+      },
+      {
+        q: 'What are the chips in the Tasks topbar?',
+        a: 'Total (blue), In progress (green), Attention (orange — deadline within 3 days), Overdue (red). Clicking a chip filters the board.',
+      },
+      {
+        q: 'How is the deadline coloured?',
+        a: 'Blue for "today", bold orange for 1–3 days left, muted grey for 4+ days, bold red for overdue. The intermediate yellow tier was removed in v0.8.7 for higher contrast.',
       },
     ],
   },
   {
-    title: '📥 Import / Export',
+    title: '📥 Export / Import',
     items: [
       {
-        q: 'How do I import tasks?',
-        a: 'Settings → Export/Import → "Choose file". JSON, CSV, and XLSX formats are supported. Preview shows all rows in a scrollable table.',
+        q: 'Which export formats are supported?',
+        a: (
+          <>
+            <p><strong>JSON</strong> — full backup (tasks + tags + statuses), ideal for moving between machines.</p>
+            <p className="mt-1.5"><strong>XLSX</strong> — easy to inspect in Excel/Google Sheets.</p>
+            <p className="mt-1.5">CSV export was removed in v0.8.8 — it didn't round-trip statuses correctly.</p>
+          </>
+        ),
+      },
+      {
+        q: 'How do I import?',
+        a: 'Settings → Export/Import → "Choose file". JSON and XLSX are supported. After picking a file you see a preview and a strategy choice: "Merge" (add on top of existing) or "Replace all". Tasks without an explicit status land in "Take into work" (v0.8.8).',
       },
       {
         q: 'How do I download an import template?',
-        a: 'Settings → Export/Import → "Template" button. Downloads XLSX with columns: title, description, status, tags, due_date, created_at. Status and tags are matched automatically on import.',
-      },
-      {
-        q: 'How do I export data?',
-        a: 'Settings → Export/Import → "Export CSV" or "Export JSON". CSV is convenient for Excel, JSON for backups.',
+        a: 'Settings → Export/Import → "Template" button. Downloads an XLSX with columns: title, comment, status, tag, start_date, deadline. Default statuses and tags are matched automatically.',
       },
     ],
   },
@@ -217,28 +288,42 @@ const sectionsEn: HelpSection[] = [
     items: [
       {
         q: 'Where is my data stored?',
-        a: 'In the browser — IndexedDB/localStorage via sql.js (SQLite WASM). In the Tauri desktop app — a SQLite file on disk.',
+        a: (
+          <>
+            <p>In the desktop app — two files in the user profile folder: <code>data.db</code> (SQLite with all data) and <code>taskflow_config.json</code> (only the DB path override, if any).</p>
+            <p className="mt-1.5">On Windows that's <code>%APPDATA%\TaskFlow</code> — you can open it via <code>Win+R</code> → <code>%APPDATA%\TaskFlow</code>, or use the new <strong>"Open folder"</strong> button in Settings → Storage (v0.8.9).</p>
+            <p className="mt-1.5">In the browser — IndexedDB via sql.js (SQLite WASM).</p>
+          </>
+        ),
+      },
+      {
+        q: 'Can I keep the DB on OneDrive / Dropbox / Google Drive?',
+        a: 'Not recommended. SQLite locks the file while the app runs, and cloud sync can corrupt the database. To move data between devices use Export/Import in JSON or XLSX.',
       },
       {
         q: 'How do I change the database path?',
-        a: 'Settings → Storage → "Choose…". A system folder picker opens. Only available in the desktop app; browser shows an explanation.',
+        a: 'Settings → Storage → "Choose…". A system folder picker opens — a fresh <code>taskflow.db</code> is created inside. "Reset to default" goes back to <code>%APPDATA%\\TaskFlow\\data.db</code>. Desktop-only.',
       },
       {
         q: 'What is the Danger Zone?',
-        a: 'Settings → Storage → "⚠ Danger Zone". "Erase all data" requires two confirmations, then clears the DB, recreates default statuses and a welcome task — without a page reload.',
+        a: 'Settings → Storage → "⚠ Danger Zone". "Erase all data" requires two confirmations, then fully wipes the DB, recreates default statuses and a welcome task — no page reload. Fixed in v0.8.7: previously only the in-memory cache was reset on desktop.',
       },
     ],
   },
   {
-    title: '🎨 Themes & Quotes',
+    title: '🎨 Themes & Language',
     items: [
       {
         q: 'How do I switch theme?',
-        a: 'Bottom of the left sidebar — sun/moon icon opens a list of 4 themes: Light, Dark, Akatsuki, Hidden Leaf.',
+        a: 'Bottom of the left sidebar — sun/moon icon. Four themes: Light, Dark, Akatsuki, Hidden Leaf.',
+      },
+      {
+        q: 'How do I change language?',
+        a: 'Settings → General → Language: Russian / English. Quotes and hints follow the language.',
       },
       {
         q: 'What are the topbar quotes?',
-        a: 'On each launch (or theme/language change) a random motivational productivity quote is picked.',
+        a: 'On each launch (and on theme/language change) a random motivational quote is picked. The set depends on the theme (Akatsuki and Hidden Leaf have themed quotes).',
       },
     ],
   },
@@ -249,11 +334,14 @@ const sectionsEn: HelpSection[] = [
         q: 'Shortcut list',
         a: (
           <ul className="space-y-1 list-disc pl-4">
-            <li><code>N</code> — new task</li>
-            <li><code>/</code> — focus search field</li>
-            <li><code>1–6</code> — switch tabs (Tasks, Add, Dashboard, Stats, Settings, Help)</li>
-            <li><code>ESC</code> — close modal or cancel edit</li>
-            <li><code>Enter</code> (in card fields) — save change</li>
+            <li><code>1</code> — Tasks</li>
+            <li><code>2</code> — Dashboard</li>
+            <li><code>3</code> — Statistics</li>
+            <li><code>4</code> — Settings</li>
+            <li><code>5</code> — Help</li>
+            <li><code>/</code> — focus the search box (on the Tasks tab)</li>
+            <li><code>Esc</code> — close modal / cancel edit / close emoji picker</li>
+            <li><code>Enter</code> in card fields — save the inline edit</li>
           </ul>
         ),
       },
@@ -261,7 +349,7 @@ const sectionsEn: HelpSection[] = [
   },
 ];
 
-/** Task 13b: "What's New" section generated from CHANGELOG[0] */
+/** "What's New" — generated from CHANGELOG[0]. */
 function WhatsNewSection({ lang }: { lang: 'ru' | 'en' }) {
   const latest = CHANGELOG[0];
   const items = latest.items[lang];
@@ -282,7 +370,7 @@ function WhatsNewSection({ lang }: { lang: 'ru' | 'en' }) {
   );
 }
 
-/** Task 13c: About section */
+/** About section. */
 function AboutSection({ lang }: { lang: 'ru' | 'en' }) {
   const latest = CHANGELOG[0];
   return (
@@ -353,10 +441,7 @@ export function HelpPage() {
             </div>
           ))}
 
-          {/* Task 13c: What's New placed above About section, at the bottom of the page */}
           <WhatsNewSection lang={lang} />
-
-          {/* About section — always last */}
           <AboutSection lang={lang} />
         </div>
       </div>
