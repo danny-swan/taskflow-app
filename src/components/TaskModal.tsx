@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { useStore, Task } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
-import { Trash2, X, AlertTriangle } from 'lucide-react';
+import { Trash2, X, AlertTriangle, Smile } from 'lucide-react';
+import { EmojiPicker, useEmojiPicker } from './EmojiPicker';
 
 export function TaskModal({
   task, onClose,
@@ -23,6 +24,20 @@ export function TaskModal({
   const [newTagName, setNewTagName] = useState('');
   const [showNewTag, setShowNewTag] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // v0.8.8: emoji-picker для Название/Комментарий
+  const titleRef = useRef<HTMLTextAreaElement | null>(null);
+  const commentRef = useRef<HTMLTextAreaElement | null>(null);
+  const titleEmoji = useEmojiPicker(
+    titleRef,
+    draft?.title ?? '',
+    (next) => setDraft(d => (d ? { ...d, title: next } : d)),
+  );
+  const commentEmoji = useEmojiPicker(
+    commentRef,
+    draft?.comment ?? '',
+    (next) => setDraft(d => (d ? { ...d, comment: next } : d)),
+  );
 
   useEffect(() => { setDraft(task); }, [task]);
 
@@ -114,24 +129,34 @@ export function TaskModal({
             </Field>
           </div>
 
-          <Field label={tr(lang, 'title')}>
+          <FieldWithEmoji
+            label={tr(lang, 'title')}
+            onEmojiClick={titleEmoji.emojiButtonProps.onClick}
+            emojiRef={titleEmoji.buttonRef}
+          >
             <AutoGrowTextarea
+              ref={titleRef}
               value={draft.title}
               onChange={(e) => setDraft({ ...draft, title: e.target.value })}
               className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13.5px] font-semibold"
               rows={1}
             />
-          </Field>
+          </FieldWithEmoji>
 
-          <Field label={tr(lang, 'comment')}>
+          <FieldWithEmoji
+            label={tr(lang, 'comment')}
+            onEmojiClick={commentEmoji.emojiButtonProps.onClick}
+            emojiRef={commentEmoji.buttonRef}
+          >
             <AutoGrowTextarea
+              ref={commentRef}
               value={draft.comment || ''}
               onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
               className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
               style={{ maxHeight: '50vh', overflowY: 'auto' }}
               rows={3}
             />
-          </Field>
+          </FieldWithEmoji>
 
           <div className="grid grid-cols-2 gap-4">
             <Field label={tr(lang, 'start')}>
@@ -180,6 +205,10 @@ export function TaskModal({
             >{tr(lang, 'save')}</button>
           </div>
         </div>
+
+        {/* v0.8.8: emoji-pickers */}
+        <EmojiPicker {...titleEmoji.emojiPickerProps} />
+        <EmojiPicker {...commentEmoji.emojiPickerProps} />
       </Modal>
 
       <Modal open={confirmOpen} onClose={() => setConfirmOpen(false)} width={420} label="Confirm delete">
@@ -222,5 +251,35 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div className="text-[11px] text-muted uppercase tracking-wider mb-1">{label}</div>
       {children}
     </label>
+  );
+}
+
+function FieldWithEmoji({
+  label,
+  children,
+  onEmojiClick,
+  emojiRef,
+}: {
+  label: string;
+  children: React.ReactNode;
+  onEmojiClick: () => void;
+  emojiRef: React.Ref<HTMLButtonElement>;
+}) {
+  return (
+    <div className="block mb-3.5">
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[11px] text-muted uppercase tracking-wider">{label}</div>
+        <button
+          ref={emojiRef}
+          type="button"
+          onClick={onEmojiClick}
+          className="text-muted hover:text-text p-0.5 rounded transition-colors"
+          title="Emoji"
+        >
+          <Smile size={14} />
+        </button>
+      </div>
+      {children}
+    </div>
   );
 }

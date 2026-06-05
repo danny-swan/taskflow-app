@@ -1,24 +1,32 @@
-import { TextareaHTMLAttributes, useEffect, useRef } from 'react';
+import { forwardRef, TextareaHTMLAttributes, useEffect, useRef } from 'react';
 
-export function AutoGrowTextarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  const ref = useRef<HTMLTextAreaElement | null>(null);
+export const AutoGrowTextarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
+  function AutoGrowTextarea(props, forwardedRef) {
+    const innerRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // JS fallback for browsers without field-sizing: content
-  const resize = () => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = el.scrollHeight + 'px';
-  };
+    // JS fallback for browsers without field-sizing: content
+    const resize = () => {
+      const el = innerRef.current;
+      if (!el) return;
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    };
 
-  useEffect(() => { resize(); }, [props.value]);
+    useEffect(() => { resize(); }, [props.value]);
 
-  return (
-    <textarea
-      {...props}
-      ref={ref}
-      onInput={(e) => { resize(); props.onInput?.(e); }}
-      className={'auto-grow w-full bg-transparent border-0 outline-none resize-none ' + (props.className || '')}
-    />
-  );
-}
+    const setRefs = (el: HTMLTextAreaElement | null) => {
+      innerRef.current = el;
+      if (typeof forwardedRef === 'function') forwardedRef(el);
+      else if (forwardedRef) (forwardedRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = el;
+    };
+
+    return (
+      <textarea
+        {...props}
+        ref={setRefs}
+        onInput={(e) => { resize(); props.onInput?.(e); }}
+        className={'auto-grow w-full bg-transparent border-0 outline-none resize-none ' + (props.className || '')}
+      />
+    );
+  }
+);

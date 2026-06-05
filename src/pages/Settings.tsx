@@ -521,7 +521,11 @@ function IOSection() {
   };
 
   const resolveTaskFields = (t: ImportedTask) => {
-    const defaultStatus = statuses.find(s => s.behavior === 'top' || s.behavior === 'middle');
+    // v0.8.8: fallback для импорта — «Взять в работу» (по уточнению пользователя).
+    // Если нет «Взять в работу» — фоллбэк на первый top/middle, затем на любой первый.
+    const defaultStatus =
+      statuses.find(s => s.name === 'Взять в работу')
+      ?? statuses.find(s => s.behavior === 'top' || s.behavior === 'middle');
     const statusMatch = t.status
       ? statuses.find(s => s.name.toLowerCase() === t.status!.trim().toLowerCase())
       : null;
@@ -585,10 +589,8 @@ function IOSection() {
         <div className="text-[12px] text-muted uppercase tracking-wider mb-2">
           {lang === 'ru' ? 'Экспорт' : 'Export'}
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          <button onClick={() => openExportDialog('csv')} className="flex items-center justify-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
-            <Download size={16} /> CSV
-          </button>
+        {/* v0.8.8: CSV-экспорт убран (некорректно подтягивались статусы при импорте). Остались JSON и XLSX. */}
+        <div className="grid grid-cols-2 gap-3">
           <button onClick={() => openExportDialog('json')} className="flex items-center justify-center gap-2 px-4 py-3 border border-border-soft rounded-lg hover:bg-surface-alt text-[13px]">
             <Download size={16} /> JSON
           </button>
