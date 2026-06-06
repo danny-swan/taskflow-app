@@ -9,6 +9,7 @@ import { TagChip } from './TagChip';
 import { Modal } from './Modal';
 import { EmojiPicker, useEmojiPicker } from './EmojiPicker';
 import { Smile } from 'lucide-react';
+import { insertCheckboxLines } from '../lib/checkboxes';
 
 export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const lang = useStore(s => s.language);
@@ -53,6 +54,23 @@ export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => 
 
   const status = statuses.find(s => s.id === statusId);
   const tag = tags.find(t => t.id === tagId);
+
+  // v0.8.16: вставка markdown-чекбокса в поле комментария одним кликом
+  // (так же как в TaskModal). Раньше кнопки были только в модалке редактирования.
+  const insertCheckbox = (kind: 'unchecked' | 'checked' | 'bullet') => {
+    const el = commentRef.current;
+    const current = comment;
+    const start = el?.selectionStart ?? current.length;
+    const end = el?.selectionEnd ?? current.length;
+    const { next, caretAt } = insertCheckboxLines(current, start, end, kind);
+    setComment(next);
+    requestAnimationFrame(() => {
+      const e2 = commentRef.current;
+      if (!e2) return;
+      e2.focus();
+      e2.setSelectionRange(caretAt, caretAt);
+    });
+  };
 
   const submit = () => {
     if (!title.trim()) return;
@@ -133,7 +151,42 @@ export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => 
           />
         </FieldWithEmoji>
 
-        <FieldWithEmoji label={tr(lang, 'comment')} onEmojiClick={commentEmoji.emojiButtonProps.onClick} emojiRef={commentEmoji.buttonRef}>
+        <FieldWithEmoji
+          label={tr(lang, 'comment')}
+          onEmojiClick={commentEmoji.emojiButtonProps.onClick}
+          emojiRef={commentEmoji.buttonRef}
+          extraToolbar={
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => insertCheckbox('unchecked')}
+                title={lang === 'ru' ? 'Вставить чекбокс (- [ ])' : 'Insert checkbox (- [ ])'}
+                className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-muted hover:text-text hover:bg-surface-alt rounded transition-colors"
+              >
+                <span className="text-[13px] leading-none">☐</span>
+                <span className="hidden sm:inline">{lang === 'ru' ? 'Чекбокс' : 'Checkbox'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => insertCheckbox('checked')}
+                title={lang === 'ru' ? 'Выполненный чекбокс (- [x])' : 'Checked box (- [x])'}
+                className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-muted hover:text-text hover:bg-surface-alt rounded transition-colors"
+              >
+                <span className="text-[13px] leading-none">☑</span>
+                <span className="hidden sm:inline">{lang === 'ru' ? 'Готово' : 'Done'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => insertCheckbox('bullet')}
+                title={lang === 'ru' ? 'Пункт списка (-)' : 'Bullet (-)'}
+                className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-muted hover:text-text hover:bg-surface-alt rounded transition-colors"
+              >
+                <span className="text-[14px] leading-none">•</span>
+                <span className="hidden sm:inline">{lang === 'ru' ? 'Список' : 'List'}</span>
+              </button>
+            </div>
+          }
+        >
           <AutoGrowTextarea
             ref={commentRef}
             value={comment}
@@ -210,25 +263,30 @@ function FieldWithEmoji({
   children,
   onEmojiClick,
   emojiRef,
+  extraToolbar,
 }: {
   label: string;
   children: React.ReactNode;
   onEmojiClick: () => void;
   emojiRef: React.Ref<HTMLButtonElement>;
+  extraToolbar?: React.ReactNode;
 }) {
   return (
     <div className="block">
       <div className="flex items-center justify-between mb-1">
         <div className="text-[11px] text-muted uppercase tracking-wider">{label}</div>
-        <button
-          ref={emojiRef}
-          type="button"
-          onClick={onEmojiClick}
-          className="text-muted hover:text-text p-0.5 rounded transition-colors"
-          title="Emoji"
-        >
-          <Smile size={14} />
-        </button>
+        <div className="flex items-center gap-1">
+          {extraToolbar}
+          <button
+            ref={emojiRef}
+            type="button"
+            onClick={onEmojiClick}
+            className="text-muted hover:text-text p-0.5 rounded transition-colors"
+            title="Emoji"
+          >
+            <Smile size={14} />
+          </button>
+        </div>
       </div>
       {children}
     </div>
