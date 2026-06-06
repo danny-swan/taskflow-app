@@ -47,15 +47,53 @@ export const MIGRATIONS: Migration[] = [
       // already produces the v1 schema for both fresh and existing DBs.
     },
   },
-  // ── Add future migrations below. Example:
-  //
-  // {
-  //   version: 2,
-  //   description: 'Add tasks.priority column',
-  //   up: async ({ execIgnoreDuplicate }) => {
-  //     await execIgnoreDuplicate(`ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`);
-  //   },
-  // },
+  {
+    version: 2,
+    description: 'Add task_templates table + seed default template',
+    up: async ({ exec, select }) => {
+      // 1. Создаём таблицу шаблонов. status_id и tag_id — NULLable,
+      //    потому что пользователь может удалить связанный статус/тег позже,
+      //    и в этом случае шаблон упадёт на дефолты при применении.
+      await exec(`
+        CREATE TABLE IF NOT EXISTS task_templates (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          name        TEXT    NOT NULL,
+          title       TEXT    NOT NULL DEFAULT '',
+          comment     TEXT    NOT NULL DEFAULT '',
+          status_id   INTEGER,
+          tag_id      INTEGER,
+          sort_order  INTEGER NOT NULL DEFAULT 0,
+          created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+          updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+
+      // 2. Сид «Шаблон задачи 1» — только если таблица пуста.
+      const existing = await select<{ n: number }>(`SELECT COUNT(*) AS n FROM task_templates`);
+      const n = Number(existing[0]?.n ?? 0);
+      if (n === 0) {
+        // Статус «Взять в работу» — он в сиде первым, с behavior='middle'.
+        const st = await select<{ id: number }>(
+          `SELECT id FROM statuses WHERE name='Взять в работу' LIMIT 1`
+        );
+        const statusId = st[0]?.id ?? null;
+        const comment = [
+          '1. Action item',
+          '2. Action item',
+          '',
+          'Статус выполнения:',
+          '- [ ] …',
+          '- [ ] …',
+          '- [ ] …',
+        ].join('\n');
+        await exec(
+          `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order)
+           VALUES (?, ?, ?, ?, NULL, 0)`,
+          ['Шаблон задачи 1', 'Задача 1', comment, statusId]
+        );
+      }
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */

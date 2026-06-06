@@ -667,22 +667,31 @@ export function isTauri() { return IS_TAURI; }
 export interface BackupPayload {
   version: string;
   exported_at: string;
-  include?: { tasks?: boolean; tags?: boolean; statuses?: boolean };
+  include?: { tasks?: boolean; tags?: boolean; statuses?: boolean; templates?: boolean };
   statuses?: any[];
   tags?: any[];
   tasks?: any[];
+  /** v0.8.13+: user-defined task templates. Optional for backward compatibility with older backups. */
+  templates?: any[];
 }
 
 /** Build a full backup JSON containing only the selected entity kinds */
 export function buildBackup(include: { tasks: boolean; tags: boolean; statuses: boolean }): BackupPayload {
   const payload: BackupPayload = {
-    version: '0.8.7',
+    version: '0.8.13',
     exported_at: new Date().toISOString(),
-    include,
+    include: { ...include, templates: true },
   };
   if (include.statuses) payload.statuses = all('SELECT * FROM statuses ORDER BY sort_order');
   if (include.tags)     payload.tags     = all('SELECT * FROM tags ORDER BY sort_order');
   if (include.tasks)    payload.tasks    = all('SELECT * FROM tasks ORDER BY sort_order');
+  // Templates are always exported (small, useful to carry between machines)
+  try {
+    payload.templates = all('SELECT * FROM task_templates ORDER BY sort_order, id');
+  } catch {
+    // table may not exist on very old DBs prior to v2 migration — ignore
+    payload.templates = [];
+  }
   return payload;
 }
 
@@ -694,12 +703,13 @@ export function buildBackup(include: { tasks: boolean; tags: boolean; statuses: 
 export async function applyBackup(
   payload: BackupPayload,
   mode: 'replace' | 'merge'
-): Promise<{ statuses: number; tags: number; tasks: number }> {
-  const counts = { statuses: 0, tags: 0, tasks: 0 };
+): Promise<{ statuses: number; tags: number; tasks: number; templates: number }> {
+  const counts = { statuses: 0, tags: 0, tasks: 0, templates: 0 };
   const has = {
     statuses: Array.isArray(payload.statuses),
     tags: Array.isArray(payload.tags),
     tasks: Array.isArray(payload.tasks),
+    templates: Array.isArray(payload.templates),
   };
 
   // Helper to do the run in both Tauri and web modes
@@ -714,6 +724,9 @@ export async function applyBackup(
   if (mode === 'replace') {
     // Order matters: tasks reference statuses & tags via FK-like fields (no real FK, but logical)
     if (has.tasks) await sync('DELETE FROM tasks');
+    if (has.templates) {
+      try { await sync('DELETE FROM task_templates'); } catch { /* table may not exist yet */ }
+    }
     if (has.tags) await sync('DELETE FROM tags');
     if (has.statuses) await sync('DELETE FROM statuses');
   }
@@ -815,6 +828,51 @@ export async function applyBackup(
         ]
       );
       counts.tasks++;
+    }
+  }
+
+  // Templates: apply after statuses/tags so we can resolve names→ids the same way
+  if (has.templates) {
+    // Re-build status/tag name maps (statuses/tags may have just been merged or replaced)
+    const statusByName = new Map<string, number>();
+    for (const r of all<any>('SELECT id, name FROM statuses')) statusByName.set(String(r.name).toLowerCase(), r.id);
+    const tagByName = new Map<string, number>();
+    for (const r of all<any>('SELECT id, name FROM tags')) tagByName.set(String(r.name).toLowerCase(), r.id);
+
+    const origStatuses = new Map<number, string>();
+    if (has.statuses) for (const s of payload.statuses!) origStatuses.set(s.id, String(s.name ?? ''));
+    const origTags = new Map<number, string>();
+    if (has.tags) for (const t of payload.tags!) origTags.set(t.id, String(t.name ?? ''));
+
+    const existingTemplates = mode === 'merge'
+      ? new Set(all<any>('SELECT LOWER(name) AS k FROM task_templates').map(r => String(r.k)))
+      : new Set<string>();
+
+    for (const tpl of payload.templates!) {
+      const name = String(tpl.name ?? '').trim();
+      if (!name) continue;
+      if (mode === 'merge' && existingTemplates.has(name.toLowerCase())) continue;
+
+      let statusId: number | null = null;
+      if (tpl.status_id != null) {
+        const origName = origStatuses.get(tpl.status_id);
+        if (origName) statusId = statusByName.get(origName.toLowerCase()) ?? null;
+      }
+      let tagId: number | null = null;
+      if (tpl.tag_id != null) {
+        const origName = origTags.get(tpl.tag_id);
+        if (origName) tagId = tagByName.get(origName.toLowerCase()) ?? null;
+      }
+
+      try {
+        await sync(
+          `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order) VALUES (?,?,?,?,?,?)`,
+          [name, String(tpl.title ?? ''), String(tpl.comment ?? ''), statusId, tagId, tpl.sort_order ?? 0]
+        );
+        counts.templates++;
+      } catch {
+        // task_templates table missing (very old DB without v2 migration) — skip silently
+      }
     }
   }
 

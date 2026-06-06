@@ -3,7 +3,7 @@ import { Modal } from './Modal';
 import { useStore, Task } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
-import { Trash2, X, AlertTriangle, Smile } from 'lucide-react';
+import { Trash2, X, AlertTriangle, Smile, FilePlus } from 'lucide-react';
 import { EmojiPicker, useEmojiPicker } from './EmojiPicker';
 
 export function TaskModal({
@@ -19,6 +19,8 @@ export function TaskModal({
   const softDeleteTask = useStore(s => s.softDeleteTask);
   const addTag = useStore(s => s.addTag);
   const pushToast = useStore(s => s.pushToast);
+  // v0.8.13: «Сохранить как шаблон» в подвале модалки
+  const addTemplate = useStore(s => s.addTemplate);
 
   const [draft, setDraft] = useState<Task | null>(task);
   const [newTagName, setNewTagName] = useState('');
@@ -58,6 +60,30 @@ export function TaskModal({
     onClose();
   };
   const remove = () => setConfirmOpen(true);
+
+  // v0.8.13: сохранение текущей задачи как шаблона. Просим имя через prompt() —
+  // минимальный UI, не требует ещё одной модалки. Переименовать и удалять шаблоны
+  // можно в Settings → «Шаблоны задач».
+  const saveAsTemplate = () => {
+    const defaultName = (draft.title || (lang === 'ru' ? 'Шаблон' : 'Template')).slice(0, 60);
+    const name = window.prompt(
+      lang === 'ru' ? 'Название шаблона:' : 'Template name:',
+      defaultName,
+    );
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    addTemplate({
+      name: trimmed,
+      title: draft.title,
+      comment: draft.comment,
+      status_id: draft.status_id,
+      tag_id: draft.tag_id,
+    });
+    pushToast(
+      lang === 'ru' ? `Шаблон «${trimmed}» сохранён` : `Template "${trimmed}" saved`
+    );
+  };
   const confirmDelete = () => {
     // v0.8.12: удаление из модалки тоже предлагает undo (возврат в прежний статус)
     const prevStatusId = draft.status_id;
@@ -196,13 +222,23 @@ export function TaskModal({
 
         </div>
 
-        <div className="px-5 py-3 border-t border-border-soft flex items-center justify-between">
-          <button
-            onClick={remove}
-            className="flex items-center gap-1.5 text-[13px] text-[var(--status-important)] hover:underline"
-          >
-            <Trash2 size={14} /> {tr(lang, 'delete')}
-          </button>
+        <div className="px-5 py-3 border-t border-border-soft flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={remove}
+              className="flex items-center gap-1.5 text-[13px] text-[var(--status-important)] hover:underline"
+            >
+              <Trash2 size={14} /> {tr(lang, 'delete')}
+            </button>
+            {/* v0.8.13: кнопка сохранения текущей задачи как шаблона — важно: не закрывает модалку. */}
+            <button
+              onClick={saveAsTemplate}
+              title={lang === 'ru' ? 'Сохранить текущие поля как шаблон для будущих задач' : 'Save current fields as a reusable template'}
+              className="flex items-center gap-1.5 text-[13px] text-muted hover:text-text hover:underline"
+            >
+              <FilePlus size={14} /> {lang === 'ru' ? 'Сохранить как шаблон' : 'Save as template'}
+            </button>
+          </div>
           <div className="flex gap-2">
             <button
               onClick={onClose}

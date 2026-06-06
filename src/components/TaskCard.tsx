@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react';
 import { Task, useStore } from '../store/useStore';
 import { TagChip } from './TagChip';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
-import { Check, Undo2, Maximize2, Trash2, GripVertical } from 'lucide-react';
+import { Check, Undo2, Maximize2, Trash2, GripVertical, CheckSquare } from 'lucide-react';
 import { tr } from '../lib/i18n';
 import { todayISO } from '../lib/utils';
+import { MarkdownComment } from './MarkdownComment';
+import { getCheckboxStats, toggleCheckbox } from '../lib/checkboxes';
 
 export function TaskCard({
   task, onOpenModal, dragHandleProps, dragging,
@@ -239,9 +241,17 @@ export function TaskCard({
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => { e.stopPropagation(); setEditingComment(true); }}
                 title={lang === 'ru' ? 'Нажмите, чтобы изменить' : 'Click to edit'}
-                style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
               >
-                {task.comment}
+                {/* v0.8.13: рендер комментария поддерживает markdown-чекбоксы.
+                    Если в тексте нет «- [ ]» / «- [x]», MarkdownComment рендерит
+                    его как обычный whitespace-pre-wrap блок — поведение не меняется. */}
+                <MarkdownComment
+                  text={task.comment}
+                  onToggle={(idx) => {
+                    const next = toggleCheckbox(task.comment || '', idx);
+                    if (next !== task.comment) updateTask(task.id, { comment: next });
+                  }}
+                />
               </div>
             ) : null
           ) : (
@@ -263,9 +273,31 @@ export function TaskCard({
           )}
         </div>
 
-        {/* Right rail: deadline + maximize + drag handle + done button */}
+        {/* Right rail: checklist + deadline + maximize + drag handle + done button */}
         {/* Task 12: GripVertical drag handle between maximize and done, gap-3 */}
         <div className="flex items-center gap-2.5 shrink-0 self-center mr-5">
+          {/* v0.8.13: прогресс markdown-чеклиста «2/5». Показываем только
+              если в комментарии есть хотя бы один «- [ ]» / «- [x]» — обычные
+              карточки выглядят идентично версии v0.8.12. */}
+          {(() => {
+            const stats = getCheckboxStats(task.comment);
+            if (!stats) return null;
+            const allDone = stats.done === stats.total;
+            return (
+              <span
+                title={lang === 'ru' ? 'Чек-лист в комментарии' : 'Checklist in comment'}
+                className={
+                  'inline-flex items-center gap-1 text-[11px] tabular-nums px-1.5 py-0.5 rounded ' +
+                  (allDone
+                    ? 'text-[var(--status-done,#10b981)] bg-[color-mix(in_srgb,var(--status-done,#10b981)_12%,transparent)]'
+                    : 'text-muted bg-surface-alt/60')
+                }
+              >
+                <CheckSquare size={11} />
+                {stats.done}/{stats.total}
+              </span>
+            );
+          })()}
           <DeadlineBadge deadline={task.deadline} isDone={isDone} />
           <button
             type="button"

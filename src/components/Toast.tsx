@@ -1,15 +1,18 @@
 import { useStore } from '../store/useStore';
 
 /**
- * v0.8.12: Toast теперь умеет показывать кнопку «Отменить» (action).
- * Если у тоста есть action — таймаут увеличен (управляется в store/pushToast),
- * кнопка ловит клик и закрывает тост.
+ * v0.8.12: Toast умеет показывать кнопку «Отменить» (action).
+ *   Если у тоста есть action — таймаут увеличен (управляется в store/pushToast),
+ *   кнопка ловит клик и закрывает тост.
+ * v0.8.13: позиция изменена с top-right на bottom-center —
+ *   удобнее видеть сразу после клика и тянуться рукой к кнопке Undo.
+ *   Стек тостов растёт вверх (column-reverse), новые появляются ниже.
  */
 export function ToastStack() {
   const toasts = useStore(s => s.toasts);
   const dismiss = useStore(s => s.dismissToast);
   return (
-    <div className="fixed top-4 right-4 z-[60] flex flex-col gap-2 pointer-events-none">
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex flex-col-reverse items-center gap-2 pointer-events-none w-max max-w-[92vw]">
       {toasts.map(t => (
         <div
           key={t.id}

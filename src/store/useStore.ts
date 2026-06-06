@@ -40,6 +40,20 @@ export interface Task {
   archived: number;
 }
 
+// v0.8.13: шаблон задачи — образец, из которого одним кликом создаётся новая задача.
+// Хранится в отдельной таблице task_templates (миграция v2).
+export interface TaskTemplate {
+  id: number;
+  name: string;            // пользовательское имя шаблона (показывается в меню/Settings)
+  title: string;           // предзаполненный заголовок будущей задачи
+  comment: string;         // предзаполненный комментарий (может содержать markdown-чекбоксы)
+  status_id: number | null;// статус, в котором создаётся задача (NULL → первый видимый)
+  tag_id: number | null;   // тег, если задан (по умолчанию NULL)
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 interface State {
   ready: boolean;
   statuses: Status[];        // all statuses incl technical (for stats)
@@ -55,6 +69,7 @@ interface State {
   columnWidths: Record<string, number>;
   taskStatusFilter: string | null; // for metric chips: 'total' | 'inprogress' | 'paused' | 'done' | null
   recentEmojis: string[];          // v0.8.8: недавние эмодзи для пикера (макс. 12)
+  taskTemplates: TaskTemplate[];   // v0.8.13: пользовательские шаблоны задач
 
   // Derived helpers
   getDeletedStatusId(): number | undefined;
@@ -91,6 +106,15 @@ interface State {
   pushToast(text: string, action?: { label: string; onClick: () => void }): void;
   dismissToast(id: number): void;
 
+  // v0.8.13: API для шаблонов задач.
+  // createTaskFromTemplate возвращает id созданной задачи (или null, если шаблон не найден).
+  // saveTaskAsTemplate возвращает id созданного шаблона.
+  addTemplate(p: { name: string; title?: string; comment?: string; status_id?: number | null; tag_id?: number | null }): number;
+  updateTemplate(id: number, p: Partial<TaskTemplate>): void;
+  deleteTemplate(id: number): void;
+  createTaskFromTemplate(templateId: number): number | null;
+  saveTaskAsTemplate(taskId: number, name: string): number | null;
+
   setColumnWidth(key: string, w: number): void;
   setTaskStatusFilter(f: string | null): void;
 
@@ -114,6 +138,7 @@ export const useStore = create<State>((set, get) => ({
   columnWidths: {},
   taskStatusFilter: null,
   recentEmojis: [],
+  taskTemplates: [],
 
   getDeletedStatusId() {
     return get().statuses.find(s => s.is_technical === 1 && s.name === 'Удалено')?.id;
@@ -186,10 +211,20 @@ export const useStore = create<State>((set, get) => ({
   },
 
   refresh() {
+    // v0.8.13: task_templates выбираем в try/catch — таблица появляется после миграции v2.
+    // Если миграция ещё не прошла (экзотический крайний случай — сбой в процессе init),
+    // приложение всё равно работает — просто без шаблонов.
+    let taskTemplates: TaskTemplate[] = [];
+    try {
+      taskTemplates = db.all<TaskTemplate>('SELECT * FROM task_templates ORDER BY sort_order, id');
+    } catch (e) {
+      console.warn('[refresh] task_templates not available yet:', e);
+    }
     set({
       statuses: db.all<Status>('SELECT * FROM statuses ORDER BY sort_order'),
       tags: db.all<Tag>('SELECT * FROM tags ORDER BY sort_order'),
       tasks: db.all<Task>('SELECT * FROM tasks ORDER BY sort_order'),
+      taskTemplates,
     });
   },
 
@@ -370,5 +405,71 @@ export const useStore = create<State>((set, get) => ({
       console.error('[pushRecentEmoji] failed to persist:', e);
     }
     set({ recentEmojis: next });
+  },
+
+  // ── v0.8.13 templates API ──
+
+  addTemplate(p) {
+    const now = new Date().toISOString();
+    const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM task_templates')?.m) ?? 0;
+    const r = db.run(
+      `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [p.name, p.title ?? '', p.comment ?? '', p.status_id ?? null, p.tag_id ?? null, order, now, now]
+    );
+    get().refresh();
+    return r.lastInsertRowid;
+  },
+
+  updateTemplate(id, p) {
+    const now = new Date().toISOString();
+    const fields: string[] = [];
+    const vals: any[] = [];
+    Object.entries(p).forEach(([k, v]) => {
+      if (k === 'id' || k === 'created_at') return;
+      fields.push(`${k}=?`);
+      vals.push(v as any);
+    });
+    if (!fields.length) return;
+    fields.push('updated_at=?');
+    vals.push(now, id);
+    db.run(`UPDATE task_templates SET ${fields.join(',')} WHERE id=?`, vals);
+    get().refresh();
+  },
+
+  deleteTemplate(id) {
+    db.run('DELETE FROM task_templates WHERE id=?', [id]);
+    get().refresh();
+  },
+
+  createTaskFromTemplate(templateId) {
+    const tpl = get().taskTemplates.find(t => t.id === templateId);
+    if (!tpl) return null;
+    // Если сохранённый status_id больше не существует (статус удалили) —
+    // падаем на первый видимый не-технический статус.
+    const visible = get().visibleStatuses();
+    const statusId =
+      (tpl.status_id != null && visible.find(s => s.id === tpl.status_id)?.id) ||
+      visible[0]?.id ||
+      1;
+    const tagExists = tpl.tag_id != null && get().tags.find(t => t.id === tpl.tag_id);
+    return get().addTask({
+      title: tpl.title || '',
+      comment: tpl.comment || '',
+      status_id: statusId,
+      tag_id: tagExists ? tpl.tag_id : null,
+    });
+  },
+
+  saveTaskAsTemplate(taskId, name) {
+    const task = get().tasks.find(t => t.id === taskId);
+    if (!task) return null;
+    return get().addTemplate({
+      name: name || `Шаблон от ${new Date().toLocaleDateString()}`,
+      title: task.title,
+      comment: task.comment,
+      status_id: task.status_id,
+      tag_id: task.tag_id,
+    });
   },
 }));
