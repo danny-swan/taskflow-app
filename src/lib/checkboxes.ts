@@ -108,3 +108,61 @@ export function parseComment(text: string): CommentToken[] {
   flush();
   return tokens;
 }
+
+/**
+ * v0.8.14: вставка markdown-чекбокса (или пункта списка) в позицию каретки.
+ *
+ * Работает с textarea-координатами selectionStart/selectionEnd. Логика:
+ *
+ * 1. Если выделен фрагмент из нескольких строк — превращаем каждую строку
+ *    в чекбокс (пустые строки пропускаем).
+ * 2. Иначе — вставляем одну пустую строку. Если курсор не в начале своей
+ *    строки — добавляем \n перед префиксом (чтобы чекбокс начинался
+ *    с новой строки).
+ *
+ * Возвращает обновлённый текст и позицию, куда поставить каретку (конец
+ * вставки — удобно сразу печатать текст пункта).
+ */
+export interface InsertResult {
+  next: string;
+  caretAt: number;
+}
+
+export function insertCheckboxLines(
+  text: string,
+  selStart: number,
+  selEnd: number,
+  kind: 'unchecked' | 'checked' | 'bullet'
+): InsertResult {
+  const prefix = kind === 'unchecked' ? '- [ ] '
+               : kind === 'checked'   ? '- [x] '
+               : '- ';
+
+  // Если есть выделение с >0 длиной — превращаем каждую строку.
+  if (selEnd > selStart) {
+    const before = text.slice(0, selStart);
+    const middle = text.slice(selStart, selEnd);
+    const after = text.slice(selEnd);
+    const transformed = middle
+      .split('\n')
+      .map(line => (line.trim().length === 0 ? line : prefix + line))
+      .join('\n');
+    const next = before + transformed + after;
+    return { next, caretAt: before.length + transformed.length };
+  }
+
+  // Без выделения — вставляем пустый чекбокс.
+  const before = text.slice(0, selStart);
+  const after = text.slice(selStart);
+  // Нужен ли \n перед префиксом?
+  const needsLeadingNL = before.length > 0 && !before.endsWith('\n');
+  const lead = needsLeadingNL ? '\n' : '';
+  // Нужен ли \n после?
+  const needsTrailingNL = after.length > 0 && !after.startsWith('\n');
+  const trail = needsTrailingNL ? '\n' : '';
+  const inserted = lead + prefix + trail;
+  const next = before + inserted + after;
+  // Каретка — в конце prefix (до возможного \n).
+  const caretAt = before.length + lead.length + prefix.length;
+  return { next, caretAt };
+}

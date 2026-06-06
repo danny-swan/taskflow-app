@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.14',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Кнопки вставки чекбоксов в комментарии: над полем «Комментарий» появилась панель с кнопками «☐ Чекбокс», «☑ Готово», «• Список» — одним кликом вставляет нужную маркдаун-разметку. При выделении нескольких строк префикс добавляется к каждой.',
+        'Шаблоны задач переехали в отдельную вкладку Настроек (над «Экспорт/Импорт») — раньше были внутри «Хранилища».',
+        'Исправление шаблонов: сидовый «Чек-лист» теперь создаётся и при обновлении с предыдущих версий и устойчив к переименованию статусов. Кнопка «Сохранить как шаблон» и ручное создание теперь корректно сохраняют шаблоны в БД.',
+        'Собственная модалка ввода вместо системного prompt: больше никаких диалогов «Сообщение с tauri.localhost» — имя шаблона спрашивается в стилизованной модалке приложения.',
+      ],
+      en: [
+        'Checkbox insert buttons in the comment field: a small toolbar above the “Comment” field with “☐ Checkbox”, “☑ Done”, “• List” inserts the right markdown in one click. With a multi-line selection the prefix is added to every line.',
+        'Task templates moved to a dedicated Settings tab (above “Export/Import”) — previously they were tucked inside “Storage”.',
+        'Template fixes: the seed “Checklist” template is now created on upgrades from older versions too and is resilient to renamed statuses. “Save as template” and manual creation now reliably persist to the DB.',
+        'Custom input modal instead of the system prompt: no more “Message from tauri.localhost” dialogs — the template name is asked in a styled in-app modal.',
+      ],
+    },
+  },
+  {
     version: '0.8.13',
     date: '2026-06-06',
     items: {

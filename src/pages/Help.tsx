@@ -303,6 +303,32 @@ const sectionsRu: HelpSection[] = [
       },
     ],
   },
+  {
+    title: '✨ Что нового в 0.8.14',
+    items: [
+      {
+        q: 'Кнопки вставки чекбоксов в комментарии',
+        a: (
+          <>
+            <p>В модалке задачи над полем «Комментарий» появилась панель с тремя кнопками: <code>☐ Чекбокс</code>, <code>☑ Готово</code>, <code>• Список</code>. Клик вставляет нужную разметку (<code>- [ ] </code>, <code>- [x] </code>, <code>- </code>) — больше не нужно переключать язык и набирать всё вручную.</p>
+            <p className="mt-2">Если выделить несколько строк и нажать кнопку — префикс добавится к каждой непустой строке.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Шаблоны задач — отдельная вкладка',
+        a: '«Шаблоны задач» переехали из вкладки «Хранилище» в отдельный раздел Настроек (над «Экспорт/Импорт») — их проще найти.',
+      },
+      {
+        q: 'Исправления шаблонов',
+        a: 'Сидовый шаблон «Чек-лист» теперь создаётся и при обновлении с предыдущих версий (не только при чистой установке), и устойчив к переименованию статусов. Кнопка «Сохранить как шаблон» и создание вручную тоже работают корректно.',
+      },
+      {
+        q: 'Собственная модалка «Введите»',
+        a: 'Раньше при «Сохранить как шаблон» появлялся системный диалог с надписью «Сообщение с tauri.localhost» — выглядело странно. Теперь используется собственная модалка в стиле приложения.',
+      },
+    ],
+  },
 ];
 
 // ─── EN ──────────────────────────────────────────────────────────────────────
@@ -595,6 +621,32 @@ const sectionsEn: HelpSection[] = [
       {
         q: 'Are templates included in backups?',
         a: 'Yes. When you export a JSON backup (Settings → Backup), templates are added automatically — no separate checkbox needed. Importing older backups (without templates) works fine: there just won’t be any templates to import.',
+      },
+    ],
+  },
+  {
+    title: '✨ What\'s New in 0.8.14',
+    items: [
+      {
+        q: 'Checkbox insert buttons in comments',
+        a: (
+          <>
+            <p>A small toolbar above the “Comment” field in the task modal now has three buttons: <code>☐ Checkbox</code>, <code>☑ Done</code>, <code>• List</code>. Clicking inserts the right markdown (<code>- [ ] </code>, <code>- [x] </code>, <code>- </code>) — no more switching keyboard layouts and typing it by hand.</p>
+            <p className="mt-2">If you select several lines first, the prefix is added to every non-empty line.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Task templates — own tab',
+        a: '“Task templates” moved out of the “Storage” tab into a dedicated Settings tab (above “Export/Import”) — easier to find.',
+      },
+      {
+        q: 'Template fixes',
+        a: 'The seed “Checklist” template is now created on upgrades from older versions too (not only on a fresh install) and is resilient to renamed statuses. “Save as template” and manual creation also work reliably now.',
+      },
+      {
+        q: 'Custom “Enter” prompt',
+        a: 'Previously “Save as template” opened the system prompt labeled “Message from tauri.localhost” — looked weird. It is now a styled, in-app modal that matches the rest of the UI.',
       },
     ],
   },
