@@ -13,6 +13,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.17',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Фикс: модалка «Название шаблона» открывалась «под» модалкой задачи и пользователь её не видел. Причина — transform-анимация родителя ломала position:fixed внутри. Теперь PromptDialog рендерится через React Portal в body.',
+        'Фикс: задача из сидового шаблона попадала в «Важно» вместо «Взять в работу». Добавлен второй fallback: если сохранённый в шаблоне status_id не найден, сначала ищется статус с именем «Взять в работу», и только если его нет — берётся первый видимый статус.',
+      ],
+      en: [
+        'Fix: the “Template name” input modal opened underneath the task modal and was invisible to the user. Root cause was the parent’s transform animation breaking position:fixed inside. PromptDialog is now rendered via a React Portal to body.',
+        'Fix: tasks created from the seed template fell into “Important” instead of “Take into work”. Added a second fallback: if the template’s saved status_id is missing, first look up a status named “Взять в работу” before falling back to the first visible status.',
+      ],
+    },
+  },
+  {
     version: '0.8.16',
     date: '2026-06-06',
     items: {
