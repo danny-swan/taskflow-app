@@ -264,10 +264,10 @@ All builds **do not require admin rights** and work on locked-down corporate PCs
 
 | File | Size | When to choose |
 |---|---|---|
-| [**TaskFlow_0.8.12_x64-setup.exe**](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/TaskFlow_0.8.12_x64-setup.exe) | 4.8 MB | ✅ **Recommended** — NSIS installer, installs to `%LOCALAPPDATA%\Programs\TaskFlow`, creates Start menu shortcut, upgrades cleanly over an older version |
-| [TaskFlow_0.8.12_x64_en-US.msi](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/TaskFlow_0.8.12_x64_en-US.msi) | 6.3 MB | MSI, English installer UI |
-| [TaskFlow_0.8.12_x64_ru-RU.msi](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/TaskFlow_0.8.12_x64_ru-RU.msi) | 6.3 MB | MSI, Russian installer UI |
-| [taskflow.exe](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/taskflow.exe) | 15.4 MB | **Portable** — just run, no install |
+| [**TaskFlow_0.8.xx_x64-setup.exe**] | ~4.8 MB | ✅ **Recommended** — NSIS installer, installs to `%LOCALAPPDATA%\Programs\TaskFlow`, creates Start menu shortcut, upgrades cleanly over an older version |
+| [TaskFlow_0.8.xx_x64_en-US.msi] | ~6.3 MB | MSI, English installer UI |
+| [TaskFlow_0.8.xx_x64_ru-RU.msi] | ~6.3 MB | MSI, Russian installer UI |
+| [taskflow.exe] | ~15.4 MB | **Portable** — just run, no install |
 
 > **Antivirus may flag the unsigned `.exe`** — this is expected for open-source apps without a commercial code-signing certificate. Whitelist or build from source (see below).
 
