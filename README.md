@@ -1,119 +1,393 @@
-# TaskFlow — Windows Desktop App
+<div align="center">
 
-Менеджер задач со SQLite-хранилищем, drag-and-drop, дашбордом и тёмной/светлой/Akatsuki/Konoha темами.
+# TaskFlow
 
-Сборка Windows-приложения происходит автоматически через GitHub Actions: вам не нужны ни Rust, ни Node на компьютере — всё собирается в облаке, вы скачиваете готовый `.exe`.
+**Локальный канбан-менеджер задач для Windows. Без облака, без аккаунтов, без подписки.**
+
+[Скачать v0.8.12](https://github.com/danny-swan/taskflow-app/releases/latest) · [Возможности](#-возможности) · [Установка](#-установка) · [English](#english) · [Обновление](#-обновление-и-сохранность-данных)
+
+[![Latest release](https://img.shields.io/github/v/release/danny-swan/taskflow-app?label=release&color=blue)](https://github.com/danny-swan/taskflow-app/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/danny-swan/taskflow-app/build.yml?branch=main)](https://github.com/danny-swan/taskflow-app/actions/workflows/build.yml)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D6)](https://github.com/danny-swan/taskflow-app/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-green)](#-лицензия)
+
+</div>
 
 ---
 
-## 🚀 Быстрый старт: получить `.exe` за 10 минут
+## 📋 Что это
 
-### Шаг 1. Загрузите проект в свой репозиторий
+**TaskFlow** — настольное приложение для управления задачами в стиле канбан. Всё хранится локально в SQLite-файле на вашем компьютере: никакие данные не уходят в облако, не требуется регистрация и интернет. Подходит для личных задач, рабочих процессов и небольших проектов, где важна приватность.
 
-```powershell
-# Клонируйте свой пустой репозиторий
-git clone https://github.com/<ВАШ-ЛОГИН>/<ВАШ-РЕПО>.git
-cd <ВАШ-РЕПО>
+Собрано на **Tauri 2** (Rust + React), весит ~5 МБ, запускается мгновенно, **не требует прав администратора**.
 
-# Распакуйте содержимое taskflow_v0.6.zip в эту папку
-# (важно: скопируйте ВСЁ содержимое архива, включая скрытую папку .github)
+<div align="center">
 
-# Зафиксируйте файлы
-git add .
-git commit -m "TaskFlow v0.6 — initial commit"
-git push origin main
-```
+> Темы: 🌞 светлая · 🌚 тёмная · 🩸 Akatsuki · 🍃 Konoha · языки интерфейса: 🇷🇺 RU / 🇬🇧 EN
 
-### Шаг 2. Запустите сборку через тег
+</div>
 
-```powershell
-git tag v0.6.0
-git push origin v0.6.0
-```
+---
 
-После этого GitHub Actions автоматически:
-1. Запустит сборку на `windows-latest` (~8–10 минут)
-2. Соберёт три варианта установщика
-3. Создаст релиз в разделе **Releases** вашего репозитория
+## ✨ Возможности
 
-### Шаг 3. Скачайте готовый файл
+### Задачи и канбан
+- 🎯 **Канбан-доска** с произвольным набором колонок-статусов (создавайте, переименовывайте, перекрашивайте, скрывайте).
+- 🖱 **Drag-and-drop** между колонками и внутри колонки — порядок сохраняется.
+- 🏷 **Теги** с цветами и эмодзи, фильтрация и поиск по тегам и тексту.
+- 📅 Дата начала, дата завершения, продолжительность задачи (автоматически).
+- ✅ **Чек выполнения** — один клик помечает задачу как «Выполнено» с timestamp.
+- ↩️ **Undo для деструктивных действий** (v0.8.12) — toast «Отменить» после удаления, перевода в архив или завершения.
+- 🚦 **Поведения статусов:** обычный, «закреплён сверху», «уходит в архив», технический (например, «Удалено»).
 
-Откройте: `https://github.com/<ВАШ-ЛОГИН>/<ВАШ-РЕПО>/releases/tag/v0.6.0`
+### Аналитика и обзор
+- 📊 **Dashboard** — сводка: всего задач, активные, выполненные, по тегам.
+- 📈 **Statistics** — графики по неделям/месяцам, тренды выполнения, разбивка по тегам и статусам (recharts).
+- 🔍 Полнотекстовый поиск по названию и комментариям.
 
-Вы увидите три файла:
+### Данные и сохранность
+- 💾 **Резервные копии** — экспорт всей БД в JSON одной кнопкой, импорт обратно.
+- 📁 **Меняемое расположение БД** — можно положить `data.db` в OneDrive / Dropbox / на сетевую папку и синхронизировать между ПК.
+- 🔄 **Автоматические миграции БД** (v0.8.12) — `PRAGMA user_version`, обновление без потери данных.
+- 📝 **Логирование** (v0.8.12) — `taskflow.log` с ротацией, доступ к файлу из Settings → «Диагностика».
 
-| Файл | Что это | Когда выбирать |
+### UX
+- 🎨 **4 темы:** Light, Dark, Akatsuki, Konoha — переключение в один клик.
+- 🌐 **2 языка интерфейса:** русский и английский.
+- 💬 Случайная цитата в шапке (своя подборка для каждой темы и языка).
+- ⌨️ **Горячие клавиши:** `1`–`5` для навигации, `/` — фокус в поиск, `N` — новая задача.
+- 🎓 **Welcome-тур** (v0.8.12) — 5-шаговое знакомство для новичков, перезапуск из Help.
+
+---
+
+## 📦 Установка
+
+Все варианты **не требуют прав администратора** и подходят для рабочих ПК с ограничениями.
+
+| Файл | Размер | Когда выбирать |
 |---|---|---|
-| `TaskFlow_0.6.0_x64-setup.exe` | **NSIS-установщик (per-user)** | ✅ Рекомендуется для рабочего ПК без прав админа |
-| `TaskFlow_0.6.0_x64_en-US.msi` | MSI-установщик | Если нужен корпоративный формат |
-| `taskflow.exe` | **Portable** (просто запускайте) | Если не хотите ничего устанавливать вообще |
+| [**TaskFlow_0.8.12_x64-setup.exe**](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/TaskFlow_0.8.12_x64-setup.exe) | 4.8 МБ | ✅ **Рекомендуется** — NSIS-установщик, ставит в `%LOCALAPPDATA%\Programs\TaskFlow`, создаёт ярлык, обновляется поверх старой версии |
+| [TaskFlow_0.8.12_x64_ru-RU.msi](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/TaskFlow_0.8.12_x64_ru-RU.msi) | 6.3 МБ | MSI с русской локализацией мастера установки |
+| [TaskFlow_0.8.12_x64_en-US.msi](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/TaskFlow_0.8.12_x64_en-US.msi) | 6.3 МБ | MSI с английской локализацией мастера установки |
+| [taskflow.exe](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/taskflow.exe) | 15.4 МБ | **Portable** — просто запускайте, ничего не устанавливается |
 
-> Все три варианта **не требуют прав администратора**. NSIS-установщик ставит приложение в `%LOCALAPPDATA%\Programs\TaskFlow`, данные хранятся в `%APPDATA%\TaskFlow\data.db`.
-
----
-
-## 📁 Где хранятся данные
-
-- **База задач:** `%APPDATA%\TaskFlow\data.db` (SQLite)
-- **Настройки:** `%APPDATA%\TaskFlow\config.json`
-
-Перенести данные на другой компьютер можно простым копированием папки `%APPDATA%\TaskFlow`.
+> **Антивирус может ругаться на неподписанный `.exe`** — это нормально для opensource-приложений без коммерческой подписи кода. Можно добавить в исключения или собрать самостоятельно (см. [Сборка из исходников](#-сборка-из-исходников)).
 
 ---
 
-## 🛠 Как работает CI
+## 🔄 Обновление и сохранность данных
 
-`.github/workflows/build.yml` запускается:
-- автоматически при пуше тега `v*` (например, `v0.6.0`, `v0.7.1`)
-- вручную через вкладку **Actions → Build Windows → Run workflow**
+База данных и настройки лежат **отдельно** от исполняемых файлов, поэтому обновление **не теряет данные**.
 
-Шаги:
-1. Установка Node 20 + Rust (stable, target `x86_64-pc-windows-msvc`)
-2. `npm ci`
-3. `npm run tauri:build -- --target x86_64-pc-windows-msvc`
-4. Загрузка артефактов (NSIS, MSI, Portable)
-5. Создание GitHub Release (только для тегов `v*`)
+### Где хранятся данные
 
----
-
-## 💻 Локальная разработка (опционально)
-
-Для запуска и сборки локально нужны:
-- Node.js 20+
-- Rust (stable) с компонентом `x86_64-pc-windows-msvc`
-- Microsoft C++ Build Tools
-
-```powershell
-npm ci
-npm run tauri:dev      # запуск с hot-reload
-npm run tauri:build    # локальная сборка .exe
+```
+%APPDATA%\app.taskflow.desktop\
+├── data.db          ← все задачи, статусы, теги, настройки
+└── taskflow.log     ← лог приложения (с v0.8.12)
 ```
 
+Откройте проводник → в адресной строке вставьте `%APPDATA%\app.taskflow.desktop` → попадёте в эту папку.
+
+### Правильный порядок обновления
+
+1. **Сделайте бэкап.** Settings → «Резервная копия» → «Создать бэкап». Сохраните `taskflow-backup-YYYY-MM-DD.json` в надёжное место.
+2. **Запустите новый установщик поверх старой версии.** Удалять предыдущую не нужно — NSIS-установщик обновит её, MSI тоже умеет апгрейд.
+3. **При первом запуске** автоматически применятся миграции БД (если они есть в этом релизе), `PRAGMA user_version` стампится в актуальное значение, данные остаются на месте.
+
+### Перенос на другой компьютер
+
+Скопируйте `%APPDATA%\app.taskflow.desktop\data.db` на новый ПК в ту же папку — все задачи появятся. Или используйте экспорт/импорт через JSON.
+
+### Если что-то пошло не так
+
+- Settings → «Диагностика» → «Открыть лог» — увидите, на каком шаге упало.
+- Установите ту версию, на которой работало, → «Восстановить из бэкапа» → залейте JSON.
+- Откройте [issue](https://github.com/danny-swan/taskflow-app/issues) с логом — починим.
+
 ---
 
-## 🆕 Новый релиз
+## ⌨️ Горячие клавиши
 
-Чтобы выпустить, например, v0.7.0:
+| Клавиша | Действие |
+|---|---|
+| `1` | Открыть **Задачи** |
+| `2` | Открыть **Dashboard** |
+| `3` | Открыть **Statistics** |
+| `4` | Открыть **Settings** |
+| `5` | Открыть **Help** |
+| `/` | Фокус в поле поиска |
+| `N` | Новая задача |
 
-```powershell
-# Внесите изменения, измените "version" в src-tauri/tauri.conf.json и package.json
-git add .
-git commit -m "v0.7.0"
-git tag v0.7.0
-git push origin main
-git push origin v0.7.0
-```
-
-GitHub Actions сам соберёт и опубликует новый релиз.
+Хоткеи не срабатывают, когда фокус в текстовом поле.
 
 ---
 
 ## ⚙️ Стек
 
-- **Frontend:** Vite + React 18 + TypeScript + Tailwind
-- **State:** zustand
-- **DB:** sql.js (web) / tauri-plugin-sql (desktop, готов к подключению)
-- **DnD:** @dnd-kit
-- **Charts:** recharts
-- **Icons:** lucide-react
-- **Desktop:** Tauri 2.0 + NSIS (per-user installMode)
+| Слой | Технологии |
+|---|---|
+| Desktop runtime | **Tauri 2.x** (Rust) с NSIS / MSI / Portable сборками |
+| Frontend | **React 18** + TypeScript + Vite |
+| Стилизация | Tailwind CSS, 4 темы |
+| State | **zustand** |
+| База данных | **SQLite** через `tauri-plugin-sql` (desktop) / `sql.js` (web-режим) |
+| Drag-and-drop | `@dnd-kit` |
+| Графики | `recharts` |
+| Иконки | `lucide-react` |
+| Экспорт/импорт | JSON, CSV (papaparse), XLSX (sheetjs) |
+
+---
+
+## 🛠 Сборка из исходников
+
+### Локальная сборка (Windows)
+
+Нужны:
+- **Node.js 20+**
+- **Rust** (stable) с target `x86_64-pc-windows-msvc`
+- **Microsoft C++ Build Tools** (входят в Visual Studio Build Tools)
+
+```powershell
+git clone https://github.com/danny-swan/taskflow-app.git
+cd taskflow-app
+npm ci
+npm run tauri:dev     # запуск с hot-reload
+npm run tauri:build   # сборка .exe / .msi / portable в src-tauri\target\release\bundle\
+```
+
+### Сборка через GitHub Actions (без локального окружения)
+
+Workflow `.github/workflows/build.yml` запускается:
+- автоматически при пуше тега `v*` (например, `v0.8.12`) — создаёт релиз с артефактами;
+- вручную через **Actions → Build TaskFlow for Windows → Run workflow**.
+
+Что собирается:
+1. NSIS `*_x64-setup.exe` (per-user, без админских прав)
+2. MSI `*_x64_ru-RU.msi` и `*_x64_en-US.msi`
+3. Portable `taskflow.exe`
+
+Полная сборка ~9 минут на `windows-latest`.
+
+### Релиз новой версии
+
+```powershell
+# 1. Поднимите версию в package.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml
+# 2. Добавьте запись в src/data/changelog.ts
+git commit -am "v0.X.Y: краткое описание"
+git tag v0.X.Y
+git push && git push origin v0.X.Y
+# CI соберёт артефакты и опубликует релиз
+```
+
+---
+
+## 🗺 Roadmap
+
+- [ ] **v0.8.13** — Toast снизу по центру, markdown-чекбоксы в комментариях с прогрессом на карточке, шаблоны задач (с пользовательскими шаблонами и кнопкой «Из шаблона»).
+- [ ] **v0.9.x** — Подзадачи как отдельные сущности, повторяющиеся задачи, напоминания.
+- [ ] **v1.0** — Стабильный API экспорта, плагины, синхронизация через WebDAV/S3.
+
+Полная история изменений: [`src/data/changelog.ts`](src/data/changelog.ts) или Help в приложении.
+
+---
+
+## 🤝 Обратная связь и баги
+
+- [Issues](https://github.com/danny-swan/taskflow-app/issues) — баги и предложения.
+- [Discussions](https://github.com/danny-swan/taskflow-app/discussions) — обсуждение фич.
+
+При баге, пожалуйста, приложите содержимое `taskflow.log` (Settings → «Диагностика» → «Открыть лог»).
+
+---
+
+## 📄 Лицензия
+
+MIT — см. [LICENSE](LICENSE). Можно свободно использовать в личных и коммерческих целях, форкать и модифицировать.
+
+---
+
+<a id="english"></a>
+
+# TaskFlow (English)
+
+**Local-first Kanban task manager for Windows. No cloud, no accounts, no subscriptions.**
+
+[Download v0.8.12](https://github.com/danny-swan/taskflow-app/releases/latest) · [Features](#-features) · [Installation](#-installation-1) · [Upgrading](#-upgrading-without-data-loss)
+
+---
+
+## 📋 What is it
+
+**TaskFlow** is a desktop task management app in a Kanban style. Everything is stored locally in a SQLite file on your computer — no data leaves your machine, no signup, no internet required. Suitable for personal todos, work processes and small projects where privacy matters.
+
+Built with **Tauri 2** (Rust + React), ~5 MB installer, instant startup, **no admin rights required**.
+
+> Themes: 🌞 Light · 🌚 Dark · 🩸 Akatsuki · 🍃 Konoha · UI languages: 🇷🇺 RU / 🇬🇧 EN
+
+---
+
+## ✨ Features
+
+### Tasks & Kanban
+- 🎯 **Kanban board** with fully customisable status columns (create, rename, recolour, hide).
+- 🖱 **Drag-and-drop** between columns and within a column — order is persisted.
+- 🏷 **Tags** with colours and emoji, filtering and search by tag and text.
+- 📅 Start date, finish date, auto-calculated duration.
+- ✅ **One-click complete** — marks the task as "Done" with a timestamp.
+- ↩️ **Undo for destructive actions** (v0.8.12) — "Undo" toast after delete, archive or completion.
+- 🚦 **Status behaviours:** normal, pinned-top, archive-on-enter, technical (e.g. "Deleted").
+
+### Analytics
+- 📊 **Dashboard** — overview: totals, active, completed, by tag.
+- 📈 **Statistics** — weekly/monthly charts, completion trends, breakdown by tag and status (recharts).
+- 🔍 Full-text search over title and comments.
+
+### Data & durability
+- 💾 **Backups** — one-click JSON export of the whole DB, one-click import.
+- 📁 **Custom DB location** — put `data.db` on OneDrive/Dropbox/network share for multi-PC sync.
+- 🔄 **Automatic DB migrations** (v0.8.12) — `PRAGMA user_version`, no data loss across upgrades.
+- 📝 **Logging** (v0.8.12) — `taskflow.log` with rotation, accessible from Settings → Diagnostics.
+
+### UX
+- 🎨 **4 themes:** Light, Dark, Akatsuki, Konoha.
+- 🌐 **2 UI languages:** Russian and English.
+- 💬 Random quote in the header (a curated set per theme and language).
+- ⌨️ **Hotkeys:** `1`–`5` for navigation, `/` to focus search, `N` for new task.
+- 🎓 **Welcome tour** (v0.8.12) — 5-step intro for new users, restart from Help.
+
+---
+
+## 📦 Installation
+
+All builds **do not require admin rights** and work on locked-down corporate PCs.
+
+| File | Size | When to choose |
+|---|---|---|
+| [**TaskFlow_0.8.12_x64-setup.exe**](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/TaskFlow_0.8.12_x64-setup.exe) | 4.8 MB | ✅ **Recommended** — NSIS installer, installs to `%LOCALAPPDATA%\Programs\TaskFlow`, creates Start menu shortcut, upgrades cleanly over an older version |
+| [TaskFlow_0.8.12_x64_en-US.msi](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/TaskFlow_0.8.12_x64_en-US.msi) | 6.3 MB | MSI, English installer UI |
+| [TaskFlow_0.8.12_x64_ru-RU.msi](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/TaskFlow_0.8.12_x64_ru-RU.msi) | 6.3 MB | MSI, Russian installer UI |
+| [taskflow.exe](https://github.com/danny-swan/taskflow-app/releases/download/v0.8.12/taskflow.exe) | 15.4 MB | **Portable** — just run, no install |
+
+> **Antivirus may flag the unsigned `.exe`** — this is expected for open-source apps without a commercial code-signing certificate. Whitelist or build from source (see below).
+
+---
+
+## 🔄 Upgrading without data loss
+
+Your database and settings live **separately** from the executable, so upgrades **never lose data**.
+
+### Data location
+
+```
+%APPDATA%\app.taskflow.desktop\
+├── data.db          ← all tasks, statuses, tags, settings
+└── taskflow.log     ← application log (since v0.8.12)
+```
+
+Open Explorer → paste `%APPDATA%\app.taskflow.desktop` into the address bar.
+
+### Correct upgrade flow
+
+1. **Make a backup.** Settings → Backup → Create backup. Keep `taskflow-backup-YYYY-MM-DD.json` somewhere safe.
+2. **Run the new installer on top of the old version.** No need to uninstall — NSIS upgrades in place, so does MSI.
+3. **On first launch** any pending DB migrations are applied automatically, `PRAGMA user_version` advances, data stays intact.
+
+### Moving to another computer
+
+Copy `%APPDATA%\app.taskflow.desktop\data.db` to the same folder on the new PC — all your tasks appear there. Or use JSON export/import.
+
+### If something breaks
+
+- Settings → Diagnostics → Open log — see where it failed.
+- Install the previous working version → "Restore from backup" → load your JSON.
+- Open an [issue](https://github.com/danny-swan/taskflow-app/issues) with the log attached.
+
+---
+
+## ⌨️ Hotkeys
+
+| Key | Action |
+|---|---|
+| `1` | Open **Tasks** |
+| `2` | Open **Dashboard** |
+| `3` | Open **Statistics** |
+| `4` | Open **Settings** |
+| `5` | Open **Help** |
+| `/` | Focus the search box |
+| `N` | New task |
+
+Hotkeys are disabled when a text field is focused.
+
+---
+
+## 🛠 Building from source
+
+### Local build (Windows)
+
+Requirements:
+- **Node.js 20+**
+- **Rust** (stable) with `x86_64-pc-windows-msvc` target
+- **Microsoft C++ Build Tools** (included in Visual Studio Build Tools)
+
+```powershell
+git clone https://github.com/danny-swan/taskflow-app.git
+cd taskflow-app
+npm ci
+npm run tauri:dev     # hot-reload dev mode
+npm run tauri:build   # build .exe / .msi / portable into src-tauri\target\release\bundle\
+```
+
+### Build via GitHub Actions (no local toolchain)
+
+Workflow `.github/workflows/build.yml` runs:
+- automatically on `v*` tag push (e.g. `v0.8.12`) — creates a release with artifacts;
+- manually via **Actions → Build TaskFlow for Windows → Run workflow**.
+
+Outputs:
+1. NSIS `*_x64-setup.exe` (per-user, no admin)
+2. MSI `*_x64_ru-RU.msi` and `*_x64_en-US.msi`
+3. Portable `taskflow.exe`
+
+Full build ~9 minutes on `windows-latest`.
+
+---
+
+## ⚙️ Tech stack
+
+| Layer | Technology |
+|---|---|
+| Desktop runtime | **Tauri 2.x** (Rust) with NSIS / MSI / Portable bundles |
+| Frontend | **React 18** + TypeScript + Vite |
+| Styling | Tailwind CSS, 4 themes |
+| State | **zustand** |
+| Database | **SQLite** via `tauri-plugin-sql` (desktop) / `sql.js` (web mode) |
+| Drag-and-drop | `@dnd-kit` |
+| Charts | `recharts` |
+| Icons | `lucide-react` |
+| Import/export | JSON, CSV (papaparse), XLSX (sheetjs) |
+
+---
+
+## 🗺 Roadmap
+
+- [ ] **v0.8.13** — Toast at bottom-center, Markdown checkboxes inside comments with a card progress indicator, user-defined task templates with a "From template" button.
+- [ ] **v0.9.x** — Subtasks as first-class entities, recurring tasks, reminders.
+- [ ] **v1.0** — Stable export API, plugins, WebDAV/S3 sync.
+
+Full changelog: [`src/data/changelog.ts`](src/data/changelog.ts) or in-app Help.
+
+---
+
+## 🤝 Feedback
+
+- [Issues](https://github.com/danny-swan/taskflow-app/issues) — bugs and feature requests.
+- [Discussions](https://github.com/danny-swan/taskflow-app/discussions) — feature discussion.
+
+When reporting a bug, please attach `taskflow.log` (Settings → Diagnostics → Open log).
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE). Free for personal and commercial use, fork and modify freely.
