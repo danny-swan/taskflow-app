@@ -317,6 +317,9 @@ export const useStore = create<State>((set, get) => ({
   deleteStatus(id) {
     const status = get().statuses.find(s => s.id === id);
     if (status?.is_technical === 1) return;
+    // v0.8.11: «Выполнено» (единственный не-technical статус с behavior='archive') системный и неудаляемый:
+    // без него сломается кнопка-галочка «Выполнить» на карточке (не найдёт куда переместить).
+    if (status?.behavior === 'archive') return;
     const first = db.get<{ id: number }>('SELECT id FROM statuses WHERE id != ? AND is_technical=0 ORDER BY sort_order LIMIT 1', [id]);
     if (first) db.run('UPDATE tasks SET status_id=? WHERE status_id=?', [first.id, id]);
     db.run('DELETE FROM statuses WHERE id=?', [id]);

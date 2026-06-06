@@ -13,6 +13,28 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.11',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Дашборд: график «Активность» и тепловая карта «12 недель» теперь строятся по дате старта задачи (с откатом на дату создания, если старт не задан). Раньше задача всегда отображалась в день создания, даже если её плановый старт был запланирован на завтра/будущее.',
+        'Задачи: меню эмодзи больше не закрывается сразу после выбора смайлика — можно вставить несколько подряд. Добавлена кнопка «Готово» и компактная кнопка закрытия в шапке пикера. Esc и клик вне пикера по-прежнему работают.',
+        'Статусы: «Выполнено» теперь системный — его нельзя удалить в Настройки → Статусы (вместо корзины показывается значок «системный»). Это защищает кнопку-галочку на карточке задачи от поломки.',
+        'Хранилище: автоматическая резервная копия БД при закрытии приложения — рядом с data.db создаётся data.db.backup. В Настройки → Хранилище появился блок «Резервная копия» с кнопками «Создать копию сейчас» и «Открыть папку».',
+        'Левое меню: переключатель языка RU/EN стал визуально явным — два варианта рядом, активный подсвечен.',
+        'Помощь: убраны упоминания «удалено» как статуса; добавлены новые разделы про «Выполнено», про резервную копию и пошаговая инструкция «Что делать, если всё сломалось». Блок про облачные папки переписан как «можно, но с оговорками» с конкретными правилами.',
+      ],
+      en: [
+        'Dashboard: the Activity chart and 12-week heatmap are now built from the task start date (falling back to the creation date if no start is set). Previously tasks were always plotted on their creation day, even when their planned start was tomorrow/in the future.',
+        'Tasks: the emoji picker no longer closes immediately after picking a smiley — you can insert several in a row. Added a "Done" button and a compact close button in the picker header. Esc and outside-click still work.',
+        'Statuses: "Done" is now a system status and can\'t be deleted in Settings → Statuses (a "system" badge is shown instead of the trash icon). This prevents breaking the checkmark button on task cards.',
+        'Storage: automatic database backup on app close — data.db.backup is written next to data.db. Settings → Storage now has a "Backup" block with "Back up now" and "Open folder" buttons.',
+        'Sidebar: the RU/EN language switcher is now a visual toggle with the active language highlighted.',
+        'Help: removed mentions of "Deleted" as a default status; added new sections about "Done", on-close backups and a step-by-step "What if everything is broken?" guide. The cloud-folder block was rewritten as "yes, but with caveats" with concrete rules.',
+      ],
+    },
+  },
+  {
     version: '0.8.10',
     date: '2026-06-06',
     items: {

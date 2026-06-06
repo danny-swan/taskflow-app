@@ -78,12 +78,40 @@ export function Sidebar() {
 
       {/* Footer: language + theme */}
       <div className="p-2.5 border-t border-border-soft flex items-center gap-2 bg-[var(--surface)]">
-        <button
-          onClick={() => setLang(lang === 'ru' ? 'en' : 'ru')}
-          className="flex-1 px-2 py-1.5 rounded-md text-[11px] font-mono uppercase tracking-wider hover:bg-surface-alt border border-border-soft"
+        {/* v0.8.11: визуальный тоггл RU/EN — активный язык подсвечивается акцентным фоном.
+            Работает как «рычаг» — визуально ясно, какой язык сейчас выбран. */}
+        <div
+          role="group"
+          aria-label={lang === 'ru' ? 'Язык' : 'Language'}
+          className="flex-1 flex items-center rounded-md border border-border-soft overflow-hidden p-[2px] gap-[2px] bg-[var(--surface-alt)]/40"
         >
-          {lang === 'ru' ? 'RU · en' : 'ru · EN'}
-        </button>
+          <button
+            type="button"
+            onClick={() => setLang('ru')}
+            aria-pressed={lang === 'ru'}
+            className={
+              'flex-1 px-2 py-1 rounded text-[11px] font-mono uppercase tracking-wider transition-colors ' +
+              (lang === 'ru'
+                ? 'bg-accent-soft text-accent font-semibold'
+                : 'text-muted hover:text-text hover:bg-surface-alt')
+            }
+          >
+            RU
+          </button>
+          <button
+            type="button"
+            onClick={() => setLang('en')}
+            aria-pressed={lang === 'en'}
+            className={
+              'flex-1 px-2 py-1 rounded text-[11px] font-mono uppercase tracking-wider transition-colors ' +
+              (lang === 'en'
+                ? 'bg-accent-soft text-accent font-semibold'
+                : 'text-muted hover:text-text hover:bg-surface-alt')
+            }
+          >
+            EN
+          </button>
+        </div>
         <div ref={themeRef} className="relative">
           <button
             onClick={() => setThemeOpen(o => !o)}

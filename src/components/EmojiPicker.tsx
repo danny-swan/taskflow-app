@@ -107,10 +107,11 @@ export function EmojiPicker({ open, anchorRect, onClose, onSelect }: Props) {
     }
   }, [open]);
 
+  // v0.8.11: не закрываем пикер после выбора, чтобы можно было вставить несколько эмодзи подряд.
+  // Закрытие — кнопкой «Готово», Esc или кликом вне пикера.
   const handlePick = (emoji: string) => {
     pushRecentEmoji(emoji);
     onSelect(emoji);
-    onClose();
   };
 
   // Position: prefer below anchor, flip above if no space
@@ -145,8 +146,20 @@ export function EmojiPicker({ open, anchorRect, onClose, onSelect }: Props) {
       {!expanded ? (
         // Compact: recent + "More"
         <div className="p-2 space-y-1.5">
-          <div className="text-[10px] text-muted uppercase tracking-wider px-1">
-            {lang === 'ru' ? 'Недавние' : 'Recent'}
+          <div className="flex items-center justify-between px-1">
+            <div className="text-[10px] text-muted uppercase tracking-wider">
+              {lang === 'ru' ? 'Недавние' : 'Recent'}
+            </div>
+            {/* v0.8.11: явная кнопка закрытия пикера */}
+            <button
+              onClick={onClose}
+              className="text-muted hover:text-text p-0.5 rounded hover:bg-surface-alt"
+              type="button"
+              title={lang === 'ru' ? 'Закрыть' : 'Close'}
+              aria-label={lang === 'ru' ? 'Закрыть' : 'Close'}
+            >
+              <X size={12} />
+            </button>
           </div>
           {recent.length === 0 ? (
             <div className="text-[12px] text-muted px-1 py-1">
@@ -166,13 +179,23 @@ export function EmojiPicker({ open, anchorRect, onClose, onSelect }: Props) {
               ))}
             </div>
           )}
-          <button
-            onClick={() => setExpanded(true)}
-            className="w-full text-[12px] px-2 py-1.5 rounded border border-border-soft hover:bg-surface-alt text-muted"
-            type="button"
-          >
-            {lang === 'ru' ? 'Больше…' : 'More…'}
-          </button>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => setExpanded(true)}
+              className="flex-1 text-[12px] px-2 py-1.5 rounded border border-border-soft hover:bg-surface-alt text-muted"
+              type="button"
+            >
+              {lang === 'ru' ? 'Больше…' : 'More…'}
+            </button>
+            {/* v0.8.11: прямая кнопка «Готово» */}
+            <button
+              onClick={onClose}
+              className="text-[12px] px-3 py-1.5 rounded border border-border-soft hover:bg-surface-alt text-text font-medium"
+              type="button"
+            >
+              {lang === 'ru' ? 'Готово' : 'Done'}
+            </button>
+          </div>
         </div>
       ) : (
         // Expanded: full picker
@@ -188,7 +211,16 @@ export function EmojiPicker({ open, anchorRect, onClose, onSelect }: Props) {
               className="flex-1 bg-transparent text-[12px] outline-none"
               autoFocus
             />
-            <button onClick={() => setExpanded(false)} className="text-muted hover:text-text" type="button">
+            {/* v0.8.11: в развёрнутом виде — кнопка «Готово» (закрывает пикер целиком) */}
+            <button
+              onClick={onClose}
+              className="text-[11px] px-2 py-0.5 rounded border border-border-soft hover:bg-surface-alt text-text font-medium"
+              type="button"
+              title={lang === 'ru' ? 'Закрыть пикер' : 'Close picker'}
+            >
+              {lang === 'ru' ? 'Готово' : 'Done'}
+            </button>
+            <button onClick={() => setExpanded(false)} className="text-muted hover:text-text" type="button" title={lang === 'ru' ? 'Свернуть' : 'Collapse'}>
               <X size={14} />
             </button>
           </div>
