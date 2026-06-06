@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * PromptDialog — простая встроенная модалка для одного текстового поля.
@@ -91,7 +92,12 @@ export function usePrompt() {
       }
       close(trimmed || null);
     };
-    return (
+    // v0.8.17: createPortal в document.body. Без портала этот div рендерится
+    // внутри TaskModal/NewTaskModal, родитель которых имеет .scale-in с
+    // transform: scale(…). transform создаёт новый containing block, и fixed inset-0
+    // теряет привязку к viewport — модалка вписывается в размеры
+    // родительской карточки и оказывается «под» TaskModal.
+    return createPortal(
       <div
         className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
         onMouseDown={(e) => {
@@ -131,7 +137,8 @@ export function usePrompt() {
             </button>
           </div>
         </form>
-      </div>
+      </div>,
+      document.body
     );
   };
 

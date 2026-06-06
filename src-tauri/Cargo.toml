@@ -1,6 +1,6 @@
 [package]
 name = "taskflow"
-version = "0.8.16"
+version = "0.8.17"
 description = "TaskFlow — менеджер задач"
 authors = ["TaskFlow"]
 edition = "2021"

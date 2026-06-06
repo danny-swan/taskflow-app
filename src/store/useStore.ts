@@ -445,13 +445,16 @@ export const useStore = create<State>((set, get) => ({
   createTaskFromTemplate(templateId) {
     const tpl = get().taskTemplates.find(t => t.id === templateId);
     if (!tpl) return null;
-    // Если сохранённый status_id больше не существует (статус удалили) —
-    // падаем на первый видимый не-технический статус.
+    // Статус выбираем в порядке:
+    // 1) сохранённый в шаблоне status_id (если этот статус всё ещё видимый)
+    // 2) статус с именем «Взять в работу» (исторический default для сидового
+    //    шаблона — в 0.8.16 и раньше сидовый status_id мог уже не совпадать
+    //    с реальным id в БД пользователя после импортов/миграций)
+    // 3) первый видимый не-технический статус
     const visible = get().visibleStatuses();
-    const statusId =
-      (tpl.status_id != null && visible.find(s => s.id === tpl.status_id)?.id) ||
-      visible[0]?.id ||
-      1;
+    const fromSaved = tpl.status_id != null ? visible.find(s => s.id === tpl.status_id) : undefined;
+    const byName = !fromSaved ? visible.find(s => s.name === 'Взять в работу') : undefined;
+    const statusId = fromSaved?.id ?? byName?.id ?? visible[0]?.id ?? 1;
     const tagExists = tpl.tag_id != null && get().tags.find(t => t.id === tpl.tag_id);
     return get().addTask({
       title: tpl.title || '',
