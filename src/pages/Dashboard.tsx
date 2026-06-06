@@ -239,74 +239,10 @@ export function DashboardPage() {
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5 relative z-10">
-      {/* Заголовок + переключатель периода */}
-      <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+      {/* Заголовок (без переключателя периода — он переехал в «За период») */}
+      <div className="mb-4">
         <h2 className="font-display text-[18px] font-semibold">{tr(lang, 'nav_dashboard')}</h2>
-        <div className="flex items-center gap-2">
-          <div className="text-[11px] text-muted uppercase tracking-wider mr-1 hidden md:block">
-            {lang === 'ru' ? 'Период · Активность' : 'Period · Activity'}
-          </div>
-          <div className="flex items-center bg-surface-alt rounded-md p-0.5 border border-border-soft">
-            {periods.map(p => (
-              <button
-                key={p.key}
-                onClick={() => {
-                  if (p.key === 'custom') {
-                    setDraftFrom(customRange.from);
-                    setDraftTo(customRange.to);
-                    setCustomOpen(o => !o);
-                    setPeriod('custom');
-                  } else {
-                    setPeriod(p.key);
-                    setCustomOpen(false);
-                  }
-                }}
-                className={'px-2.5 py-1 text-[12px] rounded ' +
-                  (period === p.key ? 'bg-surface text-text shadow-sm' : 'text-muted hover:text-text')}
-              >{p.label}</button>
-            ))}
-          </div>
-
-          {/* Custom period popover */}
-          <div ref={triggerRef} className="relative">
-            {period === 'custom' && customOpen && (
-              <div
-                ref={popoverRef}
-                className="absolute right-0 z-50 bg-surface border border-border rounded-xl shadow-xl p-4 flex flex-col gap-3 min-w-[220px]"
-                style={{ top: 'calc(100% + 8px)' }}
-              >
-                <div className="text-[12px] font-medium">{tr(lang, 'dash_custom')}</div>
-                <div className="flex flex-col gap-2">
-                  <label className="text-[11px] text-muted">{tr(lang, 'dash_from')}</label>
-                  <input
-                    type="date"
-                    value={draftFrom}
-                    onChange={(e) => setDraftFrom(e.target.value)}
-                    className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px] outline-none focus:border-accent"
-                  />
-                  <label className="text-[11px] text-muted">{tr(lang, 'dash_to')}</label>
-                  <input
-                    type="date"
-                    value={draftTo}
-                    onChange={(e) => setDraftTo(e.target.value)}
-                    className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px] outline-none focus:border-accent"
-                  />
-                </div>
-                <button
-                  onClick={applyCustom}
-                  className="px-3 py-1.5 text-[12px] bg-accent text-white rounded-md hover:bg-accent-hover font-medium"
-                >{tr(lang, 'dash_apply')}</button>
-              </div>
-            )}
-          </div>
-        </div>
       </div>
-
-      {period === 'custom' && (
-        <div className="text-[11px] text-muted mb-3">
-          {formatDate(customRange.from)} → {formatDate(customRange.to)}
-        </div>
-      )}
 
       {/* ─── ТЕКУЩИЙ СРЕЗ ───────────────────────────────────────────────── */}
       <SectionCaption text={L.snapshotCaption} />
@@ -320,9 +256,8 @@ export function DashboardPage() {
         <KPI label={tr(lang, 'overdue')} value={snapshot.overdue} danger />
         <KPI
           label={L.topTag}
-          value={snapshot.topTag ? snapshot.topTag.count : 0}
-          subLabel={snapshot.topTag ? snapshot.topTag.name : L.noTag}
-          subColor={snapshot.topTag?.color}
+          textValue={snapshot.topTag ? snapshot.topTag.name : L.noTag}
+          textColor={snapshot.topTag?.color}
         />
       </div>
 
@@ -394,12 +329,73 @@ export function DashboardPage() {
       {/* ─── ЗА ПЕРИОД ──────────────────────────────────────────────────── */}
       <SectionCaption text={L.periodCaption} />
 
-      {/* Activity — full width, 3 series */}
-      <div className="bg-surface border border-border-soft rounded-xl p-4 min-h-[320px] flex flex-col mb-3">
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-[12px] text-muted uppercase tracking-wider">{tr(lang, 'activity')}</div>
+      {/* v0.8.10: Переключатель периода — над графиком Активность */}
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+        <div className="text-[12px] text-muted uppercase tracking-wider">{tr(lang, 'activity')}</div>
+        <div className="flex items-center gap-2 relative">
+          <div className="flex items-center bg-surface-alt rounded-md p-0.5 border border-border-soft">
+            {periods.map(p => (
+              <button
+                key={p.key}
+                onClick={() => {
+                  if (p.key === 'custom') {
+                    setDraftFrom(customRange.from);
+                    setDraftTo(customRange.to);
+                    setCustomOpen(o => !o);
+                    setPeriod('custom');
+                  } else {
+                    setPeriod(p.key);
+                    setCustomOpen(false);
+                  }
+                }}
+                className={'px-2.5 py-1 text-[12px] rounded ' +
+                  (period === p.key ? 'bg-surface text-text shadow-sm' : 'text-muted hover:text-text')}
+              >{p.label}</button>
+            ))}
+          </div>
+          <div ref={triggerRef} className="relative">
+            {period === 'custom' && customOpen && (
+              <div
+                ref={popoverRef}
+                className="absolute right-0 z-50 bg-surface border border-border rounded-xl shadow-xl p-4 flex flex-col gap-3 min-w-[220px]"
+                style={{ top: 'calc(100% + 8px)' }}
+              >
+                <div className="text-[12px] font-medium">{tr(lang, 'dash_custom')}</div>
+                <div className="flex flex-col gap-2">
+                  <label className="text-[11px] text-muted">{tr(lang, 'dash_from')}</label>
+                  <input
+                    type="date"
+                    value={draftFrom}
+                    onChange={(e) => setDraftFrom(e.target.value)}
+                    className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px] outline-none focus:border-accent"
+                  />
+                  <label className="text-[11px] text-muted">{tr(lang, 'dash_to')}</label>
+                  <input
+                    type="date"
+                    value={draftTo}
+                    onChange={(e) => setDraftTo(e.target.value)}
+                    className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px] outline-none focus:border-accent"
+                  />
+                </div>
+                <button
+                  onClick={applyCustom}
+                  className="px-3 py-1.5 text-[12px] bg-accent text-white rounded-md hover:bg-accent-hover font-medium"
+                >{tr(lang, 'dash_apply')}</button>
+              </div>
+            )}
+          </div>
         </div>
-        <div className="flex-1 min-h-0" style={{ height: 300 }}>
+      </div>
+
+      {period === 'custom' && (
+        <div className="text-[11px] text-muted mb-2 text-right">
+          {formatDate(customRange.from)} → {formatDate(customRange.to)}
+        </div>
+      )}
+
+      {/* Activity — full width, 3 series. Фиксированная высота (без flex-1 — иначе ResponsiveContainer схлопывается в 0px) */}
+      <div className="bg-surface border border-border-soft rounded-xl p-4 mb-3">
+        <div style={{ width: '100%', height: 320 }}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={activityDates} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="var(--border-soft)" strokeDasharray="3 3" vertical={false} />
@@ -464,38 +460,39 @@ function SectionCaption({ text }: { text: string }) {
 }
 
 function KPI({
-  label, value, success, danger, muted, subLabel, subColor,
+  label, value, textValue, textColor, success, danger, muted,
 }: {
   label: string;
-  value: number;
+  value?: number;
+  textValue?: string;   // v0.8.10: альтернатива числу — текстовое значение (имя тэга)
+  textColor?: string;
   success?: boolean;
   danger?: boolean;
   muted?: boolean;
-  subLabel?: string;
-  subColor?: string;
 }) {
   return (
     <div className="bg-surface border border-border-soft rounded-xl px-4 py-3 min-w-0">
       <div className="text-[11px] uppercase tracking-wider text-muted truncate">{label}</div>
-      <div
-        className="mt-1 text-[22px] font-display font-bold tabular leading-none"
-        style={{
-          color: danger ? 'var(--status-important)'
-            : success ? '#437A22'
-            : muted ? 'var(--muted)'
-            : undefined,
-        }}
-      >{value}</div>
-      {subLabel && (
-        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted truncate">
-          {subColor && (
+      {textValue !== undefined ? (
+        <div className="mt-1 flex items-center gap-2 min-w-0">
+          {textColor && (
             <span
-              className="inline-block w-2 h-2 rounded-full shrink-0"
-              style={{ background: subColor }}
+              className="inline-block rounded-full shrink-0"
+              style={{ width: 10, height: 10, background: textColor }}
             />
           )}
-          <span className="truncate">{subLabel}</span>
+          <span className="text-[18px] font-display font-bold leading-none truncate" title={textValue}>{textValue}</span>
         </div>
+      ) : (
+        <div
+          className="mt-1 text-[22px] font-display font-bold tabular leading-none"
+          style={{
+            color: danger ? 'var(--status-important)'
+              : success ? '#437A22'
+              : muted ? 'var(--muted)'
+              : undefined,
+          }}
+        >{value ?? 0}</div>
       )}
     </div>
   );

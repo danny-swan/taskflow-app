@@ -817,6 +817,8 @@ function StorageSection() {
   const isDesktop = isTauri();
 
   const [dangerStep, setDangerStep] = useState<0 | 1 | 2>(0);
+  // v0.8.10: модалка «Требуется перезапуск» после смены пути БД
+  const [restartModal, setRestartModal] = useState(false);
 
   const loadPath = async () => {
     if (!isDesktop) return;
@@ -841,10 +843,12 @@ function StorageSection() {
       const selected = await open({ directory: true, multiple: false });
       if (selected) {
         const { invoke } = await import('@tauri-apps/api/core');
-        const newPath = String(selected).replace(/\/$/, '') + '/taskflow.db';
+        // v0.8.10: оставляем «/» в join — Rust set_db_path сам нормализует под OS
+        const newPath = String(selected).replace(/[\\/]$/, '') + '/taskflow.db';
         await invoke('set_db_path', { path: newPath });
         setDbPath(newPath);
-        pushToast(tr(lang, 'saved'));
+        // v0.8.10: просим перезапустить—без этого plugin-sql продолжит писать в старый файл
+        setRestartModal(true);
       }
     } catch (e) {
       // Task 10: always log + show toast, don't silently swallow
@@ -858,7 +862,18 @@ function StorageSection() {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('set_db_path', { path: '' });
     await loadPath();
-    pushToast(tr(lang, 'saved'));
+    // v0.8.10: сброс пути тоже требует перезапуска
+    setRestartModal(true);
+  };
+
+  const handleRestart = async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('restart_app');
+    } catch (e) {
+      console.error('restart_app error:', e);
+      pushToast(lang === 'ru' ? 'Не удалось перезапустить. Закройте и запустите вручную.' : 'Restart failed. Please close and start the app manually.');
+    }
   };
 
   // v0.8.9: открыть папку с БД в системном файловом менеджере
@@ -1021,6 +1036,19 @@ function StorageSection() {
         danger
         onConfirm={() => { setDangerStep(0); void handleDangerReset(); }}
         onCancel={() => setDangerStep(0)}
+      />
+
+      {/* v0.8.10: Просьба перезапустить после смены пути БД */}
+      <ConfirmDialog
+        open={restartModal}
+        title={lang === 'ru' ? 'Требуется перезапуск' : 'Restart required'}
+        message={lang === 'ru'
+          ? 'Путь к базе данных изменён. Чтобы приложение начало писать в новый файл, его нужно перезапустить. Существующая база будет скопирована в новое место автоматически (если там ещё нет файла).'
+          : 'The database path has been changed. To start writing to the new file, the app must be restarted. The existing database will be copied to the new location automatically (if no file is there yet).'}
+        confirmLabel={lang === 'ru' ? 'Перезапустить сейчас' : 'Restart now'}
+        cancelLabel={lang === 'ru' ? 'Позже' : 'Later'}
+        onConfirm={() => { setRestartModal(false); void handleRestart(); }}
+        onCancel={() => setRestartModal(false)}
       />
     </div>
   );

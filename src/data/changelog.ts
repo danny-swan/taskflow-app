@@ -13,6 +13,26 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.10',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Хранилище: при смене пути БД существующая база автоматически копируется в новое место (старый файл сохраняется), и приложение предлагает перезапуститься, чтобы подхватить новый файл. Раньше задачи продолжали записываться в старое место.',
+        'Хранилище: «Открыть папку» теперь надёжно открывает правильную папку даже если сам файл базы ещё не создан (раньше открывалась «Документы»).',
+        'Дашборд: переключатель периода перенесён в секцию «За период» и размещён над графиком Активность — визуально очевидно, что период влияет именно на этот график.',
+        'Дашборд: исправлен пустой график Активность — фиксированная высота контейнера (320px) вместо flex-расчёта (из-за которого ResponsiveContainer от recharts схлопывался в 0 и график не отрисовывался).',
+        'Дашборд: в KPI «Больше всего задач» убрано число — остаётся только имя тэга с цветовым индикатором.',
+      ],
+      en: [
+        'Storage: when the database path is changed, the existing database is automatically copied to the new location (the old file is preserved), and the app prompts to restart so plugin-sql picks up the new file. Previously tasks kept being saved to the old location.',
+        'Storage: “Open folder” now reliably opens the correct folder even if the DB file itself does not exist yet (previously it opened “Documents” as a fallback).',
+        'Dashboard: the period switcher was moved into the “Over period” section and placed right above the Activity chart — visually clear that the period only affects this chart.',
+        'Dashboard: fixed the empty Activity chart — the container now has a fixed height (320px) instead of a flex-based layout (which caused recharts’ ResponsiveContainer to collapse to 0).',
+        'Dashboard: the “Top tag” KPI no longer shows the count — only the tag name with a color dot.',
+      ],
+    },
+  },
+  {
     version: '0.8.9',
     date: '2026-06-06',
     items: {
