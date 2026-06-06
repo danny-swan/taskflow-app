@@ -26,6 +26,10 @@ export default defineConfig({
           recharts: ['recharts'],
           dnd: ['@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'],
           sql: ['sql.js'],
+          // v0.8.12: xlsx и papaparse нужны только в Settings (импорт/экспорт) —
+          // выносим в отдельные чанки, чтобы не входили в main bundle
+          xlsx: ['xlsx'],
+          papaparse: ['papaparse'],
         },
       },
     },

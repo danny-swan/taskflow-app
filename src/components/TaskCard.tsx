@@ -48,7 +48,18 @@ export function TaskCard({
     if (isDone) {
       updateTask(task.id, { status_id: reopenStatusId });
     } else if (doneStatusId) {
-      updateTask(task.id, { status_id: doneStatusId });
+      // v0.8.12: undo «завершения» — запоминаем прежний статус/финиш и предлагаем откат
+      const prevStatusId = task.status_id;
+      const prevFinish = task.finish_date;
+      const tid = task.id;
+      updateTask(tid, { status_id: doneStatusId });
+      pushToast(
+        lang === 'ru' ? 'Задача завершена' : 'Task completed',
+        {
+          label: lang === 'ru' ? 'Отменить' : 'Undo',
+          onClick: () => updateTask(tid, { status_id: prevStatusId, finish_date: prevFinish }),
+        },
+      );
     }
   };
 
@@ -59,8 +70,19 @@ export function TaskCard({
 
   const onConfirmDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
-    softDeleteTask(task.id);
-    pushToast(tr(lang, 'deleted'));
+    // v0.8.12: undo для удаления — запоминаем статус дотого как softDelete
+    // перенесёт задачу в «Удалено» / поставит archived=1.
+    const prevStatusId = task.status_id;
+    const tid = task.id;
+    softDeleteTask(tid);
+    pushToast(
+      tr(lang, 'deleted'),
+      {
+        label: lang === 'ru' ? 'Отменить' : 'Undo',
+        // updateTask сам сбросит archived=0 при возврате в не-technical статус (см. useStore.updateTask).
+        onClick: () => updateTask(tid, { status_id: prevStatusId }),
+      },
+    );
     setConfirmDelete(false);
   };
 

@@ -29,6 +29,7 @@ export function TasksPage() {
   const tags = useStore(s => s.tags);
   const updateTask = useStore(s => s.updateTask);
   const reorderTasks = useStore(s => s.reorderTasks);
+  const pushToast = useStore(s => s.pushToast);
 
   const techIds = useMemo(() => new Set(allStatuses.filter(s => s.is_technical === 1).map(s => s.id)), [allStatuses]);
 
@@ -205,7 +206,19 @@ export function TasksPage() {
       insertAt = targetIds.indexOf(overData.taskId);
       if (insertAt < 0) insertAt = targetIds.length;
     }
+    // v0.8.12: undo для drag-and-drop — если перенесли в «Выполнено» (archive), предлагаем откат
+    const movingTask = tasks.find(t => t.id === taskId);
+    const prevFinish = movingTask?.finish_date ?? null;
     updateTask(taskId, { status_id: targetStatusId });
+    if (archiveStatusIds.has(targetStatusId) && !archiveStatusIds.has(sourceStatusId)) {
+      pushToast(
+        lang === 'ru' ? 'Задача завершена' : 'Task completed',
+        {
+          label: lang === 'ru' ? 'Отменить' : 'Undo',
+          onClick: () => updateTask(taskId, { status_id: sourceStatusId, finish_date: prevFinish }),
+        },
+      );
+    }
     const newOrder = [...targetIds.slice(0, insertAt), taskId, ...targetIds.slice(insertAt)];
     reorderTasks(targetStatusId, newOrder);
     const sourceGroup = grouped.find(g => g.status.id === sourceStatusId);

@@ -3,7 +3,8 @@ import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info } from 'lucide-react';
 import { downloadFile } from '../lib/utils';
-import { resetDatabase, isTauri, buildBackup, applyBackup, type BackupPayload } from '../lib/db';
+import { resetDatabase, isTauri, buildBackup, applyBackup, getSchemaVersion, type BackupPayload } from '../lib/db';
+import { logger } from '../lib/logger';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
@@ -587,6 +588,7 @@ function IOSection() {
         : `Imported: ${counts.tasks} tasks, ${counts.tags} tags, ${counts.statuses} statuses (total ${total})`);
     } catch (e) {
       console.error('backup import error:', e);
+      logger.error('backup import failed', { error: String(e) });
       pushToast(lang === 'ru' ? 'Ошибка импорта: ' + String(e) : 'Import error: ' + String(e));
     }
     setImporting(false);
@@ -836,6 +838,10 @@ function StorageSection() {
   const [backupPath, setBackupPath] = useState<string | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
 
+  // v0.8.12: диагностика — путь к логу и текущая версия схемы БД
+  const [logPath, setLogPath] = useState<string | null>(null);
+  const [schemaVer, setSchemaVer] = useState<number | null>(null);
+
   const loadPath = async () => {
     if (!isDesktop) return;
     setLoading(true);
@@ -876,6 +882,7 @@ function StorageSection() {
       pushToast(lang === 'ru' ? 'Резервная копия создана' : 'Backup created');
     } catch (e) {
       console.error('backup_db error:', e);
+      logger.error('backup_db failed', { error: String(e) });
       pushToast(lang === 'ru' ? 'Не удалось создать резервную копию: ' + String(e) : 'Backup failed: ' + String(e));
     }
     setBackupBusy(false);
@@ -890,6 +897,51 @@ function StorageSection() {
     } catch (e) {
       console.error('open_in_explorer error:', e);
       pushToast(lang === 'ru' ? 'Не удалось открыть папку: ' + String(e) : 'Failed to open folder: ' + String(e));
+    }
+  };
+
+  // v0.8.12: Диагностика — подгружаем путь к логу и версию схемы
+  const loadDiagnostics = async () => {
+    if (!isDesktop) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const p = await invoke<string>('get_log_path');
+      setLogPath(p);
+    } catch (e) {
+      console.error('get_log_path error:', e);
+      setLogPath('(error)');
+    }
+    try {
+      const v = await getSchemaVersion();
+      setSchemaVer(v);
+    } catch (e) {
+      console.error('getSchemaVersion error:', e);
+      setSchemaVer(null);
+    }
+  };
+  useState(() => { loadDiagnostics(); });
+
+  const handleOpenLog = async () => {
+    if (!isDesktop || !logPath) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('open_in_explorer', { path: logPath });
+    } catch (e) {
+      console.error('open log error:', e);
+      pushToast(lang === 'ru' ? 'Не удалось открыть лог: ' + String(e) : 'Failed to open log: ' + String(e));
+    }
+  };
+
+  const handleClearLog = async () => {
+    if (!isDesktop) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('clear_log');
+      logger.info('log cleared by user');
+      pushToast(lang === 'ru' ? 'Лог очищен' : 'Log cleared');
+    } catch (e) {
+      console.error('clear_log error:', e);
+      pushToast(lang === 'ru' ? 'Не удалось очистить лог: ' + String(e) : 'Failed to clear log: ' + String(e));
     }
   };
 
@@ -1105,6 +1157,46 @@ function StorageSection() {
               >
                 <FolderOpen size={13} />
                 {lang === 'ru' ? 'Открыть папку' : 'Open folder'}
+              </button>
+            </div>
+          </div>
+
+          {/* v0.8.12: блок «Диагностика» — лог-файл и версия схемы БД */}
+          <div className="mt-2 px-3.5 py-3 rounded-lg border border-border-soft bg-surface-alt/60 text-[12px] leading-relaxed space-y-2">
+            <div className="flex items-center gap-2 font-semibold text-text">
+              <Info size={13} className="text-muted" />
+              {lang === 'ru' ? 'Диагностика' : 'Diagnostics'}
+            </div>
+            {lang === 'ru' ? (
+              <div className="text-muted space-y-1.5">
+                <div>Приложение ведёт технический лог в файл рядом с БД (одна строка = одно событие в JSON). При достижении 1 MB файл ротируется в <span className="font-mono text-text">taskflow.log.old</span>. Никакие данные никуда не отправляются.</div>
+                <div>Файл лога:</div>
+                <div className="px-2 py-1.5 bg-surface border border-border-soft rounded font-mono text-[11px] text-text break-all">{logPath ?? '…'}</div>
+                <div>Версия схемы БД: <span className="font-mono text-text">v{schemaVer ?? '?'}</span> — поднимается автоматически при следующих обновлениях.</div>
+              </div>
+            ) : (
+              <div className="text-muted space-y-1.5">
+                <div>The app writes a technical log next to the DB file (one JSON line per event). When the file reaches 1 MB it is rotated to <span className="font-mono text-text">taskflow.log.old</span>. Nothing is uploaded anywhere.</div>
+                <div>Log file:</div>
+                <div className="px-2 py-1.5 bg-surface border border-border-soft rounded font-mono text-[11px] text-text break-all">{logPath ?? '…'}</div>
+                <div>DB schema version: <span className="font-mono text-text">v{schemaVer ?? '?'}</span> — bumped automatically by future updates.</div>
+              </div>
+            )}
+            <div className="flex gap-2 pt-1 flex-wrap">
+              <button
+                onClick={handleOpenLog}
+                disabled={!logPath}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt disabled:opacity-50"
+              >
+                <FolderOpen size={13} />
+                {lang === 'ru' ? 'Открыть лог' : 'Open log'}
+              </button>
+              <button
+                onClick={handleClearLog}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt text-muted"
+              >
+                <Trash2 size={13} />
+                {lang === 'ru' ? 'Очистить лог' : 'Clear log'}
               </button>
             </div>
           </div>

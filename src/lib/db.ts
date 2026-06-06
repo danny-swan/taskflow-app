@@ -13,6 +13,7 @@ const IS_TAURI = typeof window !== 'undefined' && !!(window as any).__TAURI_INTE
 import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 // @ts-ignore
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
+import { runMigrations, tauriMigrationApi, webMigrationApi } from './migrations';
 
 const STORAGE_KEY = 'taskflow.sqlite.v1';
 const STORAGE_KEY_TS = 'taskflow.sqlite.v1.ts';
@@ -478,6 +479,16 @@ export async function initDb(): Promise<void> {
     // ВАЖНО: мигрируем ДО seed, иначе для старых БД INSERT из seed падает
     // на отсутствующих колонках (hidden / default_collapsed / is_technical).
     await tauriMigrate();
+    // v0.8.12: явные миграции через PRAGMA user_version. Существующая БД
+    // (схема v0.8.11) помечается как v1; будущие изменения схемы будут
+    // регистрироваться в src/lib/migrations.ts как v2, v3, ...
+    try {
+      const d = await getTauriDb();
+      await runMigrations(tauriMigrationApi(d), { onLog: (m) => console.log(m) });
+    } catch (e) {
+      console.error('[migrate][tauri]', e);
+      if (typeof window !== 'undefined') (window as any).__taskflow_init_error = String((e as any)?.message ?? e);
+    }
     const empty = await tauriIsEmpty();
     if (empty) await tauriSeed();
 
@@ -517,9 +528,36 @@ export async function initDb(): Promise<void> {
     webDb = stored ? new SQL.Database(stored) : new SQL.Database();
     ensureSchema(webDb);
     migrate(webDb); // migrate BEFORE seed — по тем же причинам, что и в Tauri-ветке
+    // v0.8.12: явные миграции через PRAGMA user_version.
+    try {
+      await runMigrations(webMigrationApi(webDb), { onLog: (m) => console.log(m) });
+    } catch (e) {
+      console.error('[migrate][web]', e);
+      if (typeof window !== 'undefined') (window as any).__taskflow_init_error = String((e as any)?.message ?? e);
+    }
     if (!stored) seed(webDb);
     save();
   }
+}
+
+/**
+ * v0.8.12: returns the current schema version (PRAGMA user_version) for display
+ * in Settings → Storage → Diagnostics. Falls back to 0 if unavailable.
+ */
+export async function getSchemaVersion(): Promise<number> {
+  try {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      const rows: any[] = await d.select(`PRAGMA user_version`);
+      return Number(rows[0]?.user_version ?? 0);
+    }
+    if (!webDb) return 0;
+    const stmt = webDb.prepare(`PRAGMA user_version`);
+    stmt.step();
+    const row: any = stmt.getAsObject();
+    stmt.free();
+    return Number(row?.user_version ?? 0);
+  } catch { return 0; }
 }
 
 // ─── PUBLIC query helpers ─────────────────────────────────────────────────────

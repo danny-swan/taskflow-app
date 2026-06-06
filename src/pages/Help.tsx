@@ -3,6 +3,7 @@ import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { ChevronDown } from 'lucide-react';
 import { CHANGELOG } from '../data/changelog';
+import { resetOnboarding } from '../components/Onboarding';
 
 interface HelpSection {
   title: string;
@@ -186,6 +187,48 @@ const sectionsRu: HelpSection[] = [
       {
         q: 'Что такое «Опасная зона»?',
         a: 'Настройки → Хранилище → «⚠ Опасная зона». Кнопка «Стереть все данные» требует двух подтверждений, затем полностью очищает БД, пересоздаёт стандартные статусы и welcome-задачу — без перезагрузки страницы. Исправлено в v0.8.7: раньше в десктопе очищался только кэш в памяти.',
+      },
+    ],
+  },
+  {
+    title: '🛠 Диагностика и обслуживание',
+    items: [
+      {
+        q: 'Где лежит лог-файл и что в нём?',
+        a: (
+          <>
+            <p>С v0.8.12 приложение ведёт технический лог рядом с БД (<code>taskflow.log</code>). Одна строка = одно событие в JSON: время, уровень, сообщение и meta-данные.</p>
+            <p className="mt-2">Сюда пишутся ошибки инициализации БД, проблемы бэкапа, необработанные promise rejection и факт старта приложения — ничего из этого никуда не отправляется.</p>
+            <p className="mt-2">Открыть лог можно в <strong>Настройки → Хранилище → Диагностика → «Открыть лог»</strong>. Там же — кнопка «Очистить». При достижении 1 MB файл ротируется в <code>taskflow.log.old</code> автоматически.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Что такое «версия схемы БД» и при чём тут миграции?',
+        a: (
+          <>
+            <p>С v0.8.12 в SQLite-базе хранится номер схемы (PRAGMA user_version). При обновлении приложения миграции выполняются последовательно и идемпотентно — вручную делать ничего не нужно.</p>
+            <p className="mt-2">Текущий номер виден в <strong>Настройки → Хранилище → Диагностика</strong>. Если схема откатилась (например, вы открыли бэкап от более свежей версии приложения) — в логе будет предупреждение.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как работает «Отменить» в уведомлениях?',
+        a: 'С v0.8.12 при удалении или завершении задачи (кнопкой ✓ или drag-and-drop в «Выполнено») в правом верхнем углу пару секунд висит тост с кнопкой «Отменить». Статус (и finish_date) восстанавливаются ровно в тот вид, в котором были до действия.',
+      },
+      {
+        q: 'Как перезапустить приветственный тур?',
+        a: (
+          <>
+            <p>Онбординг показывается один раз при первом запуске. Чтобы пройти его ещё раз — нажмите кнопку ниже и перезагрузите вкладку.</p>
+            <button
+              onClick={() => { resetOnboarding(); window.location.hash = '#/tasks'; window.location.reload(); }}
+              className="mt-2 px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
+            >
+              Запустить тур заново
+            </button>
+          </>
+        ),
       },
     ],
   },
@@ -405,6 +448,48 @@ const sectionsEn: HelpSection[] = [
       {
         q: 'What is the Danger Zone?',
         a: 'Settings → Storage → "⚠ Danger Zone". "Erase all data" requires two confirmations, then fully wipes the DB, recreates default statuses and a welcome task — no page reload. Fixed in v0.8.7: previously only the in-memory cache was reset on desktop.',
+      },
+    ],
+  },
+  {
+    title: '🛠 Diagnostics & maintenance',
+    items: [
+      {
+        q: 'Where is the log file and what does it contain?',
+        a: (
+          <>
+            <p>Since v0.8.12 the app writes a technical log next to the DB (<code>taskflow.log</code>). One JSON line per event: timestamp, level, message and meta.</p>
+            <p className="mt-2">It captures DB init errors, backup failures, unhandled promise rejections and the fact that the app started — nothing is uploaded anywhere.</p>
+            <p className="mt-2">Open the log via <strong>Settings → Storage → Diagnostics → "Open log"</strong>. The same place has a "Clear" button. When the file reaches 1 MB it rotates to <code>taskflow.log.old</code> automatically.</p>
+          </>
+        ),
+      },
+      {
+        q: 'What is "DB schema version" and what about migrations?',
+        a: (
+          <>
+            <p>Since v0.8.12 the SQLite DB stores a schema number (PRAGMA user_version). Migrations run sequentially and idempotently on app update — nothing manual is needed.</p>
+            <p className="mt-2">The current number is visible under <strong>Settings → Storage → Diagnostics</strong>. If the schema rolled back (e.g. you restored a backup from a newer app version) — you'll see a warning in the log.</p>
+          </>
+        ),
+      },
+      {
+        q: 'How does "Undo" in toasts work?',
+        a: 'Since v0.8.12, when you delete or complete a task (via the ✓ button or by dragging into "Done"), a toast appears in the top-right corner with an "Undo" button for a few seconds. Status (and finish_date) is restored to exactly what it was before the action.',
+      },
+      {
+        q: 'How do I re-run the welcome tour?',
+        a: (
+          <>
+            <p>The onboarding is shown once on the first launch. To go through it again — click the button below and reload the tab.</p>
+            <button
+              onClick={() => { resetOnboarding(); window.location.hash = '#/tasks'; window.location.reload(); }}
+              className="mt-2 px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
+            >
+              Restart the tour
+            </button>
+          </>
+        ),
       },
     ],
   },
