@@ -45,6 +45,14 @@ export function TaskModal({
 
   useEffect(() => { setDraft(task); }, [task]);
 
+  // v0.8.14: собственная PromptDialog вместо window.prompt — в Tauri системный prompt
+  // показывается с уродливым заголовком «Сообщение с tauri.localhost» и может не
+  // возвращать значение корректно.
+  // ВАЖНО: хук должен быть ДО `if (!draft) return null;` — иначе при первом
+  // открытии модалки (draft переходит null→task) порядок хуков меняется
+  // и React ломается с белым экраном (Rules of Hooks).
+  const { prompt: askPrompt, PromptUI } = usePrompt();
+
   if (!draft) return null;
 
   const save = () => {
@@ -62,11 +70,6 @@ export function TaskModal({
     onClose();
   };
   const remove = () => setConfirmOpen(true);
-
-  // v0.8.14: собственная PromptDialog вместо window.prompt — в Tauri системный prompt
-  // показывается с уродливым заголовком «Сообщение с tauri.localhost» и может не
-  // возвращать значение корректно.
-  const { prompt: askPrompt, PromptUI } = usePrompt();
 
   const saveAsTemplate = async () => {
     const defaultName = (draft.title || (lang === 'ru' ? 'Шаблон' : 'Template')).slice(0, 60);
