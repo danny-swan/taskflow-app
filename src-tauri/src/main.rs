@@ -34,13 +34,24 @@ fn get_db_path(state: tauri::State<AppState>, app: tauri::AppHandle) -> String {
         .into_owned()
 }
 
-/// v0.8.9: Открывает системный файл-менеджер на папке текущей БД.
-/// Принимает путь к файлу или папке; выбирает родительскую для файла.
+/// v0.8.9/0.8.10: Открывает системный файл-менеджер на папке текущей БД.
+/// Принимает путь к файлу или папке. Если путь похож на файл (есть
+/// расширение или имя содержит точку), всегда берём родителя. Это надёжно
+/// работает, даже если сам файл ещё не существует.
 #[tauri::command]
 fn open_in_explorer(path: String) -> Result<(), String> {
-    use std::path::Path;
-    let p = Path::new(&path);
-    let dir = if p.is_file() {
+    use std::path::{Path, PathBuf};
+    // Нормализуем разделители (на Windows допускаются и `/`, и `\`)
+    let normalized = path.replace('/', std::path::MAIN_SEPARATOR_STR);
+    let p = Path::new(&normalized);
+
+    let looks_like_file = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.contains('.'))
+        .unwrap_or(false);
+
+    let dir: PathBuf = if p.is_file() || (looks_like_file && p.parent().is_some()) {
         p.parent().map(|x| x.to_path_buf()).unwrap_or_else(|| p.to_path_buf())
     } else {
         p.to_path_buf()
@@ -77,9 +88,36 @@ fn open_in_explorer(path: String) -> Result<(), String> {
 }
 
 /// Persists a custom DB path. Pass empty string to reset to default.
+///
+/// v0.8.10: При смене пути дополнительно копируем существующую БД из
+/// старого расположения в новое (если в новом ещё нет файла, а в старом —
+/// есть). Старый файл оставляем на месте — на случай отката. Также
+/// гарантируем, что папка назначения существует.
 #[tauri::command]
 fn set_db_path(path: String, state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
-    let new_path = if path.is_empty() { None } else { Some(path.clone()) };
+    use std::path::PathBuf;
+
+    let new_path_opt = if path.is_empty() {
+        None
+    } else {
+        // Нормализуем `/` → системный разделитель
+        Some(path.replace('/', std::path::MAIN_SEPARATOR_STR))
+    };
+
+    // Текущий путь (до смены) — для возможного копирования.
+    let old_path: String = {
+        let lock = state.db_path.lock().unwrap();
+        if let Some(ref p) = *lock {
+            p.clone()
+        } else {
+            // Default path
+            let config_dir = app
+                .path()
+                .app_config_dir()
+                .unwrap_or_else(|_| PathBuf::from("."));
+            config_dir.join("data.db").to_string_lossy().into_owned()
+        }
+    };
 
     // Save config to disk
     let config_dir = app
@@ -88,12 +126,40 @@ fn set_db_path(path: String, state: tauri::State<AppState>, app: tauri::AppHandl
         .map_err(|e| e.to_string())?;
     let _ = std::fs::create_dir_all(&config_dir);
     let cfg_file = config_dir.join("taskflow_config.json");
-    let cfg = DbConfig { custom_path: new_path.clone() };
+    let cfg = DbConfig { custom_path: new_path_opt.clone() };
     let json = serde_json::to_string(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(&cfg_file, json).map_err(|e| e.to_string())?;
 
-    *state.db_path.lock().unwrap() = new_path;
+    // Copy existing DB to new location if needed.
+    if let Some(ref new_p) = new_path_opt {
+        let new_pb = PathBuf::from(new_p);
+        if let Some(parent) = new_pb.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let old_pb = PathBuf::from(&old_path);
+        if old_pb.exists() && !new_pb.exists() && old_pb != new_pb {
+            // best-effort copy; не критично, если упадёт (просто будет новая пустая БД)
+            let _ = std::fs::copy(&old_pb, &new_pb);
+            // также копируем WAL/SHM сайдкары если есть
+            for ext in ["-wal", "-shm"] {
+                let old_side = PathBuf::from(format!("{}{}", old_path, ext));
+                let new_side = PathBuf::from(format!("{}{}", new_p, ext));
+                if old_side.exists() && !new_side.exists() {
+                    let _ = std::fs::copy(&old_side, &new_side);
+                }
+            }
+        }
+    }
+
+    *state.db_path.lock().unwrap() = new_path_opt;
     Ok(())
+}
+
+/// v0.8.10: Перезапускает приложение — используется после смены пути
+/// БД, чтобы plugin-sql переподключился к новому файлу.
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.restart();
 }
 
 fn load_saved_db_path(app: &tauri::AppHandle) -> Option<String> {
@@ -114,7 +180,7 @@ fn main() {
             app.manage(AppState { db_path: Mutex::new(saved) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_db_path, set_db_path, open_in_explorer])
+        .invoke_handler(tauri::generate_handler![get_db_path, set_db_path, open_in_explorer, restart_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
     let _ = app;
