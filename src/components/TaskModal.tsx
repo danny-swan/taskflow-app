@@ -5,6 +5,8 @@ import { tr } from '../lib/i18n';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { Trash2, X, AlertTriangle, Smile, FilePlus } from 'lucide-react';
 import { EmojiPicker, useEmojiPicker } from './EmojiPicker';
+import { usePrompt } from './PromptDialog';
+import { insertCheckboxLines } from '../lib/checkboxes';
 
 export function TaskModal({
   task, onClose,
@@ -61,19 +63,23 @@ export function TaskModal({
   };
   const remove = () => setConfirmOpen(true);
 
-  // v0.8.13: сохранение текущей задачи как шаблона. Просим имя через prompt() —
-  // минимальный UI, не требует ещё одной модалки. Переименовать и удалять шаблоны
-  // можно в Settings → «Шаблоны задач».
-  const saveAsTemplate = () => {
+  // v0.8.14: собственная PromptDialog вместо window.prompt — в Tauri системный prompt
+  // показывается с уродливым заголовком «Сообщение с tauri.localhost» и может не
+  // возвращать значение корректно.
+  const { prompt: askPrompt, PromptUI } = usePrompt();
+
+  const saveAsTemplate = async () => {
     const defaultName = (draft.title || (lang === 'ru' ? 'Шаблон' : 'Template')).slice(0, 60);
-    const name = window.prompt(
-      lang === 'ru' ? 'Название шаблона:' : 'Template name:',
-      defaultName,
-    );
-    if (name == null) return;
-    const trimmed = name.trim();
+    const trimmed = await askPrompt({
+      title: lang === 'ru' ? 'Название шаблона' : 'Template name',
+      defaultValue: defaultName,
+      placeholder: lang === 'ru' ? 'Например: Спринт-ретро' : 'e.g. Sprint retro',
+      confirmLabel: lang === 'ru' ? 'Сохранить' : 'Save',
+      cancelLabel: lang === 'ru' ? 'Отмена' : 'Cancel',
+      validate: (v) => v.trim() ? null : (lang === 'ru' ? 'Имя не может быть пустым' : 'Name cannot be empty'),
+    });
     if (!trimmed) return;
-    addTemplate({
+    const id = addTemplate({
       name: trimmed,
       title: draft.title,
       comment: draft.comment,
@@ -81,8 +87,30 @@ export function TaskModal({
       tag_id: draft.tag_id,
     });
     pushToast(
-      lang === 'ru' ? `Шаблон «${trimmed}» сохранён` : `Template "${trimmed}" saved`
+      id
+        ? (lang === 'ru' ? `Шаблон «${trimmed}» сохранён` : `Template "${trimmed}" saved`)
+        : (lang === 'ru' ? 'Не удалось сохранить шаблон' : 'Failed to save template')
     );
+  };
+
+  // v0.8.14: вставка markdown-чекбокса в поле комментария одним кликом.
+  // Берём текущую позицию каретки из commentRef и вставляем '- [ ] '
+  // с переводом строки, если курсор не в начале строки. После вставки
+  // ставим каретку в конец вставленного фрагмента.
+  const insertCheckbox = (kind: 'unchecked' | 'checked' | 'bullet') => {
+    const el = commentRef.current;
+    const current = draft.comment ?? '';
+    const start = el?.selectionStart ?? current.length;
+    const end = el?.selectionEnd ?? current.length;
+    const { next, caretAt } = insertCheckboxLines(current, start, end, kind);
+    setDraft(d => (d ? { ...d, comment: next } : d));
+    // восстанавливаем фокус и позицию каретки после рендера
+    requestAnimationFrame(() => {
+      const e2 = commentRef.current;
+      if (!e2) return;
+      e2.focus();
+      e2.setSelectionRange(caretAt, caretAt);
+    });
   };
   const confirmDelete = () => {
     // v0.8.12: удаление из модалки тоже предлагает undo (возврат в прежний статус)
@@ -182,6 +210,37 @@ export function TaskModal({
             label={tr(lang, 'comment')}
             onEmojiClick={commentEmoji.emojiButtonProps.onClick}
             emojiRef={commentEmoji.buttonRef}
+            extraToolbar={
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => insertCheckbox('unchecked')}
+                  title={lang === 'ru' ? 'Вставить чекбокс (- [ ])' : 'Insert checkbox (- [ ])'}
+                  className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-muted hover:text-text hover:bg-surface-alt rounded transition-colors"
+                >
+                  <span className="text-[13px] leading-none">☐</span>
+                  <span className="hidden sm:inline">{lang === 'ru' ? 'Чекбокс' : 'Checkbox'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => insertCheckbox('checked')}
+                  title={lang === 'ru' ? 'Выполненный чекбокс (- [x])' : 'Checked box (- [x])'}
+                  className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-muted hover:text-text hover:bg-surface-alt rounded transition-colors"
+                >
+                  <span className="text-[13px] leading-none">☑</span>
+                  <span className="hidden sm:inline">{lang === 'ru' ? 'Готово' : 'Done'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => insertCheckbox('bullet')}
+                  title={lang === 'ru' ? 'Пункт списка (-)' : 'Bullet (-)'}
+                  className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-muted hover:text-text hover:bg-surface-alt rounded transition-colors"
+                >
+                  <span className="text-[14px] leading-none">•</span>
+                  <span className="hidden sm:inline">{lang === 'ru' ? 'Список' : 'List'}</span>
+                </button>
+              </div>
+            }
           >
             <AutoGrowTextarea
               ref={commentRef}
@@ -286,6 +345,9 @@ export function TaskModal({
           >{tr(lang, 'delete')}</button>
         </div>
       </Modal>
+
+      {/* v0.8.14: своя PromptDialog вместо window.prompt */}
+      <PromptUI />
     </>
   );
 }
@@ -304,25 +366,31 @@ function FieldWithEmoji({
   children,
   onEmojiClick,
   emojiRef,
+  extraToolbar,
 }: {
   label: string;
   children: React.ReactNode;
   onEmojiClick: () => void;
   emojiRef: React.Ref<HTMLButtonElement>;
+  /** v0.8.14: дополнительные кнопки слева от emoji — например, «вставить чекбокс» */
+  extraToolbar?: React.ReactNode;
 }) {
   return (
     <div className="block mb-3.5">
-      <div className="flex items-center justify-between mb-1">
+      <div className="flex items-center justify-between mb-1 gap-2">
         <div className="text-[11px] text-muted uppercase tracking-wider">{label}</div>
-        <button
-          ref={emojiRef}
-          type="button"
-          onClick={onEmojiClick}
-          className="text-muted hover:text-text p-0.5 rounded transition-colors"
-          title="Emoji"
-        >
-          <Smile size={14} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {extraToolbar}
+          <button
+            ref={emojiRef}
+            type="button"
+            onClick={onEmojiClick}
+            className="text-muted hover:text-text p-0.5 rounded transition-colors"
+            title="Emoji"
+          >
+            <Smile size={14} />
+          </button>
+        </div>
       </div>
       {children}
     </div>

@@ -272,6 +272,17 @@ function ensureSchema(d: Database) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS task_templates (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT    NOT NULL,
+      title       TEXT    NOT NULL DEFAULT '',
+      comment     TEXT    NOT NULL DEFAULT '',
+      status_id   INTEGER,
+      tag_id      INTEGER,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 }
 
@@ -498,6 +509,11 @@ export async function initDb(): Promise<void> {
     const tags: any[] = await d.select('SELECT * FROM tags ORDER BY sort_order');
     const tasks: any[] = await d.select('SELECT * FROM tasks ORDER BY sort_order');
     const settings: any[] = await d.select('SELECT * FROM settings');
+    // v0.8.13/14: task_templates — таблица появляется после миграции v2.
+    // Из безопасности — try/catch на случай, если миграция раньше упала.
+    let templates: any[] = [];
+    try { templates = await d.select('SELECT * FROM task_templates ORDER BY sort_order, id'); }
+    catch (e) { console.warn('[initDb] task_templates not available yet:', e); }
 
     webDb = new SQL!.Database();
     ensureSchema(webDb);
@@ -521,6 +537,12 @@ export async function initDb(): Promise<void> {
     }
     for (const s of settings) {
       webDb.run(`INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)`, [s.key, s.value]);
+    }
+    for (const t of templates) {
+      webDb.run(
+        `INSERT OR REPLACE INTO task_templates (id,name,title,comment,status_id,tag_id,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.name, t.title, t.comment, t.status_id, t.tag_id, t.sort_order, t.created_at, t.updated_at]
+      );
     }
   } else {
     if (webDb) return;

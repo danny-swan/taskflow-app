@@ -69,28 +69,46 @@ export const MIGRATIONS: Migration[] = [
       `);
 
       // 2. Сид «Шаблон задачи 1» — только если таблица пуста.
-      const existing = await select<{ n: number }>(`SELECT COUNT(*) AS n FROM task_templates`);
-      const n = Number(existing[0]?.n ?? 0);
-      if (n === 0) {
-        // Статус «Взять в работу» — он в сиде первым, с behavior='middle'.
-        const st = await select<{ id: number }>(
-          `SELECT id FROM statuses WHERE name='Взять в работу' LIMIT 1`
-        );
-        const statusId = st[0]?.id ?? null;
-        const comment = [
-          '1. Action item',
-          '2. Action item',
-          '',
-          'Статус выполнения:',
-          '- [ ] …',
-          '- [ ] …',
-          '- [ ] …',
-        ].join('\n');
-        await exec(
-          `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order)
-           VALUES (?, ?, ?, ?, NULL, 0)`,
-          ['Шаблон задачи 1', 'Задача 1', comment, statusId]
-        );
+      // Обязательно try/catch — любой сбой на сиде НЕ должен ломать всю миграцию:
+      // таблицу уже создали — это главное; сидовый шаблон пользователь легко
+      // создаст и сам.
+      try {
+        const existing = await select<{ n: number }>(`SELECT COUNT(*) AS n FROM task_templates`);
+        const n = Number(existing[0]?.n ?? 0);
+        if (n === 0) {
+          // Статус «Взять в работу» — он в сиде первым, с behavior='middle'.
+          // Если пользователь переименовал/удалил — берём первый видимый (не hidden, не technical).
+          let statusId: number | null = null;
+          const exact = await select<{ id: number }>(
+            `SELECT id FROM statuses WHERE name='Взять в работу' LIMIT 1`
+          );
+          if (exact[0]?.id != null) {
+            statusId = exact[0].id;
+          } else {
+            const fallback = await select<{ id: number }>(
+              `SELECT id FROM statuses
+               WHERE COALESCE(hidden,0)=0 AND COALESCE(is_technical,0)=0
+               ORDER BY sort_order, id LIMIT 1`
+            );
+            statusId = fallback[0]?.id ?? null;
+          }
+          const comment = [
+            '1. Action item',
+            '2. Action item',
+            '',
+            'Статус выполнения:',
+            '- [ ] …',
+            '- [ ] …',
+            '- [ ] …',
+          ].join('\n');
+          await exec(
+            `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order)
+             VALUES (?, ?, ?, ?, NULL, 0)`,
+            ['Шаблон задачи 1', 'Задача 1', comment, statusId]
+          );
+        }
+      } catch (e) {
+        console.warn('[migrate v2] seed template skipped:', e);
       }
     },
   },

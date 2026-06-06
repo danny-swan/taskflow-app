@@ -9,7 +9,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 
-type Sub = 'general' | 'tags' | 'statuses' | 'stats' | 'theme' | 'io' | 'storage';
+type Sub = 'general' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage';
 
 export function SettingsPage() {
   const lang = useStore(s => s.language);
@@ -21,6 +21,7 @@ export function SettingsPage() {
     { key: 'statuses', label: tr(lang, 'settings_statuses') },
     { key: 'stats', label: tr(lang, 'settings_stats') },
     { key: 'theme', label: tr(lang, 'settings_theme') },
+    { key: 'templates', label: lang === 'ru' ? 'Шаблоны задач' : 'Task templates' },
     { key: 'io', label: tr(lang, 'settings_io') },
     { key: 'storage', label: tr(lang, 'storage_section') },
   ];
@@ -43,6 +44,7 @@ export function SettingsPage() {
         {sub === 'statuses' && <StatusesSection />}
         {sub === 'stats' && <StatsToggleSection />}
         {sub === 'theme' && <ThemeSection />}
+        {sub === 'templates' && <TemplatesSection lang={lang} />}
         {sub === 'io' && <IOSection />}
         {sub === 'storage' && <StorageSection />}
       </div>
@@ -1202,9 +1204,6 @@ function StorageSection() {
           </div>
         </div>
       )}
-
-      {/* v0.8.13: Шаблоны задач */}
-      <TemplatesSection lang={lang} />
 
       {/* ─── Danger Zone ─────────────────────────────── */}
       <div className="mt-8 border border-red-500/40 rounded-xl p-4 space-y-3">
