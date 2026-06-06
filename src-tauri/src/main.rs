@@ -162,6 +162,61 @@ fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+/// v0.8.11: Создаёт бинарную резервную копию файла БД в той же папке.
+/// Исходный файл: текущий db_path (либо кастомный, либо дефолтный).
+/// Результат: <тот же файл>.backup (просто перезаписывается при каждом вызове).
+///
+/// Примечание: SQLite может держать WAL/SHM-файлы открытыми. На Windows std::fs::copy
+/// обычно работает даже для файлов, открытых SQLite в режиме WAL (shared read).
+/// Если копия сделана в момент активной транзакции, SQLite восстановит состояние при открытии.
+#[tauri::command]
+fn backup_db(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<String, String> {
+    use std::path::PathBuf;
+    let current_path = {
+        let lock = state.db_path.lock().unwrap();
+        if let Some(ref p) = *lock {
+            p.clone()
+        } else {
+            let config_dir = app
+                .path()
+                .app_config_dir()
+                .map_err(|e| e.to_string())?;
+            config_dir.join("data.db").to_string_lossy().into_owned()
+        }
+    };
+    let src = PathBuf::from(&current_path);
+    if !src.exists() {
+        return Err(format!("файл БД не найден: {}", current_path));
+    }
+    let backup_path = format!("{}.backup", current_path);
+    let dst = PathBuf::from(&backup_path);
+    // Гарантируем, что папка существует (обычно да, но на всякий случай).
+    if let Some(parent) = dst.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::copy(&src, &dst).map_err(|e| format!("копирование не удалось: {}", e))?;
+    Ok(backup_path)
+}
+
+/// v0.8.11: Возвращает ожидаемый путь к backup-файлу (без проверки существования) —
+/// используется UI для отображения пути резервной копии.
+#[tauri::command]
+fn get_backup_path(state: tauri::State<AppState>, app: tauri::AppHandle) -> String {
+    let current_path = {
+        let lock = state.db_path.lock().unwrap();
+        if let Some(ref p) = *lock {
+            p.clone()
+        } else {
+            let config_dir = app
+                .path()
+                .app_config_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            config_dir.join("data.db").to_string_lossy().into_owned()
+        }
+    };
+    format!("{}.backup", current_path)
+}
+
 fn load_saved_db_path(app: &tauri::AppHandle) -> Option<String> {
     let config_dir = app.path().app_config_dir().ok()?;
     let cfg_file = config_dir.join("taskflow_config.json");
@@ -180,7 +235,42 @@ fn main() {
             app.manage(AppState { db_path: Mutex::new(saved) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_db_path, set_db_path, open_in_explorer, restart_app])
+        // v0.8.11: автоматическая резервная копия при закрытии окна (best-effort, не блокирует выход).
+        // При любой ошибке копирования просто логируем и даём приложению закрыться.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let app_handle = window.app_handle().clone();
+                let state: tauri::State<AppState> = app_handle.state();
+                let current_path: String = {
+                    let lock = state.db_path.lock().unwrap();
+                    if let Some(ref p) = *lock {
+                        p.clone()
+                    } else {
+                        match app_handle.path().app_config_dir() {
+                            Ok(dir) => dir.join("data.db").to_string_lossy().into_owned(),
+                            Err(_) => return,
+                        }
+                    }
+                };
+                let src = std::path::PathBuf::from(&current_path);
+                if src.exists() {
+                    let backup_path = format!("{}.backup", current_path);
+                    if let Err(e) = std::fs::copy(&src, &backup_path) {
+                        eprintln!("[v0.8.11] backup-on-close failed: {}", e);
+                    } else {
+                        eprintln!("[v0.8.11] backup saved: {}", backup_path);
+                    }
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_db_path,
+            set_db_path,
+            open_in_explorer,
+            restart_app,
+            backup_db,
+            get_backup_path
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
     let _ = app;

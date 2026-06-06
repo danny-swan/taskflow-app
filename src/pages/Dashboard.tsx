@@ -101,8 +101,11 @@ export function DashboardPage() {
         let completed = 0;
         let overdue = 0;
         for (const t of dashTasks) {
-          const cr = t.created_at ? t.created_at.slice(0, 10) : '';
-          if (cr === key) created++;
+          // v0.8.11: для серии «Новые» используем дату Старта (start_date), а не created_at —
+          // это позволяет корректно отображать ретроспективно внесённые задачи.
+          // Fallback на created_at для задач без start_date (старые/импортированные).
+          const startKey = t.start_date ? t.start_date.slice(0, 10) : (t.created_at ? t.created_at.slice(0, 10) : '');
+          if (startKey === key) created++;
           const fin = t.finish_date ? t.finish_date.slice(0, 10) : '';
           if (fin === key && archiveStatusIds.has(t.status_id)) completed++;
           // Просрочено в этот день: дедлайн == key, не выполнено к этому дню, day <= today
@@ -187,9 +190,11 @@ export function DashboardPage() {
         date.setDate(start.getDate() + w * 7 + d);
         const key = localDayKey(date);
         const count = dashTasks.filter(t => {
-          const cr = t.created_at ? t.created_at.slice(0, 10) : '';
+          // v0.8.11: используем start_date (с fallback на created_at) — синхронизировано с
+          // графиком Активность; updated_at оставляем как доп. сигнал «активности по задаче».
+          const startKey = t.start_date ? t.start_date.slice(0, 10) : (t.created_at ? t.created_at.slice(0, 10) : '');
           const up = t.updated_at ? t.updated_at.slice(0, 10) : '';
-          return cr === key || up === key;
+          return startKey === key || up === key;
         }).length;
         days.push({ date: key, count });
       }

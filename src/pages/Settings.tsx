@@ -224,17 +224,30 @@ function StatusesSection() {
               />
               {lang === 'ru' ? 'Свёрнут' : 'Collapsed'}
             </label>
-            <button
-              onClick={() => setConfirmId(s.id)}
-              className="p-1 text-muted hover:text-[var(--status-important)]"
-            ><Trash2 size={14} /></button>
+            {/* v0.8.11: статус «Выполнено» (behavior=archive, non-technical) системный и неудаляемый —
+                без него сломается кнопка-галочка выполнения в карточке задачи. */}
+            {s.behavior === 'archive' ? (
+              <span
+                className="text-[10px] text-muted px-1.5 py-0.5 rounded border border-border-soft shrink-0"
+                title={lang === 'ru'
+                  ? 'Системный статус — не удаляется'
+                  : 'System status — cannot be deleted'}
+              >
+                {lang === 'ru' ? 'системный' : 'system'}
+              </span>
+            ) : (
+              <button
+                onClick={() => setConfirmId(s.id)}
+                className="p-1 text-muted hover:text-[var(--status-important)]"
+              ><Trash2 size={14} /></button>
+            )}
           </div>
         ))}
       </div>
       <p className="text-[11px] text-muted mt-2">
         {lang === 'ru'
-          ? '«Скрытый» — статус не показывается на доске задач. «Свёрнут» — секция свёрнута по умолчанию.'
-          : '"Hidden" — status is hidden from the task board. "Collapsed" — section is collapsed by default.'}
+          ? '«Скрытый» — статус не показывается на доске задач. «Свёрнут» — секция свёрнута по умолчанию. Статус «Выполнено» — системный и не удаляется.'
+          : '"Hidden" — status is hidden from the task board. "Collapsed" — section is collapsed by default. "Done" is a system status and cannot be deleted.'}
       </p>
 
       <ConfirmDialog
@@ -819,6 +832,9 @@ function StorageSection() {
   const [dangerStep, setDangerStep] = useState<0 | 1 | 2>(0);
   // v0.8.10: модалка «Требуется перезапуск» после смены пути БД
   const [restartModal, setRestartModal] = useState(false);
+  // v0.8.11: путь к backup-файлу и статус ручного бэкапа
+  const [backupPath, setBackupPath] = useState<string | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
 
   const loadPath = async () => {
     if (!isDesktop) return;
@@ -836,6 +852,47 @@ function StorageSection() {
 
   useState(() => { loadPath(); });
 
+  // v0.8.11: подгружаем ожидаемый путь резервной копии (обновляется при смене пути БД)
+  const loadBackupPath = async () => {
+    if (!isDesktop) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const p = await invoke<string>('get_backup_path');
+      setBackupPath(p);
+    } catch (e) {
+      console.error('get_backup_path error:', e);
+    }
+  };
+  useState(() => { loadBackupPath(); });
+
+  // v0.8.11: создаём бэкап вручную — полезно перед опасными операциями (массовый импорт и т.п.)
+  const handleBackupNow = async () => {
+    if (!isDesktop) return;
+    setBackupBusy(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const p = await invoke<string>('backup_db');
+      setBackupPath(p);
+      pushToast(lang === 'ru' ? 'Резервная копия создана' : 'Backup created');
+    } catch (e) {
+      console.error('backup_db error:', e);
+      pushToast(lang === 'ru' ? 'Не удалось создать резервную копию: ' + String(e) : 'Backup failed: ' + String(e));
+    }
+    setBackupBusy(false);
+  };
+
+  // v0.8.11: открыть папку с бэкапом (та же папка, что и data.db)
+  const handleOpenBackupFolder = async () => {
+    if (!isDesktop || !backupPath) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('open_in_explorer', { path: backupPath });
+    } catch (e) {
+      console.error('open_in_explorer error:', e);
+      pushToast(lang === 'ru' ? 'Не удалось открыть папку: ' + String(e) : 'Failed to open folder: ' + String(e));
+    }
+  };
+
   const handleChoose = async () => {
     if (!isDesktop) return;
     try {
@@ -847,6 +904,8 @@ function StorageSection() {
         const newPath = String(selected).replace(/[\\/]$/, '') + '/taskflow.db';
         await invoke('set_db_path', { path: newPath });
         setDbPath(newPath);
+        // v0.8.11: backup-путь сменился вместе с путём БД
+        await loadBackupPath();
         // v0.8.10: просим перезапустить—без этого plugin-sql продолжит писать в старый файл
         setRestartModal(true);
       }
@@ -862,6 +921,7 @@ function StorageSection() {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('set_db_path', { path: '' });
     await loadPath();
+    await loadBackupPath();
     // v0.8.10: сброс пути тоже требует перезапуска
     setRestartModal(true);
   };
@@ -966,8 +1026,17 @@ function StorageSection() {
                 <div className="text-muted">
                   На Windows это: <span className="font-mono text-text">%APPDATA%\TaskFlow</span> — открыть вручную можно через <span className="font-mono text-text">Win+R</span> → <span className="font-mono text-text">%APPDATA%\TaskFlow</span>.
                 </div>
-                <div className="text-muted">
-                  ⚠️ Размещать <span className="font-mono text-text">data.db</span> в облачных папках (OneDrive, Dropbox, Яндекс.Диск, Google Drive) не рекомендуется: SQLite блокирует файл во время работы, и синхронизация может повредить базу. Для переноса на другой ПК используйте <span className="text-text">Экспорт/Импорт</span> в формате JSON/XLSX.
+                {/* v0.8.11: «можно, но с оговорками» вместо простого запрета */}
+                <div className="text-muted border-l-2 border-[var(--status-deadline-3-day)] pl-2.5 space-y-1">
+                  <div className="text-text font-medium">☕ Облачная папка (OneDrive / Dropbox / Яндекс.Диск / Google Drive)</div>
+                  <div>Можно, но с оговорками. SQLite держит файл открытым во время работы и использует WAL/SHM-сайдкары. Облачные клиенты могут:</div>
+                  <ul className="list-disc ml-5 space-y-0.5">
+                    <li>повредить базу, если синхронизация произойдёт в момент записи (особенно опасно для WAL);</li>
+                    <li>создать конфликт версий, если открыть TaskFlow одновременно на двух ПК — SQLite не умеет «сливать» между машинами;</li>
+                    <li>подвесить запуск, если файл «высвобождён» (online-only) — лечится отключением «По запросу» в OneDrive.</li>
+                  </ul>
+                  <div>Если всё же хранить в облаке: работайте только на одном ПК в один момент, выходите из приложения перед синхронизацией и регулярно делайте экспорт в JSON на локальный диск.</div>
+                  <div>Надёжный способ синхронизации между ПК — <span className="text-text">Экспорт/Импорт</span> в формате JSON.</div>
                 </div>
               </>
             ) : (
@@ -982,11 +1051,62 @@ function StorageSection() {
                 <div className="text-muted">
                   On Windows that's <span className="font-mono text-text">%APPDATA%\TaskFlow</span> — you can open it manually via <span className="font-mono text-text">Win+R</span> → <span className="font-mono text-text">%APPDATA%\TaskFlow</span>.
                 </div>
-                <div className="text-muted">
-                  ⚠️ Placing <span className="font-mono text-text">data.db</span> inside cloud-synced folders (OneDrive, Dropbox, Google Drive, Yandex.Disk) is not recommended: SQLite locks the file while the app runs and sync can corrupt the database. To move data to another PC, use <span className="text-text">Export/Import</span> in JSON or XLSX format.
+                {/* v0.8.11: nuanced cloud-folder guidance */}
+                <div className="text-muted border-l-2 border-[var(--status-deadline-3-day)] pl-2.5 space-y-1">
+                  <div className="text-text font-medium">☕ Cloud folder (OneDrive / Dropbox / Yandex.Disk / Google Drive)</div>
+                  <div>Possible but with caveats. SQLite keeps the file open during runtime and uses WAL/SHM side files. Cloud clients may:</div>
+                  <ul className="list-disc ml-5 space-y-0.5">
+                    <li>corrupt the DB if sync hits during a write (especially dangerous with WAL);</li>
+                    <li>create version conflicts if TaskFlow runs on two machines at once — SQLite cannot merge across machines;</li>
+                    <li>hang startup if the file is “freed” (online-only) — turn off “Files On-Demand” in OneDrive to fix.</li>
+                  </ul>
+                  <div>If you still want cloud storage: use only one PC at a time, fully quit TaskFlow before sync runs, and regularly export to JSON onto a local drive.</div>
+                  <div>A safer cross-PC workflow is <span className="text-text">Export/Import</span> in JSON.</div>
                 </div>
               </>
             )}
+          </div>
+
+          {/* v0.8.11: блок «Резервная копия» */}
+          <div className="mt-2 px-3.5 py-3 rounded-lg border border-border-soft bg-surface-alt/60 text-[12px] leading-relaxed space-y-2">
+            <div className="flex items-center gap-2 font-semibold text-text">
+              <HardDrive size={13} className="text-muted" />
+              {lang === 'ru' ? 'Резервная копия' : 'Backup'}
+            </div>
+            {lang === 'ru' ? (
+              <div className="text-muted space-y-1.5">
+                <div>TaskFlow автоматически создаёт бинарную копию БД в той же папке при каждом закрытии приложения. Файл перезаписывается — хранится всегда одна последняя копия.</div>
+                <div>Путь к файлу:</div>
+                <div className="px-2 py-1.5 bg-surface border border-border-soft rounded font-mono text-[11px] text-text break-all">{backupPath ?? '…'}</div>
+                <div>Чтобы восстановиться из копии: закройте TaskFlow, переименуйте <span className="font-mono text-text">.backup</span>-файл в имя основного (заменив выбитый файл), запустите приложение заново. Подробнее — во вкладке Помощь → «Что делать, если всё сломалось».</div>
+              </div>
+            ) : (
+              <div className="text-muted space-y-1.5">
+                <div>TaskFlow automatically creates a binary backup in the same folder every time the app closes. The file is overwritten — always exactly one latest copy is kept.</div>
+                <div>Backup file:</div>
+                <div className="px-2 py-1.5 bg-surface border border-border-soft rounded font-mono text-[11px] text-text break-all">{backupPath ?? '…'}</div>
+                <div>To restore: close TaskFlow, rename the <span className="font-mono text-text">.backup</span> file to the main DB name (replacing the broken file), and start the app again. See Help → "What if everything broke" for details.</div>
+              </div>
+            )}
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={handleBackupNow}
+                disabled={backupBusy}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt disabled:opacity-50"
+              >
+                {backupBusy
+                  ? (lang === 'ru' ? 'Сохранение…' : 'Saving…')
+                  : (lang === 'ru' ? 'Создать копию сейчас' : 'Create backup now')}
+              </button>
+              <button
+                onClick={handleOpenBackupFolder}
+                disabled={!backupPath}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt disabled:opacity-50"
+              >
+                <FolderOpen size={13} />
+                {lang === 'ru' ? 'Открыть папку' : 'Open folder'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -28,12 +28,24 @@ const sectionsRu: HelpSection[] = [
           <>
             <p>Статусы определяют группировку задач на доске. Порядок задаётся стрелками в Настройки → Статусы.</p>
             <p className="mt-2">
-              <strong>Скрытый</strong> — статус не показывается на доске, но виден в Статистике и Дашборде. По умолчанию — у «Удалено».
+              <strong>Скрытый</strong> — статус не показывается на доске, но виден в Статистике и Дашборде. Полезно для статусов, которые вы не используете каждый день.
             </p>
             <p className="mt-2">
               <strong>Свёрнут по умолчанию</strong> — секция статуса видна на доске, но свёрнута. Кликните по заголовку, чтобы раскрыть. По умолчанию — у «Выполнено».
             </p>
-            <p className="mt-2">Стандартные статусы: Запланировано, Взять в работу, В работе, Приостановлено, Выполнено (свёрнут), Удалено (скрытый).</p>
+            <p className="mt-2">Стандартные статусы: Запланировано, Взять в работу, В работе, Приостановлено, Выполнено (свёрнут).</p>
+            <p className="mt-2"><strong>«Выполнено»</strong> — системный статус, его нельзя удалить. На него опирается кнопка-галочка на карточке задачи.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Что такое статус «Выполнено» и куда уходит задача?',
+        a: (
+          <>
+            <p>«Выполнено» — системный статус, в который задача попадает, когда вы нажимаете кнопку-галочку (✓) на карточке. Этот же эффект — если вручную перетащить задачу в секцию «Выполнено».</p>
+            <p className="mt-2">Секция «Выполнено» по умолчанию свёрнута на доске — кликните по её заголовку, чтобы раскрыть и увидеть завершённые задачи.</p>
+            <p className="mt-2"><strong>Можно вернуть задачу обратно</strong>: раскройте секцию «Выполнено», откройте карточку и смените статус на нужный (например, «В работе») — задача снова появится в активных.</p>
+            <p className="mt-2">Поскольку «Выполнено» используется кнопкой-галочкой, удалить этот статус в Настройки → Статусы нельзя — вместо корзины показывается значок «системный».</p>
           </>
         ),
       },
@@ -42,8 +54,8 @@ const sectionsRu: HelpSection[] = [
         a: 'Перетащите карточку за иконку ⋮⋮ (drag handle) с правой стороны. Поддерживаются перестановка внутри статуса и перенос между статусами. Клик по самой карточке открывает модалку редактирования — эти жесты не конфликтуют (исправлено в v0.8.6).',
       },
       {
-        q: 'Как удалить задачу?',
-        a: 'В модалке задачи — кнопка «Удалить» внизу слева, затем подтверждение. Задача мягко удаляется (статус «Удалено») и видна в Статистике, откуда её можно восстановить.',
+        q: 'Как удалить или завершить задачу?',
+        a: 'Чтобы пометить задачу выполненной — нажмите кнопку-галочку (✓) на карточке: задача уйдёт в секцию «Выполнено». Чтобы полностью удалить — откройте карточку и нажмите «Удалить» внизу слева. Задача удаляется безвозвратно, поэтому, если нужно «спрятать» задачу с возможностью вернуть — используйте «Выполнено».',
       },
       {
         q: 'Что такое эмодзи-пикер в полях задачи? (v0.8.8)',
@@ -128,7 +140,44 @@ const sectionsRu: HelpSection[] = [
       },
       {
         q: 'Можно ли держать БД в OneDrive / Dropbox / Яндекс.Диске?',
-        a: 'Не рекомендуется. SQLite блокирует файл во время работы приложения, и облачная синхронизация может повредить базу. Для переноса данных между устройствами используйте Экспорт/Импорт в JSON или XLSX.',
+        a: (
+          <>
+            <p>Можно, но с оговорками. SQLite блокирует файл во время работы приложения — если на двух устройствах TaskFlow будет открыт одновременно и облако синхронизирует <code>data.db</code> на лету, база может повредиться.</p>
+            <p className="mt-2">Безопасный сценарий:</p>
+            <ul className="mt-1 list-disc pl-4 space-y-1">
+              <li>Используйте TaskFlow только на одном устройстве за раз.</li>
+              <li>Перед запуском дождитесь, пока облачный клиент завершит синхронизацию папки.</li>
+              <li>Полностью закрывайте приложение (а не сворачивайте) перед сменой устройства, чтобы файлы <code>data.db</code>, <code>data.db-wal</code> и <code>data.db-shm</code> успели уйти в облако.</li>
+              <li>Для надёжного переноса между устройствами лучше используйте Экспорт/Импорт в JSON.</li>
+            </ul>
+          </>
+        ),
+      },
+      {
+        q: 'Резервная копия на закрытии — что это?',
+        a: (
+          <>
+            <p>При каждом штатном закрытии TaskFlow в той же папке, где лежит <code>data.db</code>, создаётся файл <code>data.db.backup</code> (или <code>&lt;ваше_имя&gt;.db.backup</code>, если вы выбрали свой путь). Это копия последнего состояния базы.</p>
+            <p className="mt-2">Создать копию вручную можно в Настройки → Хранилище → блок «Резервная копия» → «Создать копию сейчас». Кнопка «Открыть папку» рядом покажет место, где лежит файл.</p>
+            <p className="mt-2">Это локальная страховка от случайных сбоев. Для переноса данных между устройствами всё равно используйте Экспорт/Импорт в JSON.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Что делать, если всё сломалось?',
+        a: (
+          <>
+            <p>Если приложение не запускается или база повреждена — попробуйте восстановиться из резервной копии:</p>
+            <ol className="mt-2 list-decimal pl-4 space-y-1">
+              <li>Полностью закройте TaskFlow (включая иконку в трее, если есть).</li>
+              <li>Откройте папку с данными: Настройки → Хранилище → «Открыть папку». Если приложение не запускается — откройте вручную <code>%APPDATA%\TaskFlow</code> через <code>Win+R</code>.</li>
+              <li>Переименуйте текущий <code>data.db</code> в <code>data.db.broken</code> — на случай, если захотите потом изучить.</li>
+              <li>Переименуйте <code>data.db.backup</code> в <code>data.db</code>.</li>
+              <li>Запустите TaskFlow — данные будут из резервной копии (на момент последнего закрытия).</li>
+            </ol>
+            <p className="mt-2">Если у вас есть JSON-экспорт — это самый надёжный способ восстановления: создайте пустую БД (или сотрите данные через «Опасную зону») и сделайте Импорт.</p>
+          </>
+        ),
       },
       {
         q: 'Как изменить путь к файлу БД?',
@@ -198,12 +247,24 @@ const sectionsEn: HelpSection[] = [
           <>
             <p>Statuses group tasks on the board. Order is set with arrows in Settings → Statuses.</p>
             <p className="mt-2">
-              <strong>Hidden</strong> — the status is not shown on the board but is visible in Statistics and Dashboard. Default for "Deleted".
+              <strong>Hidden</strong> — the status is not shown on the board but is visible in Statistics and Dashboard. Useful for statuses you don't use every day.
             </p>
             <p className="mt-2">
               <strong>Collapsed by default</strong> — the section is visible on the board but collapsed. Click the header to expand. Default for "Done".
             </p>
-            <p className="mt-2">Default statuses: Planned, Take into work, In progress, On hold, Done (collapsed), Deleted (hidden).</p>
+            <p className="mt-2">Default statuses: Planned, Take into work, In progress, On hold, Done (collapsed).</p>
+            <p className="mt-2"><strong>"Done"</strong> is a system status and can't be deleted. The checkmark button on the task card relies on it.</p>
+          </>
+        ),
+      },
+      {
+        q: 'What is the "Done" status and where does the task go?',
+        a: (
+          <>
+            <p>"Done" is a system status the task moves to when you click the checkmark (✓) button on the card. The same happens if you drag the task into the "Done" section manually.</p>
+            <p className="mt-2">The "Done" section is collapsed by default on the board — click its header to expand it and see completed tasks.</p>
+            <p className="mt-2"><strong>You can move a task back</strong>: expand the "Done" section, open the card and change its status to whatever you need (e.g. "In progress") — the task will reappear among active ones.</p>
+            <p className="mt-2">Because "Done" is what the checkmark button depends on, it cannot be deleted in Settings → Statuses — instead of the trash icon you'll see a "system" badge.</p>
           </>
         ),
       },
@@ -212,8 +273,8 @@ const sectionsEn: HelpSection[] = [
         a: 'Drag the card by the ⋮⋮ handle on the right. Both reordering inside one status and moving between statuses are supported. Clicking the card body opens the edit modal — these gestures no longer conflict (fixed in v0.8.6).',
       },
       {
-        q: 'How do I delete a task?',
-        a: 'In the task modal — the "Delete" button at the bottom left, then confirm. The task is soft-deleted (moved to "Deleted") and stays visible in Statistics where it can be restored.',
+        q: 'How do I complete or delete a task?',
+        a: 'To mark a task as completed, click the checkmark (✓) button on the card — the task moves to the "Done" section. To delete it for good, open the card and click "Delete" at the bottom left. Deletion is permanent, so if you just want to "hide" a task while keeping the ability to bring it back — use "Done".',
       },
       {
         q: 'What is the emoji picker in task fields? (v0.8.8)',
@@ -298,7 +359,44 @@ const sectionsEn: HelpSection[] = [
       },
       {
         q: 'Can I keep the DB on OneDrive / Dropbox / Google Drive?',
-        a: 'Not recommended. SQLite locks the file while the app runs, and cloud sync can corrupt the database. To move data between devices use Export/Import in JSON or XLSX.',
+        a: (
+          <>
+            <p>You can, but with caveats. SQLite locks the file while the app runs — if TaskFlow is open on two devices at once and the cloud syncs <code>data.db</code> on the fly, the database may get corrupted.</p>
+            <p className="mt-2">Safe pattern:</p>
+            <ul className="mt-1 list-disc pl-4 space-y-1">
+              <li>Only use TaskFlow on one device at a time.</li>
+              <li>Before launching, wait until the cloud client finishes syncing the folder.</li>
+              <li>Close the app completely (don't just minimise) before switching devices, so <code>data.db</code>, <code>data.db-wal</code> and <code>data.db-shm</code> have time to upload.</li>
+              <li>For reliable cross-device transfer, prefer Export/Import in JSON.</li>
+            </ul>
+          </>
+        ),
+      },
+      {
+        q: 'What is the on-close backup?',
+        a: (
+          <>
+            <p>On every graceful close, TaskFlow writes <code>data.db.backup</code> next to <code>data.db</code> (or <code>&lt;your_name&gt;.db.backup</code> if you chose a custom path). It's a snapshot of the latest database state.</p>
+            <p className="mt-2">You can create a backup manually in Settings → Storage → "Backup" block → "Back up now". The "Open folder" button next to it shows where the file is located.</p>
+            <p className="mt-2">This is a local safety net against accidental crashes. For moving data between devices still use Export/Import in JSON.</p>
+          </>
+        ),
+      },
+      {
+        q: 'What if everything is broken?',
+        a: (
+          <>
+            <p>If the app won't start or the database is corrupted, try restoring from the backup:</p>
+            <ol className="mt-2 list-decimal pl-4 space-y-1">
+              <li>Close TaskFlow completely (including the tray icon, if any).</li>
+              <li>Open the data folder: Settings → Storage → "Open folder". If the app won't start, open <code>%APPDATA%\TaskFlow</code> manually via <code>Win+R</code>.</li>
+              <li>Rename the current <code>data.db</code> to <code>data.db.broken</code> — just in case you want to inspect it later.</li>
+              <li>Rename <code>data.db.backup</code> to <code>data.db</code>.</li>
+              <li>Launch TaskFlow — your data will be restored from the backup (as of the last close).</li>
+            </ol>
+            <p className="mt-2">If you have a JSON export — that's the most reliable way: create an empty DB (or wipe via Danger Zone) and use Import.</p>
+          </>
+        ),
       },
       {
         q: 'How do I change the database path?',
