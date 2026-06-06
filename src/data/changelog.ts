@@ -13,6 +13,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.16',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Кнопки вставки чекбоксов (☐ Чекбокс / ☑ Готово / • Список) теперь есть и в модалке «+ Новая задача» — в 0.8.14/0.8.15 они по ошибке были добавлены только в модалку редактирования.',
+      ],
+      en: [
+        'Checkbox insert buttons (☐ Checkbox / ☑ Done / • List) are now also available in the “+ New task” modal — in 0.8.14/0.8.15 they were mistakenly added only to the edit modal.',
+      ],
+    },
+  },
+  {
     version: '0.8.15',
     date: '2026-06-06',
     items: {
