@@ -13,6 +13,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.15',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Критический фикс: в 0.8.14 при открытии карточки задачи (клик в поле или нажатие на drag-ручку без перетягивания) приложение уходило в белый экран. Причина — нарушение Rules of Hooks (хук usePrompt вызывался после раннего return). Исправлено.',
+      ],
+      en: [
+        'Critical fix: in 0.8.14 opening a task card (clicking the field or pressing on the drag handle without dragging) caused a white screen. Root cause was a Rules of Hooks violation (usePrompt was called after an early return). Fixed.',
+      ],
+    },
+  },
+  {
     version: '0.8.14',
     date: '2026-06-06',
     items: {
