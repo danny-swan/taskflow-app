@@ -5,7 +5,7 @@ import { StatusGroup } from '../components/StatusGroup';
 import { TaskModal } from '../components/TaskModal';
 import { NewTaskModal } from '../components/NewTaskModal';
 import {
-  Search, Filter, ChevronsDownUp, ChevronsUpDown,
+  Search, Filter, ChevronsDownUp, ChevronsUpDown, ChevronDown, FileText,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -30,6 +30,8 @@ export function TasksPage() {
   const updateTask = useStore(s => s.updateTask);
   const reorderTasks = useStore(s => s.reorderTasks);
   const pushToast = useStore(s => s.pushToast);
+  const taskTemplates = useStore(s => s.taskTemplates);
+  const createTaskFromTemplate = useStore(s => s.createTaskFromTemplate);
 
   const techIds = useMemo(() => new Set(allStatuses.filter(s => s.is_technical === 1).map(s => s.id)), [allStatuses]);
 
@@ -51,6 +53,9 @@ export function TasksPage() {
   const [openTask, setOpenTask] = useState<Task | null>(null);
   // v0.8.6: модалка «+ Новая задача» вместо вкладки /add
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  // v0.8.13: выпадающее меню шаблонов (split-button)
+  const [templatesMenuOpen, setTemplatesMenuOpen] = useState(false);
+  const templatesMenuRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
 
@@ -83,6 +88,18 @@ export function TasksPage() {
     window.addEventListener('keydown', fn);
     return () => window.removeEventListener('keydown', fn);
   }, [navigate]);
+
+  // v0.8.13: клик вне split-меню шаблонов закрывает его.
+  useEffect(() => {
+    if (!templatesMenuOpen) return;
+    const onDocDown = (e: MouseEvent) => {
+      if (!templatesMenuRef.current) return;
+      if (templatesMenuRef.current.contains(e.target as Node)) return;
+      setTemplatesMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [templatesMenuOpen]);
 
   const archiveStatusIds = useMemo(
     () => new Set(allStatuses.filter(s => s.behavior === 'archive' && s.is_technical !== 1).map(s => s.id)),
@@ -279,10 +296,69 @@ export function TasksPage() {
               {allCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}
               <span>{allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}</span>
             </button>
-            <button
-              onClick={() => setNewTaskOpen(true)}
-              className="px-3 py-1.5 text-[13px] bg-accent hover:bg-accent-hover text-white rounded-md font-medium"
-            >{tr(lang, 'new_task')}</button>
+            {/* v0.8.13: split-кнопка «+ Новая задача» │ ▾. Основная часть
+                открывает пустую модалку (поведение как раньше), стрелка — меню со списком
+                шаблонов. Если шаблонов нет — меню прячется, остаётся обычная кнопка. */}
+            <div ref={templatesMenuRef} className="relative inline-flex items-stretch">
+              <button
+                onClick={() => setNewTaskOpen(true)}
+                className={
+                  'px-3 py-1.5 text-[13px] bg-accent hover:bg-accent-hover text-white font-medium ' +
+                  (taskTemplates.length > 0
+                    ? 'rounded-l-md border-r border-white/20'
+                    : 'rounded-md')
+                }
+              >{tr(lang, 'new_task')}</button>
+              {taskTemplates.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setTemplatesMenuOpen(v => !v)}
+                    title={lang === 'ru' ? 'Из шаблона' : 'From template'}
+                    aria-label={lang === 'ru' ? 'Из шаблона' : 'From template'}
+                    aria-haspopup="menu"
+                    aria-expanded={templatesMenuOpen}
+                    className="px-1.5 bg-accent hover:bg-accent-hover text-white rounded-r-md flex items-center justify-center"
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                  {templatesMenuOpen && (
+                    <div
+                      role="menu"
+                      className="absolute top-full right-0 mt-1 z-40 min-w-[220px] max-w-[320px] bg-surface border border-border rounded-md shadow-lg py-1 text-[13px]"
+                    >
+                      <div className="px-3 py-1 text-[11px] uppercase tracking-wide text-muted">
+                        {lang === 'ru' ? 'Из шаблона' : 'From template'}
+                      </div>
+                      {taskTemplates.map(tpl => (
+                        <button
+                          key={tpl.id}
+                          role="menuitem"
+                          onClick={() => {
+                            setTemplatesMenuOpen(false);
+                            const id = createTaskFromTemplate(tpl.id);
+                            if (id != null) {
+                              pushToast(
+                                lang === 'ru' ? `Создано из шаблона: ${tpl.name}` : `Created from template: ${tpl.name}`
+                              );
+                            }
+                          }}
+                          className="w-full text-left px-3 py-2 hover:bg-surface-alt flex items-start gap-2"
+                        >
+                          <FileText size={13} className="mt-[2px] shrink-0 text-muted" />
+                          <span className="flex-1 min-w-0">
+                            <span className="block truncate font-medium">{tpl.name}</span>
+                            {tpl.title && (
+                              <span className="block truncate text-[11px] text-muted">{tpl.title}</span>
+                            )}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>

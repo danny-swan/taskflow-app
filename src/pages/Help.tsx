@@ -269,6 +269,40 @@ const sectionsRu: HelpSection[] = [
       },
     ],
   },
+  {
+    title: '✨ Что нового в 0.8.13',
+    items: [
+      {
+        q: 'Чекбоксы в комментариях задач',
+        a: (
+          <>
+            <p>В комментарии задачи теперь работает markdown-синтаксис чекбоксов. Напишите строку <code>- [ ] что-то сделать</code> — и при просмотре карточки она превратится в кликабельный чекбокс. Клик переключает <code>[ ]</code> ↔ <code>[x]</code> прямо в карточке, без открытия модалки.</p>
+            <p className="mt-2">На карточке задачи появляется маленький индикатор прогресса в формате <code>2/5</code> (выполнено / всего). Когда все пункты отмечены, индикатор подсвечивается зелёным.</p>
+            <p className="mt-2">Поддерживаются также <code>- [x]</code>, <code>* [ ]</code>, отступы. Остальной текст рендерится как обычный многострочный комментарий.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Шаблоны задач',
+        a: (
+          <>
+            <p>В разделе Настройки → Шаблоны задач можно создавать готовые заготовки: имя шаблона, заголовок задачи и комментарий (где удобно держать заранее подготовленные чекбоксы).</p>
+            <p className="mt-2"><strong>Создать задачу из шаблона:</strong> на вкладке «Задачи» рядом с кнопкой «+ Новая задача» появится стрелочка ▾ — она открывает меню со списком шаблонов. Выберите шаблон — новая задача сразу создастся с заполненным заголовком и комментарием.</p>
+            <p className="mt-2"><strong>Сохранить как шаблон:</strong> в модалке задачи (при создании или редактировании) внизу есть кнопка «Сохранить как шаблон» — она запоминает текущий заголовок, комментарий, статус и тэг под новым именем.</p>
+            <p className="mt-2">Один шаблон создаётся автоматически при первом запуске обновлённой версии — его можно отредактировать или удалить.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Уведомления теперь снизу',
+        a: 'Тосты (всплывающие уведомления о действиях — удаление, отмена, сохранение и т.п.) переехали из верхней-правой части окна в нижний центр. Это ближе к глазам, когда вы работаете с карточками, и не перекрывает заголовок с горячими клавишами.',
+      },
+      {
+        q: 'Шаблоны попадают в бэкап?',
+        a: 'Да. При экспорте JSON-бэкапа (Настройки → Резервное копирование) шаблоны добавляются автоматически — отдельной галочки не нужно. При импорте старых бэкапов (без шаблонов) ничего не сломается: просто не будет импортированных шаблонов.',
+      },
+    ],
+  },
 ];
 
 // ─── EN ──────────────────────────────────────────────────────────────────────
@@ -527,6 +561,40 @@ const sectionsEn: HelpSection[] = [
             <li><code>Enter</code> in card fields — save the inline edit</li>
           </ul>
         ),
+      },
+    ],
+  },
+  {
+    title: '✨ What\'s New in 0.8.13',
+    items: [
+      {
+        q: 'Checkboxes in task comments',
+        a: (
+          <>
+            <p>Task comments now support markdown checkbox syntax. Write a line like <code>- [ ] do something</code> and it will render as a clickable checkbox in the card view. Clicking toggles <code>[ ]</code> ↔ <code>[x]</code> right in the card, without opening the modal.</p>
+            <p className="mt-2">A small progress badge in the format <code>2/5</code> (done / total) appears on the task card. When all items are checked, the badge turns green.</p>
+            <p className="mt-2">Also supported: <code>- [x]</code>, <code>* [ ]</code>, and indentation. The remaining text renders as a regular multi-line comment.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Task templates',
+        a: (
+          <>
+            <p>In Settings → Task templates you can create ready-made presets: a template name, the task title, and the comment (a good place to keep pre-filled checkboxes).</p>
+            <p className="mt-2"><strong>Create a task from a template:</strong> on the Tasks tab, next to the “+ New task” button you’ll see a small ▾ arrow that opens a menu of templates. Pick one — a new task is created immediately with the title and comment pre-filled.</p>
+            <p className="mt-2"><strong>Save as template:</strong> in the task modal (when creating or editing) there’s a “Save as template” button at the bottom — it stores the current title, comment, status, and tag under a new name.</p>
+            <p className="mt-2">One template is created automatically on first launch of the updated version — you can edit or delete it.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Toasts moved to the bottom',
+        a: 'Toasts (the popup notifications for actions like delete, undo, save, etc.) moved from the top-right corner to the bottom-center. It’s closer to where you work with the cards, and it no longer overlaps the topbar.',
+      },
+      {
+        q: 'Are templates included in backups?',
+        a: 'Yes. When you export a JSON backup (Settings → Backup), templates are added automatically — no separate checkbox needed. Importing older backups (without templates) works fine: there just won’t be any templates to import.',
       },
     ],
   },

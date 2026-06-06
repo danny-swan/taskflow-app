@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.13',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Маркдаун-чекбоксы в комментариях задач: строки вида - [ ] / - [x] превращаются в кликабельные чекбоксы при просмотре карточки. На карточке появляется индикатор прогресса (например 2/5), подсвечивающийся зелёным при 100%.',
+        'Шаблоны задач: новый раздел в Настройки → Шаблоны. Рядом с «+ Новая задача» появилась стрелочка ▾ с меню шаблонов (создание задачи в один клик). В модалке задачи добавлена кнопка «Сохранить как шаблон». Шаблоны включены в экспорт/импорт бэкапа (старые файлы продолжают работать).',
+        'Уведомления снизу: тосты переехали из правого верхнего угла в нижний центр и больше не перекрывают топбар. Новые тосты появляются сверху старых (как в mobile-паттерне).',
+        'Новый README и лицензия: репозиторий на GitHub получил двуязычный README (RU+EN) с описанием фич, инструкциями по установке/обновлению/миграции на другой ПК, горячими клавишами. Добавлен файл LICENSE (MIT).',
+      ],
+      en: [
+        'Markdown checkboxes in task comments: lines like - [ ] / - [x] render as clickable checkboxes when viewing a card. A small progress badge (e.g. 2/5) appears on the card and turns green at 100%.',
+        'Task templates: a new Settings → Templates section. Next to “+ New task” there’s now a ▾ split-button arrow that opens a template menu (one-click task creation). The task modal got a “Save as template” button. Templates are included in backup export/import (older backup files continue to work).',
+        'Toasts moved to the bottom: notifications relocated from the top-right corner to the bottom-center and no longer overlap the topbar. New toasts stack above older ones (mobile-style).',
+        'New README and license: the GitHub repo got a bilingual README (RU+EN) covering features, install/upgrade/migration to another PC, and keyboard shortcuts. Added a LICENSE file (MIT).',
+      ],
+    },
+  },
+  {
     version: '0.8.12',
     date: '2026-06-06',
     items: {

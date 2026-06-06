@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil } from 'lucide-react';
 import { downloadFile } from '../lib/utils';
 import { resetDatabase, isTauri, buildBackup, applyBackup, getSchemaVersion, type BackupPayload } from '../lib/db';
 import { logger } from '../lib/logger';
@@ -582,10 +582,10 @@ function IOSection() {
       const counts = await applyBackup(backupPreview.payload, mode);
       await useStore.getState().init();
       refresh();
-      const total = counts.statuses + counts.tags + counts.tasks;
+      const total = counts.statuses + counts.tags + counts.tasks + counts.templates;
       pushToast(lang === 'ru'
-        ? `Импортировано: ${counts.tasks} задач, ${counts.tags} тэгов, ${counts.statuses} статусов (всего ${total})`
-        : `Imported: ${counts.tasks} tasks, ${counts.tags} tags, ${counts.statuses} statuses (total ${total})`);
+        ? `Импортировано: ${counts.tasks} задач, ${counts.tags} тэгов, ${counts.statuses} статусов, ${counts.templates} шаблонов (всего ${total})`
+        : `Imported: ${counts.tasks} tasks, ${counts.tags} tags, ${counts.statuses} statuses, ${counts.templates} templates (total ${total})`);
     } catch (e) {
       console.error('backup import error:', e);
       logger.error('backup import failed', { error: String(e) });
@@ -1203,6 +1203,9 @@ function StorageSection() {
         </div>
       )}
 
+      {/* v0.8.13: Шаблоны задач */}
+      <TemplatesSection lang={lang} />
+
       {/* ─── Danger Zone ─────────────────────────────── */}
       <div className="mt-8 border border-red-500/40 rounded-xl p-4 space-y-3">
         <div className="flex items-center gap-2 text-[13px] font-semibold text-[var(--status-important)]">
@@ -1271,6 +1274,145 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex items-center justify-between gap-4 py-2 border-b border-border-soft">
       <div className="text-[13px] text-muted">{label}</div>
       <div>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * v0.8.13: TemplatesSection — управление пользовательскими шаблонами задач.
+ *
+ * Что умеет:
+ * - Показывает все сохранённые шаблоны (включая сид «Шаблон задачи 1» из миграции v2).
+ * - Раскрытие карточки шаблона — редактируемые поля «Имя», «Заголовок задачи», «Комментарий».
+ * - Кнопка удаления (с инлайн-подтверждением, без модалки — раздел и так перегружен).
+ * - Если шаблонов нет — мини-пояснение, как их создавать (TaskModal → «Сохранить как шаблон»).
+ *
+ * Не используем drag-and-drop сортировку: это редко, и порядок шаблонов в меню
+ * определяется sort_order из БД + id (стабильно, предсказуемо).
+ */
+function TemplatesSection({ lang }: { lang: 'ru' | 'en' }) {
+  const templates = useStore(s => s.taskTemplates);
+  const updateTemplate = useStore(s => s.updateTemplate);
+  const deleteTemplate = useStore(s => s.deleteTemplate);
+  const pushToast = useStore(s => s.pushToast);
+
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+
+  return (
+    <div className="mt-8 space-y-3">
+      <h3 className="font-display text-[16px] font-semibold flex items-center gap-2">
+        <FileText size={16} />
+        {lang === 'ru' ? 'Шаблоны задач' : 'Task templates'}
+      </h3>
+      <p className="text-[12px] text-muted">
+        {lang === 'ru'
+          ? 'Создавайте шаблоны из любой задачи (в окне редактирования — «Сохранить как шаблон»). Затем используйте их через стрелку «▾» рядом с кнопкой «+ Новая задача» на странице «Задачи».'
+          : 'Save any task as a template (use “Save as template” in the task editor). Then use them via the “▾” arrow next to “+ New task” on the Tasks page.'}
+      </p>
+
+      {templates.length === 0 ? (
+        <div className="px-4 py-6 text-center text-[12px] text-muted border border-dashed border-border-soft rounded-lg">
+          {lang === 'ru' ? 'Пока нет шаблонов.' : 'No templates yet.'}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {templates.map(tpl => {
+            const isOpen = expanded === tpl.id;
+            return (
+              <div
+                key={tpl.id}
+                className="border border-border-soft rounded-lg bg-surface-alt/40"
+              >
+                <div className="flex items-center gap-2 px-3 py-2">
+                  <FileText size={13} className="text-muted shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] font-medium truncate">{tpl.name}</div>
+                    {tpl.title && (
+                      <div className="text-[11px] text-muted truncate">{tpl.title}</div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setExpanded(isOpen ? null : tpl.id)}
+                    className="flex items-center gap-1 px-2 py-1 text-[12px] border border-border-soft rounded hover:bg-surface-alt"
+                    title={lang === 'ru' ? 'Изменить' : 'Edit'}
+                  >
+                    <Pencil size={12} />
+                    {lang === 'ru' ? 'Изменить' : 'Edit'}
+                  </button>
+                  {confirmDelete === tpl.id ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          deleteTemplate(tpl.id);
+                          setConfirmDelete(null);
+                          if (expanded === tpl.id) setExpanded(null);
+                          pushToast(lang === 'ru' ? 'Шаблон удалён' : 'Template deleted');
+                        }}
+                        className="px-2 py-1 text-[12px] bg-[var(--status-important)] text-white rounded"
+                      >
+                        {lang === 'ru' ? 'Удалить' : 'Delete'}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(null)}
+                        className="px-2 py-1 text-[12px] border border-border-soft rounded hover:bg-surface-alt"
+                      >
+                        {tr(lang, 'cancel')}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmDelete(tpl.id)}
+                      className="w-7 h-7 flex items-center justify-center rounded hover:bg-[color-mix(in_srgb,var(--status-important)_15%,transparent)] text-[var(--status-important)]"
+                      title={tr(lang, 'delete')}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+
+                {isOpen && (
+                  <div className="px-3 pb-3 pt-1 space-y-2 border-t border-border-soft">
+                    <label className="block">
+                      <span className="text-[11px] text-muted uppercase tracking-wider">
+                        {lang === 'ru' ? 'Имя шаблона' : 'Template name'}
+                      </span>
+                      <input
+                        type="text"
+                        value={tpl.name}
+                        onChange={(e) => updateTemplate(tpl.id, { name: e.target.value })}
+                        className="mt-1 w-full bg-surface border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[11px] text-muted uppercase tracking-wider">
+                        {lang === 'ru' ? 'Заголовок задачи' : 'Task title'}
+                      </span>
+                      <input
+                        type="text"
+                        value={tpl.title}
+                        onChange={(e) => updateTemplate(tpl.id, { title: e.target.value })}
+                        className="mt-1 w-full bg-surface border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[11px] text-muted uppercase tracking-wider">
+                        {lang === 'ru' ? 'Комментарий (поддерживает markdown-чекбоксы)' : 'Comment (supports markdown checkboxes)'}
+                      </span>
+                      <textarea
+                        value={tpl.comment}
+                        onChange={(e) => updateTemplate(tpl.id, { comment: e.target.value })}
+                        rows={Math.min(12, Math.max(4, (tpl.comment.match(/\n/g)?.length ?? 0) + 2))}
+                        className="mt-1 w-full bg-surface border border-border-soft rounded px-2.5 py-1.5 text-[12px] font-mono leading-relaxed resize-y"
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
