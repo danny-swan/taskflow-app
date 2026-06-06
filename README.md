@@ -390,4 +390,6 @@ When reporting a bug, please attach `taskflow.log` (Settings → Diagnostics →
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE). Free for personal and commercial use, fork and modify freely.
+PolyForm Noncommercial 1.0.0 — see [LICENSE](LICENSE).
+Use, forking, and modification are allowed for personal and other noncommercial purposes.
+For commercial use, please contact me to obtain a separate license.
