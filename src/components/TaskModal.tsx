@@ -59,9 +59,18 @@ export function TaskModal({
   };
   const remove = () => setConfirmOpen(true);
   const confirmDelete = () => {
-    softDeleteTask(draft.id);
+    // v0.8.12: удаление из модалки тоже предлагает undo (возврат в прежний статус)
+    const prevStatusId = draft.status_id;
+    const tid = draft.id;
+    softDeleteTask(tid);
     setConfirmOpen(false);
-    pushToast(tr(lang, 'deleted'));
+    pushToast(
+      tr(lang, 'deleted'),
+      {
+        label: lang === 'ru' ? 'Отменить' : 'Undo',
+        onClick: () => updateTask(tid, { status_id: prevStatusId }),
+      },
+    );
     onClose();
   };
 

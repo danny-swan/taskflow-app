@@ -13,6 +13,26 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.8.12',
+    date: '2026-06-06',
+    items: {
+      ru: [
+        'Undo для деструктивных действий: при удалении или завершении задачи (кнопкой ✓ или drag-в-«Выполнено») в правом верхнем углу висит тост с кнопкой «Отменить» 6 секунд. Статус (и finish_date) восстанавливаются ровно в тот вид, в котором были до действия.',
+        'Приветственный тур для новых пользователей: при первом запуске показывается онбординг из 5 шагов (создание задачи, drag-and-drop, завершение кнопкой ✓, undo, горячие клавиши). Перезапустить тур можно из Помощь → Диагностика.',
+        'Логирование: рядом с БД ведётся технический лог (taskflow.log, одна строка = JSON-событие). Исключения браузера, ошибки инициализации БД и бэкапа попадают туда. Ротация при 1 MB. Добавлен блок «Диагностика» в Настройки → Хранилище с кнопками «Открыть лог» / «Очистить».',
+        'Миграции схемы БД: введён явный номер версии схемы (PRAGMA user_version). Существующие БД автоматически получают v1; будущие обновления смогут безопасно добавлять колонки/таблицы без повреждения данных. Текущая версия видна в Настройки → Хранилище → Диагностика.',
+        'Code splitting: вкладки Дашборд, Статистика, Настройки и Помощь теперь грузятся лениво. Тяжёлые библиотеки (recharts, xlsx, papaparse, dnd-kit) вынесены в отдельные чанки — main bundle уменьшился в несколько раз, первичный экран выводится быстрее.',
+      ],
+      en: [
+        'Undo for destructive actions: deleting or completing a task (via the ✓ button or by dragging into "Done") now shows a 6-second toast in the top-right corner with an "Undo" button. Status (and finish_date) are restored exactly to their pre-action values.',
+        'Welcome tour for new users: on first launch a 5-step onboarding modal is shown (creating a task, drag-and-drop, completing via ✓, undo, keyboard shortcuts). The tour can be restarted from Help → Diagnostics.',
+        'Logging: a technical log file (taskflow.log, one JSON event per line) is written next to the DB. Browser exceptions, DB init errors and backup failures land there. Rotates at 1 MB. A new "Diagnostics" block in Settings → Storage offers "Open log" / "Clear" buttons.',
+        'DB schema migrations: an explicit schema version (PRAGMA user_version) was introduced. Existing DBs are auto-stamped as v1; future updates can safely add columns/tables without corrupting data. The current version is visible in Settings → Storage → Diagnostics.',
+        'Code splitting: Dashboard, Statistics, Settings and Help are now lazy-loaded. Heavy libraries (recharts, xlsx, papaparse, dnd-kit) are split into separate chunks — the main bundle is several times smaller and the first screen appears faster.',
+      ],
+    },
+  },
+  {
     version: '0.8.11',
     date: '2026-06-06',
     items: {

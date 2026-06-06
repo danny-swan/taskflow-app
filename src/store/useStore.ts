@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import * as db from '../lib/db';
 import type { Lang } from '../lib/i18n';
 import { pickQuote, quoteSetFor } from '../lib/quotes';
+import { logger } from '../lib/logger';
 
 export type ThemeName = 'light' | 'dark' | 'akatsuki' | 'konoha';
 
@@ -49,7 +50,7 @@ interface State {
   statsEnabled: boolean;
   fontSize: number;
   defaultTab: string;
-  toasts: { id: number; text: string }[];
+  toasts: { id: number; text: string; action?: { label: string; onClick: () => void } }[];
   quote: string;
   columnWidths: Record<string, number>;
   taskStatusFilter: string | null; // for metric chips: 'total' | 'inprogress' | 'paused' | 'done' | null
@@ -85,7 +86,9 @@ interface State {
   deleteStatus(id: number): void;
   reorderStatuses(ids: number[]): void;
 
-  pushToast(text: string): void;
+  // v0.8.12: опциональный action для undo и других «я-передумал» жестов.
+  // С action живёт дольше (6 с), без action — прежние 2.4 с.
+  pushToast(text: string, action?: { label: string; onClick: () => void }): void;
   dismissToast(id: number): void;
 
   setColumnWidth(key: string, w: number): void;
@@ -137,6 +140,7 @@ export const useStore = create<State>((set, get) => ({
     } catch (e: any) {
       initError = String(e?.message || e || 'Unknown error');
       console.error('[init] DB init failed:', e);
+      logger.error('db init failed', { error: initError, stack: e?.stack });
     }
     let map: Record<string, string> = {};
     try {
@@ -172,6 +176,12 @@ export const useStore = create<State>((set, get) => ({
       // Сохраняем в возможное поле store для показа в UI; если поля нет — хотя бы в консоль.
       (window as any).__taskflow_init_error = initError;
       console.error('[TaskFlow] init error:', initError);
+    } else {
+      logger.info('app ready', {
+        statuses: get().statuses.length,
+        tags: get().tags.length,
+        tasks: get().tasks.length,
+      });
     }
   },
 
@@ -330,10 +340,11 @@ export const useStore = create<State>((set, get) => ({
     get().refresh();
   },
 
-  pushToast(text) {
+  pushToast(text, action) {
     const id = ++toastId;
-    set(s => ({ toasts: [...s.toasts, { id, text }] }));
-    setTimeout(() => get().dismissToast(id), 2400);
+    set(s => ({ toasts: [...s.toasts, { id, text, action }] }));
+    // v0.8.12: с action (undo) даём пользователю время отреагировать
+    setTimeout(() => get().dismissToast(id), action ? 6000 : 2400);
   },
   dismissToast(id) {
     set(s => ({ toasts: s.toasts.filter(t => t.id !== id) }));

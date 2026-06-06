@@ -1,16 +1,20 @@
-import { useEffect } from 'react';
+import { useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from './store/useStore';
 import { ThemeProvider, ThemeWatermarks } from './themes/ThemeProvider';
 import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { ToastStack } from './components/Toast';
+import { Onboarding } from './components/Onboarding';
 import { TasksPage } from './pages/Tasks';
 // v0.8.6: AddTaskPage больше не подключается — заменена на NewTaskModal
-import { DashboardPage } from './pages/Dashboard';
-import { StatsPage } from './pages/Stats';
-import { SettingsPage } from './pages/Settings';
-import { HelpPage } from './pages/Help';
+// v0.8.12 (п. 24 code splitting): второстепенные вкладки грузим лениво —
+// тяжёлые зависимости (recharts, xlsx, papaparse) уезжают в отдельные чанки
+// и первая загрузка приложения становится заметно быстрее.
+const DashboardPage = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.DashboardPage })));
+const StatsPage = lazy(() => import('./pages/Stats').then(m => ({ default: m.StatsPage })));
+const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })));
+const HelpPage = lazy(() => import('./pages/Help').then(m => ({ default: m.HelpPage })));
 
 function App() {
   const ready = useStore(s => s.ready);
@@ -48,22 +52,31 @@ function App() {
               <strong>Ошибка инициализации БД:</strong> {initError}. Попробуйте Настройки → Хранилище → «Стереть все данные» или удалите файл %APPDATA%\TaskFlow\data.db.
             </div>
           )}
-          <Routes>
-            <Route path="/" element={<Navigate to={`/${defaultTab}`} replace />} />
-            <Route path="/tasks" element={<TasksPage />} />
-            {/* v0.8.6: старый путь /add редиректит на /tasks — бывшие bookmark не приводят к 404 */}
-            <Route path="/add" element={<Navigate to="/tasks" replace />} />
-            <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/stats" element={statsEnabled ? <StatsPage /> : <Navigate to="/tasks" replace />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/help" element={<HelpPage />} />
-            <Route path="*" element={<Navigate to={`/${defaultTab}`} replace />} />
-          </Routes>
+          <Suspense fallback={<PageFallback />}>
+            <Routes>
+              <Route path="/" element={<Navigate to={`/${defaultTab}`} replace />} />
+              <Route path="/tasks" element={<TasksPage />} />
+              {/* v0.8.6: старый путь /add редиректит на /tasks — бывшие bookmark не приводят к 404 */}
+              <Route path="/add" element={<Navigate to="/tasks" replace />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/stats" element={statsEnabled ? <StatsPage /> : <Navigate to="/tasks" replace />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/help" element={<HelpPage />} />
+              <Route path="*" element={<Navigate to={`/${defaultTab}`} replace />} />
+            </Routes>
+          </Suspense>
         </main>
         <ToastStack />
+        <Onboarding />
       </div>
     </ThemeProvider>
   );
+}
+
+/** v0.8.12: лёгкий fallback для Suspense — виден на миллисекунды при первом
+ * входе в ленивые вкладки. Намеренно без спиннера — не мелькает при быстрых переходах. */
+function PageFallback() {
+  return <div className="flex-1" />;
 }
 
 function RouteTopbar() {
