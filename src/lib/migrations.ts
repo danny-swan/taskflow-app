@@ -112,6 +112,45 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 3,
+    description: 'Меняем порядок «В процессе» и «Взять в работу» в сидовых статусах',
+    up: async ({ select, exec }) => {
+      // v0.9.0: «В процессе» должен идти ПЕРЕД «Взять в работу».
+      //
+      // КОНСЕРВАТИВНОСТЬ: меняем порядок ТОЛЬКО если оба статуса
+      // найдены по своим сидовым именам (если пользователь переименовал их —
+      // оставляем как есть, не ломаем его кастомный порядок).
+      //
+      // Меняем порядок только если «Взять в работу» сейчас выше «В процессе»
+      // (меньший sort_order). Иначе пользователь уже сам поменял — не трогаем.
+      try {
+        const taking = await select<{ id: number; sort_order: number }>(
+          `SELECT id, sort_order FROM statuses WHERE name='Взять в работу' LIMIT 1`
+        );
+        const inProgress = await select<{ id: number; sort_order: number }>(
+          `SELECT id, sort_order FROM statuses WHERE name='В процессе' LIMIT 1`
+        );
+        if (taking[0] && inProgress[0]) {
+          const takingOrder = Number(taking[0].sort_order ?? 0);
+          const inProgressOrder = Number(inProgress[0].sort_order ?? 0);
+          if (takingOrder < inProgressOrder) {
+            // Свопаем sort_order. Обходим UNIQUE-конфликт (если вдруг есть
+            // такой констрейнт) через временное большое значение.
+            await exec(`UPDATE statuses SET sort_order = -1 WHERE id = ?`, [taking[0].id]);
+            await exec(`UPDATE statuses SET sort_order = ? WHERE id = ?`, [
+              takingOrder, inProgress[0].id,
+            ]);
+            await exec(`UPDATE statuses SET sort_order = ? WHERE id = ?`, [
+              inProgressOrder, taking[0].id,
+            ]);
+          }
+        }
+      } catch (e) {
+        console.warn('[migrate v3] swap order skipped:', e);
+      }
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */

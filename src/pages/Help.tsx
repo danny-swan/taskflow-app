@@ -56,7 +56,13 @@ const sectionsRu: HelpSection[] = [
       },
       {
         q: 'Как удалить или завершить задачу?',
-        a: 'Чтобы пометить задачу выполненной — нажмите кнопку-галочку (✓) на карточке: задача уйдёт в секцию «Выполнено». Чтобы полностью удалить — откройте карточку и нажмите «Удалить» внизу слева. Задача удаляется безвозвратно, поэтому, если нужно «спрятать» задачу с возможностью вернуть — используйте «Выполнено».',
+        a: (
+          <>
+            <p>Чтобы пометить задачу выполненной — нажмите кнопку-галочку (✓) на карточке: задача уйдёт в секцию «Выполнено». Чтобы удалить задачу — нажмите корзину (🗑) на карточке или кнопку «Удалить» внизу модалки.</p>
+            <p className="mt-2"><strong>Удалённые задачи можно восстановить.</strong> Откройте вкладку  <strong>Статистика</strong>  → раздел «Удалённые» — там лежат все удалённые задачи с кнопкой «Восстановить».</p>
+            <p className="mt-2"><strong>Безвозвратное удаление</strong> происходит только внутри вкладки Статистика: если удалить задачу там же, она исчезнет окончательно и вернуть её уже нельзя.</p>
+          </>
+        ),
       },
       {
         q: 'Что такое эмодзи-пикер в полях задачи? (v0.8.8)',
@@ -269,66 +275,9 @@ const sectionsRu: HelpSection[] = [
       },
     ],
   },
-  {
-    title: '✨ Что нового в 0.8.13',
-    items: [
-      {
-        q: 'Чекбоксы в комментариях задач',
-        a: (
-          <>
-            <p>В комментарии задачи теперь работает markdown-синтаксис чекбоксов. Напишите строку <code>- [ ] что-то сделать</code> — и при просмотре карточки она превратится в кликабельный чекбокс. Клик переключает <code>[ ]</code> ↔ <code>[x]</code> прямо в карточке, без открытия модалки.</p>
-            <p className="mt-2">На карточке задачи появляется маленький индикатор прогресса в формате <code>2/5</code> (выполнено / всего). Когда все пункты отмечены, индикатор подсвечивается зелёным.</p>
-            <p className="mt-2">Поддерживаются также <code>- [x]</code>, <code>* [ ]</code>, отступы. Остальной текст рендерится как обычный многострочный комментарий.</p>
-          </>
-        ),
-      },
-      {
-        q: 'Шаблоны задач',
-        a: (
-          <>
-            <p>В разделе Настройки → Шаблоны задач можно создавать готовые заготовки: имя шаблона, заголовок задачи и комментарий (где удобно держать заранее подготовленные чекбоксы).</p>
-            <p className="mt-2"><strong>Создать задачу из шаблона:</strong> на вкладке «Задачи» рядом с кнопкой «+ Новая задача» появится стрелочка ▾ — она открывает меню со списком шаблонов. Выберите шаблон — новая задача сразу создастся с заполненным заголовком и комментарием.</p>
-            <p className="mt-2"><strong>Сохранить как шаблон:</strong> в модалке задачи (при создании или редактировании) внизу есть кнопка «Сохранить как шаблон» — она запоминает текущий заголовок, комментарий, статус и тэг под новым именем.</p>
-            <p className="mt-2">Один шаблон создаётся автоматически при первом запуске обновлённой версии — его можно отредактировать или удалить.</p>
-          </>
-        ),
-      },
-      {
-        q: 'Уведомления теперь снизу',
-        a: 'Тосты (всплывающие уведомления о действиях — удаление, отмена, сохранение и т.п.) переехали из верхней-правой части окна в нижний центр. Это ближе к глазам, когда вы работаете с карточками, и не перекрывает заголовок с горячими клавишами.',
-      },
-      {
-        q: 'Шаблоны попадают в бэкап?',
-        a: 'Да. При экспорте JSON-бэкапа (Настройки → Резервное копирование) шаблоны добавляются автоматически — отдельной галочки не нужно. При импорте старых бэкапов (без шаблонов) ничего не сломается: просто не будет импортированных шаблонов.',
-      },
-    ],
-  },
-  {
-    title: '✨ Что нового в 0.8.14',
-    items: [
-      {
-        q: 'Кнопки вставки чекбоксов в комментарии',
-        a: (
-          <>
-            <p>В модалке задачи над полем «Комментарий» появилась панель с тремя кнопками: <code>☐ Чекбокс</code>, <code>☑ Готово</code>, <code>• Список</code>. Клик вставляет нужную разметку (<code>- [ ] </code>, <code>- [x] </code>, <code>- </code>) — больше не нужно переключать язык и набирать всё вручную.</p>
-            <p className="mt-2">Если выделить несколько строк и нажать кнопку — префикс добавится к каждой непустой строке.</p>
-          </>
-        ),
-      },
-      {
-        q: 'Шаблоны задач — отдельная вкладка',
-        a: '«Шаблоны задач» переехали из вкладки «Хранилище» в отдельный раздел Настроек (над «Экспорт/Импорт») — их проще найти.',
-      },
-      {
-        q: 'Исправления шаблонов',
-        a: 'Сидовый шаблон «Чек-лист» теперь создаётся и при обновлении с предыдущих версий (не только при чистой установке), и устойчив к переименованию статусов. Кнопка «Сохранить как шаблон» и создание вручную тоже работают корректно.',
-      },
-      {
-        q: 'Собственная модалка «Введите»',
-        a: 'Раньше при «Сохранить как шаблон» появлялся системный диалог с надписью «Сообщение с tauri.localhost» — выглядело странно. Теперь используется собственная модалка в стиле приложения.',
-      },
-    ],
-  },
+  // v0.9.0: секции «Что нового в 0.8.13/0.8.14» убраны — вся история версий
+  // живёт в Настройки → О приложении (экран changelog), а в Help остаётся
+  // блок WhatsNewSection, который берёт последний релиз из CHANGELOG[0].
 ];
 
 // ─── EN ──────────────────────────────────────────────────────────────────────
@@ -377,7 +326,13 @@ const sectionsEn: HelpSection[] = [
       },
       {
         q: 'How do I complete or delete a task?',
-        a: 'To mark a task as completed, click the checkmark (✓) button on the card — the task moves to the "Done" section. To delete it for good, open the card and click "Delete" at the bottom left. Deletion is permanent, so if you just want to "hide" a task while keeping the ability to bring it back — use "Done".',
+        a: (
+          <>
+            <p>To mark a task as completed, click the checkmark (✓) button on the card — the task moves to the “Done” section. To delete a task, click the trash icon (🗑) on the card or the “Delete” button at the bottom of the modal.</p>
+            <p className="mt-2"><strong>Deleted tasks can be restored.</strong> Open the  <strong>Statistics</strong>  tab → “Deleted” section — every deleted task lives there with a “Restore” button.</p>
+            <p className="mt-2"><strong>Permanent deletion</strong> only happens inside the Statistics tab: if you delete a task from there, it’s gone for good and can’t be brought back.</p>
+          </>
+        ),
       },
       {
         q: 'What is the emoji picker in task fields? (v0.8.8)',
@@ -590,66 +545,9 @@ const sectionsEn: HelpSection[] = [
       },
     ],
   },
-  {
-    title: '✨ What\'s New in 0.8.13',
-    items: [
-      {
-        q: 'Checkboxes in task comments',
-        a: (
-          <>
-            <p>Task comments now support markdown checkbox syntax. Write a line like <code>- [ ] do something</code> and it will render as a clickable checkbox in the card view. Clicking toggles <code>[ ]</code> ↔ <code>[x]</code> right in the card, without opening the modal.</p>
-            <p className="mt-2">A small progress badge in the format <code>2/5</code> (done / total) appears on the task card. When all items are checked, the badge turns green.</p>
-            <p className="mt-2">Also supported: <code>- [x]</code>, <code>* [ ]</code>, and indentation. The remaining text renders as a regular multi-line comment.</p>
-          </>
-        ),
-      },
-      {
-        q: 'Task templates',
-        a: (
-          <>
-            <p>In Settings → Task templates you can create ready-made presets: a template name, the task title, and the comment (a good place to keep pre-filled checkboxes).</p>
-            <p className="mt-2"><strong>Create a task from a template:</strong> on the Tasks tab, next to the “+ New task” button you’ll see a small ▾ arrow that opens a menu of templates. Pick one — a new task is created immediately with the title and comment pre-filled.</p>
-            <p className="mt-2"><strong>Save as template:</strong> in the task modal (when creating or editing) there’s a “Save as template” button at the bottom — it stores the current title, comment, status, and tag under a new name.</p>
-            <p className="mt-2">One template is created automatically on first launch of the updated version — you can edit or delete it.</p>
-          </>
-        ),
-      },
-      {
-        q: 'Toasts moved to the bottom',
-        a: 'Toasts (the popup notifications for actions like delete, undo, save, etc.) moved from the top-right corner to the bottom-center. It’s closer to where you work with the cards, and it no longer overlaps the topbar.',
-      },
-      {
-        q: 'Are templates included in backups?',
-        a: 'Yes. When you export a JSON backup (Settings → Backup), templates are added automatically — no separate checkbox needed. Importing older backups (without templates) works fine: there just won’t be any templates to import.',
-      },
-    ],
-  },
-  {
-    title: '✨ What\'s New in 0.8.14',
-    items: [
-      {
-        q: 'Checkbox insert buttons in comments',
-        a: (
-          <>
-            <p>A small toolbar above the “Comment” field in the task modal now has three buttons: <code>☐ Checkbox</code>, <code>☑ Done</code>, <code>• List</code>. Clicking inserts the right markdown (<code>- [ ] </code>, <code>- [x] </code>, <code>- </code>) — no more switching keyboard layouts and typing it by hand.</p>
-            <p className="mt-2">If you select several lines first, the prefix is added to every non-empty line.</p>
-          </>
-        ),
-      },
-      {
-        q: 'Task templates — own tab',
-        a: '“Task templates” moved out of the “Storage” tab into a dedicated Settings tab (above “Export/Import”) — easier to find.',
-      },
-      {
-        q: 'Template fixes',
-        a: 'The seed “Checklist” template is now created on upgrades from older versions too (not only on a fresh install) and is resilient to renamed statuses. “Save as template” and manual creation also work reliably now.',
-      },
-      {
-        q: 'Custom “Enter” prompt',
-        a: 'Previously “Save as template” opened the system prompt labeled “Message from tauri.localhost” — looked weird. It is now a styled, in-app modal that matches the rest of the UI.',
-      },
-    ],
-  },
+  // v0.9.0: "What's New in 0.8.13/0.8.14" sections removed — release history
+  // now lives in Settings → About (changelog screen). Help keeps the
+  // WhatsNewSection block, which renders the latest CHANGELOG[0] entry.
 ];
 
 /** "What's New" — generated from CHANGELOG[0]. */

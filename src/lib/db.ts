@@ -173,11 +173,13 @@ async function tauriIsEmpty(): Promise<boolean> {
 async function tauriSeed(): Promise<void> {
   const d = await getTauriDb();
   const now = new Date().toISOString();
+  // v0.9.0: «В процессе» теперь идёт ПЕРЕД «Взять в работу» — это активный статус,
+  // ему логично быть выше в списке.
   const statuses = [
     { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
     // Технический статус «Удалено» — создаём сразу, чтобы работало удаление.
@@ -349,11 +351,12 @@ function migrate(d: Database) {
 function seed(d: Database) {
   const now = new Date().toISOString();
   // v0.8.2: hidden and default_collapsed per status
+  // v0.9.0: «В процессе» теперь идёт ПЕРЕД «Взять в работу»
   const statuses = [
     { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
     // Технический статус «Удалено» — скрыт в списке задач и в топбаре (hidden=1).

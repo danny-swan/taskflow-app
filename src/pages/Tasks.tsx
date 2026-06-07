@@ -6,7 +6,9 @@ import { TaskModal } from '../components/TaskModal';
 import { NewTaskModal } from '../components/NewTaskModal';
 import {
   Search, Filter, ChevronsDownUp, ChevronsUpDown, ChevronDown, FileText,
+  List, LayoutGrid,
 } from 'lucide-react';
+import { KanbanBoard } from '../components/KanbanBoard';
 import { useNavigate } from 'react-router-dom';
 import {
   DndContext, closestCorners, PointerSensor, useSensor, useSensors,
@@ -32,6 +34,8 @@ export function TasksPage() {
   const pushToast = useStore(s => s.pushToast);
   const taskTemplates = useStore(s => s.taskTemplates);
   const createTaskFromTemplate = useStore(s => s.createTaskFromTemplate);
+  const tasksView = useStore(s => s.tasksView);
+  const setTasksView = useStore(s => s.setTasksView);
 
   const techIds = useMemo(() => new Set(allStatuses.filter(s => s.is_technical === 1).map(s => s.id)), [allStatuses]);
 
@@ -112,9 +116,10 @@ export function TasksPage() {
 
   const filterActive = !!query || tagFilter != null || statusFilter != null;
 
-  const grouped = useMemo(() => {
+  // v0.9.0: вынесли фильтрацию в отдельный useMemo — и Список, и Канбан работают с одними и теми же задачами.
+  const filtered = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
-    const filtered = tasks.filter(t => {
+    return tasks.filter(t => {
       if (query && !(t.title.toLowerCase().includes(query.toLowerCase()) ||
         (t.comment || '').toLowerCase().includes(query.toLowerCase()))) return false;
       if (tagFilter && t.tag_id !== tagFilter) return false;
@@ -134,11 +139,14 @@ export function TasksPage() {
       if (statusFilter === 'done' && !archiveStatusIds.has(t.status_id)) return false;
       return true;
     });
+  }, [tasks, query, tagFilter, statusFilter, archiveStatusIds, pausedStatusIds]);
+
+  const grouped = useMemo(() => {
     return statuses.map(s => ({
       status: s,
       tasks: filtered.filter(t => t.status_id === s.id).sort((a, b) => a.sort_order - b.sort_order),
     }));
-  }, [tasks, statuses, query, tagFilter, statusFilter, archiveStatusIds, pausedStatusIds]);
+  }, [filtered, statuses]);
 
   const effectiveCollapsed = useMemo(() => {
     const eff: Record<number, boolean> = {};
@@ -286,16 +294,57 @@ export function TasksPage() {
               ))}
             </div>
           </div>
-          {/* Fixed right: collapse-all + new-task */}
+          {/* Fixed right: view-toggle + collapse-all + new-task */}
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={toggleAll}
-              title={allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
+            {/* v0.9.0: переключатель Список / Канбан */}
+            <div
+              className="flex items-center bg-surface-alt rounded-md p-0.5 border border-border-soft"
+              role="tablist"
+              aria-label={lang === 'ru' ? 'Режим просмотра' : 'View mode'}
             >
-              {allCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}
-              <span>{allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}</span>
-            </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tasksView === 'list'}
+                onClick={() => setTasksView('list')}
+                title={lang === 'ru' ? 'Список' : 'List'}
+                className={
+                  'flex items-center gap-1 px-2 py-1 text-[12px] rounded-[5px] transition-colors ' +
+                  (tasksView === 'list'
+                    ? 'bg-surface text-text shadow-sm'
+                    : 'text-muted hover:text-text')
+                }
+              >
+                <List size={13} />
+                <span>{lang === 'ru' ? 'Список' : 'List'}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tasksView === 'kanban'}
+                onClick={() => setTasksView('kanban')}
+                title={lang === 'ru' ? 'Канбан' : 'Kanban'}
+                className={
+                  'flex items-center gap-1 px-2 py-1 text-[12px] rounded-[5px] transition-colors ' +
+                  (tasksView === 'kanban'
+                    ? 'bg-surface text-text shadow-sm'
+                    : 'text-muted hover:text-text')
+                }
+              >
+                <LayoutGrid size={13} />
+                <span>{lang === 'ru' ? 'Канбан' : 'Kanban'}</span>
+              </button>
+            </div>
+            {tasksView === 'list' && (
+              <button
+                onClick={toggleAll}
+                title={allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
+              >
+                {allCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}
+                <span>{allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}</span>
+              </button>
+            )}
             {/* v0.8.13: split-кнопка «+ Новая задача» │ ▾. Основная часть
                 открывает пустую модалку (поведение как раньше), стрелка — меню со списком
                 шаблонов. Если шаблонов нет — меню прячется, остаётся обычная кнопка. */}
@@ -363,36 +412,45 @@ export function TasksPage() {
         </div>
       </div>
 
-      {/* Scrollable task list */}
-      <div className="flex-1 overflow-y-auto px-6 pb-8 pt-2">
-        {grouped.every(g => g.tasks.length === 0) && (
-          <div className="text-center text-muted text-[13px] py-12">{tr(lang, 'no_tasks')}</div>
-        )}
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCorners}
-          onDragStart={onDragStart}
-          onDragEnd={onDragEnd}
-        >
-          {grouped.map(g => (
-            <StatusGroup
-              key={g.status.id}
-              status={g.status}
-              tasks={g.tasks}
-              onOpenTask={setOpenTask}
-              open={!effectiveCollapsed[g.status.id]}
-              onToggle={() => toggleOne(g.status.id)}
-            />
-          ))}
-          <DragOverlay dropAnimation={null}>
-            {draggedTask ? (
-              <div className="bg-surface border border-accent rounded-lg px-4 py-2.5 shadow-lg opacity-90 text-[13.5px] font-semibold">
-                {draggedTask.title}
-              </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
-      </div>
+      {/* Scrollable task list (Список) или Канбан */}
+      {tasksView === 'list' && (
+        <div className="flex-1 overflow-y-auto px-6 pb-8 pt-2">
+          {grouped.every(g => g.tasks.length === 0) && (
+            <div className="text-center text-muted text-[13px] py-12">{tr(lang, 'no_tasks')}</div>
+          )}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCorners}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+          >
+            {grouped.map(g => (
+              <StatusGroup
+                key={g.status.id}
+                status={g.status}
+                tasks={g.tasks}
+                onOpenTask={setOpenTask}
+                open={!effectiveCollapsed[g.status.id]}
+                onToggle={() => toggleOne(g.status.id)}
+              />
+            ))}
+            <DragOverlay dropAnimation={null}>
+              {draggedTask ? (
+                <div className="bg-surface border border-accent rounded-lg px-4 py-2.5 shadow-lg opacity-90 text-[13.5px] font-semibold">
+                  {draggedTask.title}
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
+        </div>
+      )}
+      {tasksView === 'kanban' && (
+        <KanbanBoard
+          tasks={filtered}
+          statuses={statuses}
+          onOpenTask={setOpenTask}
+        />
+      )}
 
       <TaskModal task={openTask} onClose={() => setOpenTask(null)} />
       <NewTaskModal open={newTaskOpen} onClose={() => setNewTaskOpen(false)} />
