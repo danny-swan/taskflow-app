@@ -13,6 +13,28 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.0',
+    date: '2026-06-07',
+    items: {
+      ru: [
+        'Новинка: канбан-вид страницы «Задачи». В шапке появился переключатель «Список / Канбан». Режим запоминается.',
+        'Канбан: колонки по видимым статусам, горизонтальный скрол, каждая колонка скроллится по вертикали независимо. В хедере колонки — цветная точка, название и счётчик задач.',
+        'Канбан-карточка: боковая полоска цвета статуса, название (до 2 строк), сжатый комментарий на 1–3 строки (или прогресс чек-листа), теги, и футер с дедлайном и иконками перетаскивания / «✓» / «🗑». Клик по карточке по-прежнему открывает модалку.',
+        'Drag-and-drop в канбане: перетаскивание внутри колонки меняет порядок, между колонками — статус (с тостом «Отменить» при переносе в «Выполнено»).',
+        'По умолчанию поменяли порядок статусов: теперь «В процессе» идёт перед «Взять в работу». Миграция выполняет перестановку только если вы вручную не меняли эти статусы.',
+        'Справка: раздел «Как удалить или завершить задачу» переписан — теперь чётко объяснено, что удалённые задачи восстанавливаются в Статистике, а безвозвратное удаление происходит только внутри Статистики. Убраны дубли «Что нового в 0.8.13/0.8.14» из Help.',
+      ],
+      en: [
+        'New: kanban view on the Tasks page. A “List / Kanban” toggle is now in the page header. The chosen mode is remembered.',
+        'Kanban: columns by visible statuses, horizontal scroll, each column scrolls vertically independently. Column header shows the status colour dot, name and task count.',
+        'Kanban card: a coloured side bar for the status, title (up to 2 lines), a compact comment of 1–3 lines (or checklist progress), tags, and a footer with the deadline and drag / “✓” / “🗑” icons. Clicking the card body still opens the task modal.',
+        'Kanban drag-and-drop: dragging within a column reorders tasks, dragging between columns changes the status (with an “Undo” toast when dropped into “Done”).',
+        'Default status order changed: “In progress” now comes before “Take into work”. The migration swaps them only if you haven’t reordered those statuses yourself.',
+        'Help: “How do I complete or delete a task?” rewritten — it now clearly explains that deleted tasks are restorable from the Statistics tab, and only Statistics-delete is permanent. Duplicate “What’s New in 0.8.13/0.8.14” sections removed from Help.',
+      ],
+    },
+  },
+  {
     version: '0.8.17',
     date: '2026-06-06',
     items: {

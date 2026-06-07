@@ -70,6 +70,7 @@ interface State {
   taskStatusFilter: string | null; // for metric chips: 'total' | 'inprogress' | 'paused' | 'done' | null
   recentEmojis: string[];          // v0.8.8: недавние эмодзи для пикера (макс. 12)
   taskTemplates: TaskTemplate[];   // v0.8.13: пользовательские шаблоны задач
+  tasksView: 'list' | 'kanban';    // v0.9.0: вид страницы Задачи — список или канбан-доска
 
   // Derived helpers
   getDeletedStatusId(): number | undefined;
@@ -85,6 +86,7 @@ interface State {
   setStatsEnabled(v: boolean): void;
   setFontSize(n: number): void;
   setDefaultTab(t: string): void;
+  setTasksView(v: 'list' | 'kanban'): void;
 
   addTask(p: Partial<Task>): number;
   updateTask(id: number, p: Partial<Task>): void;
@@ -139,6 +141,7 @@ export const useStore = create<State>((set, get) => ({
   taskStatusFilter: null,
   recentEmojis: [],
   taskTemplates: [],
+  tasksView: 'list',
 
   getDeletedStatusId() {
     return get().statuses.find(s => s.is_technical === 1 && s.name === 'Удалено')?.id;
@@ -193,6 +196,8 @@ export const useStore = create<State>((set, get) => ({
       fontSize: parseInt(map.font_size || '14', 10),
       // v0.8.6: вкладка «add» больше не существует — падаем на 'tasks' для старых настроек
       defaultTab: (map.default_tab === 'add' || !map.default_tab) ? 'tasks' : map.default_tab,
+      // v0.9.0: вид страницы Задачи — список по умолчанию
+      tasksView: (map.tasks_view === 'kanban' ? 'kanban' : 'list') as 'list' | 'kanban',
       quote,
       columnWidths,
       recentEmojis,
@@ -249,6 +254,10 @@ export const useStore = create<State>((set, get) => ({
   setDefaultTab(t) {
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['default_tab', t]);
     set({ defaultTab: t });
+  },
+  setTasksView(v) {
+    db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['tasks_view', v]);
+    set({ tasksView: v });
   },
 
   addTask(p) {

@@ -343,7 +343,7 @@ export function TaskCard({
   );
 }
 
-function DeadlineBadge({ deadline, isDone }: { deadline: string | null; isDone: boolean }) {
+export function DeadlineBadge({ deadline, isDone }: { deadline: string | null; isDone: boolean }) {
   const lang = useStore(s => s.language);
   if (!deadline || isDone) return null;
   const today = todayISO();
