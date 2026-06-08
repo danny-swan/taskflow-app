@@ -213,7 +213,7 @@ PolyForm Noncommercial 1.0.0 — см. [LICENSE](LICENSE). Разрешено и
 
 **Local-first Kanban task manager for Windows. No cloud, no accounts, no subscriptions.**
 
-[Download v0.8.12](https://github.com/danny-swan/taskflow-app/releases/latest) · [Features](#-features) · [Installation](#-installation-1) · [Upgrading](#-upgrading-without-data-loss)
+[Download the latest version](https://github.com/danny-swan/taskflow-app/releases/latest) · [Features](#-features) · [Installation](#-installation-1) · [Upgrading](#-upgrading-without-data-loss)
 
 ---
 
