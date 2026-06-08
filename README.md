@@ -4,7 +4,7 @@
 
 **Локальный канбан-менеджер задач для Windows**
 
-[Скачать v0.8.17](https://github.com/danny-swan/taskflow-app/releases/latest) · [Возможности](#-возможности) · [Установка](#-установка) · [English](#english) · [Обновление](#-обновление-и-сохранность-данных)
+[Скачать последнюю версию](https://github.com/danny-swan/taskflow-app/releases/latest) · [Возможности](#-возможности) · [Установка](#-установка) · [English](#english) · [Обновление](#-обновление-и-сохранность-данных)
 
 [![Latest release](https://img.shields.io/github/v/release/danny-swan/taskflow-app?label=release&color=blue)](https://github.com/danny-swan/taskflow-app/releases/latest)
 [![Build](https://img.shields.io/github/actions/workflow/status/danny-swan/taskflow-app/build.yml?branch=main)](https://github.com/danny-swan/taskflow-app/actions/workflows/build.yml)
