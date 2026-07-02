@@ -3,7 +3,7 @@ import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import {
   ListChecks, Plus, LayoutDashboard, BarChart3, Settings, HelpCircle,
-  Sun, Moon, Sparkles, Leaf, ChevronDown,
+  Sun, Moon, Sparkles, Leaf, ChevronDown, CalendarDays,
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 
@@ -17,6 +17,7 @@ export function Sidebar() {
   // v0.8.6: «Добавить» убран из сайдбара — теперь всё через модалку «+ Новая задача» на вкладке Оадачи
   const items = [
     { to: '/tasks', label: tr(lang, 'nav_tasks'), icon: ListChecks, key: 'tasks' },
+    { to: '/calendar', label: tr(lang, 'nav_calendar'), icon: CalendarDays, key: 'calendar' },
     { to: '/dashboard', label: tr(lang, 'nav_dashboard'), icon: LayoutDashboard, key: 'dashboard' },
     { to: '/stats', label: tr(lang, 'nav_stats'), icon: BarChart3, key: 'stats', hidden: !statsEnabled },
     { to: '/settings', label: tr(lang, 'nav_settings'), icon: Settings, key: 'settings' },

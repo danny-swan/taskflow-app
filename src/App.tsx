@@ -18,6 +18,7 @@ import { TasksPage } from './pages/Tasks';
 // тяжёлые зависимости (recharts, xlsx, papaparse) уезжают в отдельные чанки
 // и первая загрузка приложения становится заметно быстрее.
 const DashboardPage = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.DashboardPage })));
+const CalendarPage = lazy(() => import('./pages/Calendar').then(m => ({ default: m.CalendarPage })));
 const StatsPage = lazy(() => import('./pages/Stats').then(m => ({ default: m.StatsPage })));
 const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })));
 const HelpPage = lazy(() => import('./pages/Help').then(m => ({ default: m.HelpPage })));
@@ -69,6 +70,7 @@ function App() {
               <Route path="/tasks" element={<TasksPage />} />
               {/* v0.8.6: старый путь /add редиректит на /tasks — бывшие bookmark не приводят к 404 */}
               <Route path="/add" element={<Navigate to="/tasks" replace />} />
+              <Route path="/calendar" element={<CalendarPage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/stats" element={statsEnabled ? <StatsPage /> : <Navigate to="/tasks" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
@@ -104,9 +106,10 @@ function KeyboardShortcuts() {
       if (t?.tagName?.match(/INPUT|TEXTAREA|SELECT/) || t?.isContentEditable) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // v0.8.6: прямая цифровая навигация пересобрана — без /add
+      // v0.9.4: в горячие клавиши добавлена новая вкладка «Календарь» (2), остальные сдвинуты.
       const map: Record<string, string> = {
-        '1': '/tasks', '2': '/dashboard', '3': '/stats',
-        '4': '/settings', '5': '/help',
+        '1': '/tasks', '2': '/calendar', '3': '/dashboard',
+        '4': '/stats', '5': '/settings', '6': '/help',
       };
       if (map[e.key]) { e.preventDefault(); navigate(map[e.key]); }
     };
