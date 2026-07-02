@@ -151,6 +151,40 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 4,
+    description: 'Таблица overdue_events (история пересечений дедлайна) + settings.overdue_mode',
+    up: async ({ exec }) => {
+      // v0.9.2 (№3): история пересечений дедлайна — каждое первое пересечение
+      // фиксируется как отдельное событие. Если дедлайн сдвинули вперёд и задача
+      // опять просрочилась — это новое событие.
+      //
+      // deadline_snapshot хранит какой дедлайн был на момент события
+      // — это позволяет отличить «таже задача, тот же дедлайн, уже было
+      // событие» (дубликат) от «новый дедлайн, нужно новое событие».
+      //
+      // Без бэкфилла: история начинается с даты установки v0.9.2 —
+      // таким образом, ceiling в верхней точке — честный счётчик с этого момента.
+      await exec(`
+        CREATE TABLE IF NOT EXISTS overdue_events (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id           INTEGER NOT NULL,
+          deadline_snapshot TEXT    NOT NULL,
+          event_date        TEXT    NOT NULL,
+          created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      // Индекс для быстрого чтения на дашборде: COUNT(*) GROUP BY event_date.
+      await exec(`CREATE INDEX IF NOT EXISTS idx_overdue_events_date ON overdue_events(event_date)`);
+      // Индекс для детектора: last событие по task_id.
+      await exec(`CREATE INDEX IF NOT EXISTS idx_overdue_events_task ON overdue_events(task_id, id DESC)`);
+
+      // Настройка «Считать просрочку»: 'calendar' (по-умолчанию) | 'business'.
+      // Запись создаём только если её ещё нет, чтобы не перетирать
+      // пользовательское значение при ретри-миграции.
+      await exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('overdue_mode', 'calendar')`);
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */

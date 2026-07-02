@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.2',
+    date: '2026-07-02',
+    items: {
+      ru: [
+        'Настройки → Общие: новый переключатель «Считать просрочку»: Календарные дни (как было раньше) или Рабочие дни (Пн–Пт, без праздников). Влияет на «Просрочено N дн.», «Дней осталось N» на карточках и чип «Внимание» в шапке Задач.',
+        'График «Активность»: серия «Просрочено» теперь показывает историю пересечений дедлайна, а не только текущее состояние. Каждый раз, когда задача впервые стала просроченной, фиксируется событие — если потом сдвинули дедлайн вперёд и она снова просрочилась, это новое событие. История накапливается с момента обновления до 0.9.2 (без бэкфилла старых задач).',
+        'Канбан: при перетаскивании карточки между колонками теперь показывается плейсхолдер — пунктирная рамка цвета акцента в той позиции, куда встанет карточка. Раньше подсветка была только при движении внутри одной колонки.',
+        'Миграция БД v4: добавлена служебная таблица overdue_events для истории пересечений дедлайна; в settings добавлен ключ overdue_mode.',
+      ],
+      en: [
+        'Settings → General: new “Overdue counting” toggle — Calendar days (the previous behaviour) or Business days (Mon–Fri, holidays are not tracked). Affects “Overdue N d” and “N days left” on cards, plus the “Attention” chip in the Tasks header.',
+        'Activity chart: the “Overdue” series now shows the history of deadline crossings instead of the current snapshot. Every time a task first became overdue an event is recorded — if you later moved the deadline forward and it slipped again, that’s a new event. History accumulates from the moment you upgrade to 0.9.2 (no backfill of older overdue tasks).',
+        'Kanban: when dragging a card between columns, a placeholder is now shown — a dashed accent-coloured slot at the target position. Previously the placement highlight only worked inside a single column.',
+        'DB migration v4: added a service table overdue_events for deadline-crossing history; added an overdue_mode key in settings.',
+      ],
+    },
+  },
+  {
     version: '0.9.1',
     date: '2026-07-02',
     items: {

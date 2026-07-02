@@ -4,7 +4,7 @@ import { TagChip } from './TagChip';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { Check, Undo2, Maximize2, Trash2, GripVertical, CheckSquare } from 'lucide-react';
 import { tr } from '../lib/i18n';
-import { todayISO } from '../lib/utils';
+import { todayISO, daysUntilDeadline } from '../lib/utils';
 import { MarkdownComment } from './MarkdownComment';
 import { getCheckboxStats, toggleCheckbox } from '../lib/checkboxes';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -392,12 +392,12 @@ export function TaskCard({
 
 export function DeadlineBadge({ deadline, isDone }: { deadline: string | null; isDone: boolean }) {
   const lang = useStore(s => s.language);
+  const overdueMode = useStore(s => s.overdueMode);
   if (!deadline || isDone) return null;
   const today = todayISO();
-  const t = today.slice(0, 10);
-  const dStart = new Date(t + 'T00:00:00');
-  const dEnd = new Date(deadline + 'T00:00:00');
-  const diff = Math.round((dEnd.getTime() - dStart.getTime()) / 86400000);
+  // v0.9.2 (№1): diff в выбранном режиме счёта (календарные / только будни).
+  // Случай diff===0 («Сегодня») в обоих режимах одинаковый (today === deadline).
+  const diff = daysUntilDeadline(deadline, today, overdueMode);
 
   if (diff === 0) {
     // v0.8.6: сегодня — синий

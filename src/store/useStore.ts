@@ -3,6 +3,8 @@
 import { create } from 'zustand';
 import * as db from '../lib/db';
 import type { Lang } from '../lib/i18n';
+import { detectOverdueEvents, detectOverdueEventForTask } from '../lib/overdue';
+import { todayISO } from '../lib/utils';
 import { pickQuote, quoteSetFor } from '../lib/quotes';
 import { logger } from '../lib/logger';
 
@@ -73,6 +75,8 @@ interface State {
   recentEmojis: string[];          // v0.8.8: недавние эмодзи для пикера (макс. 12)
   taskTemplates: TaskTemplate[];   // v0.8.13: пользовательские шаблоны задач
   tasksView: 'list' | 'kanban';    // v0.9.0: вид страницы Задачи — список или канбан-доска
+  overdueMode: 'calendar' | 'business'; // v0.9.2 (№1): как считать просрочку и остаток дней
+  overdueTick: number;             // v0.9.2 (№3): счётчик обновлений таблицы overdue_events (для перерисовки графика)
 
   // Derived helpers
   getDeletedStatusId(): number | undefined;
@@ -89,6 +93,7 @@ interface State {
   setFontSize(n: number): void;
   setDefaultTab(t: string): void;
   setTasksView(v: 'list' | 'kanban'): void;
+  setOverdueMode(m: 'calendar' | 'business'): void;
 
   addTask(p: Partial<Task>): number;
   updateTask(id: number, p: Partial<Task>): void;
@@ -144,6 +149,8 @@ export const useStore = create<State>((set, get) => ({
   recentEmojis: [],
   taskTemplates: [],
   tasksView: 'list',
+  overdueMode: 'calendar',
+  overdueTick: 0,
 
   getDeletedStatusId() {
     return get().statuses.find(s => s.is_technical === 1 && s.name === 'Удалено')?.id;
@@ -200,6 +207,8 @@ export const useStore = create<State>((set, get) => ({
       defaultTab: (map.default_tab === 'add' || !map.default_tab) ? 'tasks' : map.default_tab,
       // v0.9.0: вид страницы Задачи — список по умолчанию
       tasksView: (map.tasks_view === 'kanban' ? 'kanban' : 'list') as 'list' | 'kanban',
+      // v0.9.2 (№1): режим подсчёта просрочки — календарные дни по умолчанию
+      overdueMode: (map.overdue_mode === 'business' ? 'business' : 'calendar') as 'calendar' | 'business',
       quote,
       columnWidths,
       recentEmojis,
@@ -214,6 +223,19 @@ export const useStore = create<State>((set, get) => ({
         tags: get().tags.length,
         tasks: get().tasks.length,
       });
+    }
+
+    // v0.9.2 (№3): проверяем пересечения дедлайна один раз при старте. Если за время
+    // отсутствия пользователя дедлайн у какой-то задачи пересекся впервые — зафиксируем его.
+    // Не ломаем init если что-то пошло не так: это вторичная аналитика.
+    try {
+      const created = detectOverdueEvents(get().tasks, get().statuses, todayISO());
+      if (created > 0) {
+        console.log(`[overdue] зафиксировано ${created} новых пересечений дедлайна`);
+        set(s => ({ overdueTick: s.overdueTick + 1 }));
+      }
+    } catch (e) {
+      console.warn('[overdue] init-scan failed:', e);
     }
   },
 
@@ -253,6 +275,10 @@ export const useStore = create<State>((set, get) => ({
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['font_size', String(n)]);
     set({ fontSize: n });
   },
+  setOverdueMode(m) {
+    db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['overdue_mode', m]);
+    set({ overdueMode: m });
+  },
   setDefaultTab(t) {
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['default_tab', t]);
     set({ defaultTab: t });
@@ -278,6 +304,15 @@ export const useStore = create<State>((set, get) => ({
        startDate, p.deadline ?? null, finishDate, now, now, order]
     );
     get().refresh();
+
+    // v0.9.2 (№3): если создали задачу с уже прошедшим дедлайном — тоже фиксируем как пересечение.
+    try {
+      const fresh = get().tasks.find(t => t.id === r.lastInsertRowid);
+      if (fresh && detectOverdueEventForTask(fresh, get().statuses, todayISO())) {
+        set(s => ({ overdueTick: s.overdueTick + 1 }));
+      }
+    } catch (e) { console.warn('[overdue] detect after addTask failed:', e); }
+
     return r.lastInsertRowid;
   },
   updateTask(id, p) {
@@ -310,6 +345,17 @@ export const useStore = create<State>((set, get) => ({
     vals.push(now, id);
     db.run(`UPDATE tasks SET ${fields.join(',')} WHERE id=?`, vals);
     get().refresh();
+
+    // v0.9.2 (№3): если изменился дедлайн или статус — перепроверяем пересечение
+    // дедлайна. Сдвинули вперёд и потом опять в прошлое — это новое событие.
+    if (p.deadline !== undefined || p.status_id !== undefined) {
+      try {
+        const fresh = get().tasks.find(t => t.id === id);
+        if (fresh && detectOverdueEventForTask(fresh, get().statuses, todayISO())) {
+          set(s => ({ overdueTick: s.overdueTick + 1 }));
+        }
+      } catch (e) { console.warn('[overdue] detect after updateTask failed:', e); }
+    }
   },
   permanentlyDeleteTask(id) {
     db.run('DELETE FROM tasks WHERE id=?', [id]);
