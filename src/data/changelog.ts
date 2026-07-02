@@ -13,6 +13,32 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.4',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Новая вкладка «Календарь» в левом сайдбаре (между «Задачи» и «Дашборд»). Показывает сетку месяца 7×6 с началом недели с понедельника; при входе открывается текущий месяц.',
+        'Каждая ячейка дня — задачи с этим дедлайном в компактной карточке: цветная точка статуса, название и мини-чип тега. Клик по карточке открывает обычную модалку задачи.',
+        'Панель «Без дедлайна» внизу страницы (докированная, сворачиваемая): показывает активные задачи без дедлайна. Перетащите карточку из панели в любой день — у задачи проставится дедлайн этого дня.',
+        'Drag-and-drop переноса дедлайна: карточку в календаре можно перетащить в другой день — дедлайн обновится. При переходе через «сегодня» подключается уже знакомый детектор просрочки из 0.9.2.',
+        'Визуальные подсказки: выходные (Сб/Вс) — с более тёмным фоном; сегодняшний день — рамка цвета акцента; прошедшие дни с активными задачами — красная рамка (напоминание о просрочке).',
+        'Календарь показывает только рабочие статусы: архивные и технические (например, «Выполнено») в сетке не отображаются и не мешают планированию.',
+        'Навигация: кнопки «‹» / «Сегодня» / «›» + горячая клавиша «2» открывает «Календарь» (клавиши смещены: 1 — Задачи, 2 — Календарь, 3 — Дашборд, 4 — Статистика, 5 — Настройки, 6 — Помощь).',
+        'Настройки → «Вкладка по умолчанию»: в список добавлен «Календарь».',
+      ],
+      en: [
+        'New “Calendar” tab in the left sidebar (between “Tasks” and “Dashboard”). Shows a 7×6 month grid with Monday as the first day of the week; the current month is opened on entry.',
+        'Each day cell shows tasks with that deadline as a compact card: a coloured status dot, the title and a mini tag chip. Clicking a card opens the usual task modal.',
+        'A docked, collapsible “No deadline” panel at the bottom of the page lists active tasks without a deadline. Drag a card from the panel onto any day to assign that day as the deadline.',
+        'Drag-and-drop deadline rescheduling: any card on the calendar can be dragged onto another day to update its deadline. Crossing “today” triggers the overdue detector introduced in 0.9.2.',
+        'Visual hints: weekends (Sat/Sun) use a darker background; today is highlighted with an accent-coloured border; past days that still hold active tasks get a red border as an overdue reminder.',
+        'The calendar shows only working statuses: archived and technical statuses (e.g. “Done”) do not appear in the grid and do not clutter planning.',
+        'Navigation: “‹” / “Today” / “›” buttons plus the “2” hotkey open Calendar (hotkeys shifted: 1 — Tasks, 2 — Calendar, 3 — Dashboard, 4 — Statistics, 5 — Settings, 6 — Help).',
+        'Settings → “Default tab”: “Calendar” added to the list.',
+      ],
+    },
+  },
+  {
     version: '0.9.3',
     date: '2026-07-03',
     items: {

@@ -94,6 +94,7 @@ function GeneralSection() {
         >
           {/* v0.8.6: «Добавить» убрана из вкладок-по-умолчанию */}
           <option value="tasks">{tr(lang, 'nav_tasks')}</option>
+          <option value="calendar">{tr(lang, 'nav_calendar')}</option>
           <option value="dashboard">{tr(lang, 'nav_dashboard')}</option>
           <option value="stats">{tr(lang, 'nav_stats')}</option>
         </select>
