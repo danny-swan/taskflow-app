@@ -151,18 +151,43 @@ export function insertCheckboxLines(
     return { next, caretAt: before.length + transformed.length };
   }
 
-  // Без выделения — вставляем пустый чекбокс.
-  const before = text.slice(0, selStart);
-  const after = text.slice(selStart);
-  // Нужен ли \n перед префиксом?
-  const needsLeadingNL = before.length > 0 && !before.endsWith('\n');
-  const lead = needsLeadingNL ? '\n' : '';
-  // Нужен ли \n после?
-  const needsTrailingNL = after.length > 0 && !after.startsWith('\n');
-  const trail = needsTrailingNL ? '\n' : '';
-  const inserted = lead + prefix + trail;
-  const next = before + inserted + after;
-  // Каретка — в конце prefix (до возможного \n).
-  const caretAt = before.length + lead.length + prefix.length;
+  // Без выделения — вставляем префикс в начало текущей строки,
+  // а не «разрываем» её новыми \n. Это гарантирует, что текст
+  // после курсора (в той же строке) не уедет на новую строку
+  // (v0.9.1: исправление поведения — раньше «Канбан 03/07» превращался в
+  //  «- [ ] \nКанбан 03/07», теперь будет «- [ ] Канбан 03/07»).
+
+  // Ищем начало текущей строки (позиция после последнего \n до selStart).
+  const lineStart = text.lastIndexOf('\n', selStart - 1) + 1;
+  const lineEndIdx = text.indexOf('\n', selStart);
+  const lineEnd = lineEndIdx === -1 ? text.length : lineEndIdx;
+  const currentLine = text.slice(lineStart, lineEnd);
+
+  // Если в строке уже есть префикс чекбокса/списка — не дублируем, просто
+  // оставляем текст как есть, но переключаем вид на требуемый
+  // (checked ↔ unchecked ↔ bullet).
+  const existing = /^([ \t]*)(?:([-*])\s+\[( |x|X)\]\s?|([-*])\s+)/.exec(currentLine);
+  if (existing) {
+    const indent = existing[1] ?? '';
+    // Пересобираем строку — убираем старый префикс, кладём новый.
+    const rest = currentLine.slice(existing[0].length);
+    const rebuilt = indent + prefix + rest;
+    const next = text.slice(0, lineStart) + rebuilt + text.slice(lineEnd);
+    const caretAt = lineStart + indent.length + prefix.length + (selStart - lineStart - existing[0].length > 0 ? (selStart - lineStart - existing[0].length) : 0);
+    return { next, caretAt: Math.min(caretAt, next.length) };
+  }
+
+  // Сохраняем ведущие пробелы/табуляцию строки.
+  const indentMatch = /^[ \t]*/.exec(currentLine);
+  const indent = indentMatch ? indentMatch[0] : '';
+  const lineBodyStart = lineStart + indent.length;
+
+  const next =
+    text.slice(0, lineBodyStart) +
+    prefix +
+    text.slice(lineBodyStart);
+
+  // Каретка — сразу после префикса (в начале текста строки).
+  const caretAt = lineBodyStart + prefix.length;
   return { next, caretAt };
 }

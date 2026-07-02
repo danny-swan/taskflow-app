@@ -3,25 +3,26 @@ import { TagChip } from './TagChip';
 import { MarkdownComment } from './MarkdownComment';
 import { DeadlineBadge } from './TaskCard';
 import { getCheckboxStats, toggleCheckbox } from '../lib/checkboxes';
-import { Check, Undo2, Trash2, GripVertical, CheckSquare } from 'lucide-react';
+import { Check, Undo2, Trash2, GripVertical, CheckSquare, Maximize2 } from 'lucide-react';
 import { tr } from '../lib/i18n';
 import { useState } from 'react';
+import { ConfirmDialog } from './ConfirmDialog';
 
 /**
- * KanbanCard — компактная карточка задачи для канбан-доски (v0.9.0).
+ * KanbanCard — компактная карточка задачи для канбан-доски (v0.9.1).
  *
  * Структура (сверху вниз):
  *   1) Эмодзи + название (line-clamp-2, font-medium)
- *   2) Комментарий (1–3 строки, line-clamp-3, plain text/markdown,
- *      если есть «- [ ]» / «- [x]» — показываем прогресс «☐ 2/5» внизу)
- *   3) Теги (макс. 3 + «+N»)
- *   4) Футер: дедлайн (слева) + действия [⠿][✓][🗑] (справа, hover-visible)
+ *   2) Тег + прогресс чек-листа (одна строка: тег слева, значок «☐ 2/5» справа от него)
+ *   3) Комментарий (1–3 строки, line-clamp-3, plain text/markdown)
+ *   4) Футер: дедлайн (слева) + действия [⛶][⠿][✓][🗑] (справа, hover-visible)
  *
  * Боковая полоска (border-left 3px) окрашена в цвет статуса.
  *
- * Клик по карточке (мимо иконок) открывает существующую TaskModal.
- * Сама сортировка/перенос между колонками обрабатывается родительским
- * <SortableContext> + <DndContext> в KanbanBoard / Tasks.
+ * Клик по карточке НЕ открывает модалку целиком: модалка открывается
+ * только по клику на комментарий или по кнопке-иконке «⛶ Открыть»
+ * в футере (Maximize2). Это позволяет спокойно тянуть карточку за любую
+ * зону, не рискуя случайно открыть модалку.
  */
 export function KanbanCard({
   task,
@@ -45,6 +46,8 @@ export function KanbanCard({
   const tag = tags.find(t => t.id === task.tag_id);
 
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [reopenOpen, setReopenOpen] = useState(false);
+  const [reopenPickId, setReopenPickId] = useState<number | null>(null);
 
   const isDone = status?.behavior === 'archive' && status?.is_technical !== 1;
 
@@ -59,7 +62,7 @@ export function KanbanCard({
 
   const stopBubble = (e: React.SyntheticEvent) => { e.stopPropagation(); };
 
-  const onCardClick = (e: React.MouseEvent) => {
+  const onOpenClick = (e: React.MouseEvent) => {
     if (confirmDelete) return;
     e.stopPropagation();
     onOpenModal();
@@ -68,7 +71,9 @@ export function KanbanCard({
   const onToggleDone = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isDone) {
-      updateTask(task.id, { status_id: reopenStatusId });
+      // v0.9.1 (№9): диалог выбора статуса при возврате из «Выполнено».
+      setReopenPickId(reopenStatusId);
+      setReopenOpen(true);
     } else if (doneStatusId) {
       const prevStatusId = task.status_id;
       const prevFinish = task.finish_date;
@@ -109,20 +114,14 @@ export function KanbanCard({
     setConfirmDelete(false);
   };
 
-  // v0.9.0: эмодзи из начала title рендерим отдельным span (как делает Sidebar/StatusPill),
-  // но title уже может содержать эмодзи внутри текста — здесь просто показываем весь title.
-  // Спецификация говорила «эмодзи + название» — на самом деле эмодзи задаётся пользователем
-  // в начале названия, отдельного поля под эмодзи нет, поэтому просто берём title.
-
   const barColor = status?.color || 'var(--border)';
   const barIsWhite = barColor.toUpperCase() === '#FFFFFF';
 
   return (
     <div
-      onClick={onCardClick}
       className={
         'fade-up group relative bg-surface border border-border-soft hover:border-border rounded-lg ' +
-        'cursor-pointer transition-shadow hover:shadow-sm overflow-hidden ' +
+        'transition-shadow hover:shadow-sm overflow-hidden ' +
         (dragging ? 'opacity-40' : '')
       }
     >
@@ -167,25 +166,7 @@ export function KanbanCard({
           {task.title}
         </div>
 
-        {/* 2) Комментарий — 1..3 строки (line-clamp-3) */}
-        {task.comment && task.comment.trim() && (
-          <div
-            className="mt-1 text-[11.5px] text-muted leading-snug line-clamp-3"
-            onMouseDown={stopBubble}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={stopBubble}
-          >
-            <MarkdownComment
-              text={task.comment}
-              onToggle={(idx) => {
-                const next = toggleCheckbox(task.comment || '', idx);
-                if (next !== task.comment) updateTask(task.id, { comment: next });
-              }}
-            />
-          </div>
-        )}
-
-        {/* 3) Тег + прогресс чек-листа */}
+        {/* 2) Тег + прогресс чек-листа (между названием и комментарием) */}
         {(tag || checkboxStats) && (
           <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
             {tag && <TagChip tag={tag} />}
@@ -206,12 +187,43 @@ export function KanbanCard({
           </div>
         )}
 
+        {/* 3) Комментарий — 1..3 строки. Клик по комментарию открывает модалку. */}
+        {task.comment && task.comment.trim() && (
+          <div
+            className="mt-1.5 text-[11.5px] text-muted leading-snug line-clamp-3 cursor-pointer"
+            onMouseDown={stopBubble}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={onOpenClick}
+            title={lang === 'ru' ? 'Открыть задачу' : 'Open task'}
+          >
+            <MarkdownComment
+              text={task.comment}
+              onToggle={(idx) => {
+                const next = toggleCheckbox(task.comment || '', idx);
+                if (next !== task.comment) updateTask(task.id, { comment: next });
+              }}
+            />
+          </div>
+        )}
+
         {/* 4) Футер: дедлайн слева, действия справа */}
         <div className="mt-2 flex items-center justify-between gap-2">
           <div className="min-w-0 flex-1">
             <DeadlineBadge deadline={task.deadline} isDone={isDone} />
           </div>
           <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Открыть модалку */}
+            <button
+              type="button"
+              onClick={onOpenClick}
+              onMouseDown={stopBubble}
+              onPointerDown={(e) => e.stopPropagation()}
+              title={lang === 'ru' ? 'Открыть задачу' : 'Open task'}
+              aria-label={lang === 'ru' ? 'Открыть задачу' : 'Open task'}
+              className="w-6 h-6 rounded flex items-center justify-center text-muted hover:text-text hover:bg-surface-alt"
+            >
+              <Maximize2 size={11} />
+            </button>
             {/* Drag-handle */}
             <button
               type="button"
@@ -254,6 +266,47 @@ export function KanbanCard({
           </div>
         </div>
       </div>
+
+      {/* v0.9.1 (№9): диалог выбора статуса при возврате из «Выполнено» */}
+      <ConfirmDialog
+        open={reopenOpen}
+        title={lang === 'ru' ? 'Вернуть в работу' : 'Reopen task'}
+        message={lang === 'ru' ? 'Выберите статус:' : 'Choose the status:'}
+        confirmLabel={lang === 'ru' ? 'Вернуть' : 'Reopen'}
+        cancelLabel={tr(lang, 'cancel')}
+        onConfirm={() => {
+          const targetId = reopenPickId ?? reopenStatusId;
+          if (targetId) {
+            updateTask(task.id, { status_id: targetId });
+            pushToast(lang === 'ru' ? 'Задача возвращена в работу' : 'Task reopened');
+          }
+          setReopenOpen(false);
+          setReopenPickId(null);
+        }}
+        onCancel={() => { setReopenOpen(false); setReopenPickId(null); }}
+      >
+        <div className="flex flex-col gap-1.5 mt-1" onMouseDown={stopBubble} onPointerDown={(e) => e.stopPropagation()} onClick={stopBubble}>
+          {statuses
+            .filter(s => s.is_technical !== 1 && s.behavior !== 'archive')
+            .map(s => (
+              <label key={s.id} className="flex items-center gap-2.5 cursor-pointer text-[13px]">
+                <input
+                  type="radio"
+                  name={`reopen-status-kc-${task.id}`}
+                  value={s.id}
+                  checked={reopenPickId === s.id}
+                  onChange={() => setReopenPickId(s.id)}
+                  className="accent-[var(--accent)]"
+                />
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ background: s.color }}
+                />
+                {s.name}
+              </label>
+            ))}
+        </div>
+      </ConfirmDialog>
     </div>
   );
 }

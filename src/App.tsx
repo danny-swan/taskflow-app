@@ -1,3 +1,9 @@
+/*
+ * TaskFlow — personal task manager
+ * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+ * Copyright (c) 2026 Daniil Lebedev (danny-swan)
+ * https://polyformproject.org/licenses/noncommercial/1.0.0/
+ */
 import { useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from './store/useStore';
@@ -24,6 +30,11 @@ function App() {
 
   useEffect(() => {
     init().catch(err => console.error('DB init failed', err));
+    // © 2026 Daniil Lebedev (danny-swan) · PolyForm Noncommercial License 1.0.0
+    // https://polyformproject.org/licenses/noncommercial/1.0.0/
+    // eslint-disable-next-line no-console
+    console.info('%cTaskFlow%c © 2026 Daniil Lebedev · PolyForm NC 1.0.0',
+      'font-weight:bold', 'color:#888');
   }, [init]);
 
   if (!ready) {

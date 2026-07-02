@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (c) 2026 Daniil Lebedev (danny-swan)
 import { create } from 'zustand';
 import * as db from '../lib/db';
 import type { Lang } from '../lib/i18n';

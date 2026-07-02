@@ -294,9 +294,23 @@ export function TasksPage() {
               ))}
             </div>
           </div>
-          {/* Fixed right: view-toggle + collapse-all + new-task */}
+          {/* Fixed right: collapse-all + view-toggle + new-task
+              v0.9.1: поменяли местами «Свернуть всё» и «Список/Канбан».
+              Теперь переключатель вида всегда стоит непосредственно рядом
+              с «+ Новая задача», а «Свернуть всё» просто исчезает при переходе
+              в канбан, без визуального «уезжания» переключателя. */}
           <div className="flex items-center gap-2 shrink-0">
-            {/* v0.9.0: переключатель Список / Канбан */}
+            {tasksView === 'list' && (
+              <button
+                onClick={toggleAll}
+                title={allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
+              >
+                {allCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}
+                <span>{allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}</span>
+              </button>
+            )}
+            {/* v0.9.0: переключатель Список / Канбан (позиция с v0.9.1: равнее «+ Новая») */}
             <div
               className="flex items-center bg-surface-alt rounded-md p-0.5 border border-border-soft"
               role="tablist"
@@ -335,16 +349,6 @@ export function TasksPage() {
                 <span>{lang === 'ru' ? 'Канбан' : 'Kanban'}</span>
               </button>
             </div>
-            {tasksView === 'list' && (
-              <button
-                onClick={toggleAll}
-                title={allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
-              >
-                {allCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}
-                <span>{allCollapsed ? tr(lang, 'expand_all') : tr(lang, 'collapse_all')}</span>
-              </button>
-            )}
             {/* v0.8.13: split-кнопка «+ Новая задача» │ ▾. Основная часть
                 открывает пустую модалку (поведение как раньше), стрелка — меню со списком
                 шаблонов. Если шаблонов нет — меню прячется, остаётся обычная кнопка. */}
