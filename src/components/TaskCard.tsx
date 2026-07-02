@@ -7,6 +7,7 @@ import { tr } from '../lib/i18n';
 import { todayISO } from '../lib/utils';
 import { MarkdownComment } from './MarkdownComment';
 import { getCheckboxStats, toggleCheckbox } from '../lib/checkboxes';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export function TaskCard({
   task, onOpenModal, dragHandleProps, dragging,
@@ -30,6 +31,8 @@ export function TaskCard({
   const [editingComment, setEditingComment] = useState(false);
   const [commentDraft, setCommentDraft] = useState(task.comment || '');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [reopenOpen, setReopenOpen] = useState(false);
+  const [reopenPickId, setReopenPickId] = useState<number | null>(null);
 
   const isEditing = editingTitle || editingComment;
 
@@ -48,7 +51,10 @@ export function TaskCard({
   const onToggleDone = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isDone) {
-      updateTask(task.id, { status_id: reopenStatusId });
+      // v0.9.1 (№9): при возврате из «Выполнено» показываем диалог выбора статуса
+      // — аналогично восстановлению из Статистики.
+      setReopenPickId(reopenStatusId);
+      setReopenOpen(true);
     } else if (doneStatusId) {
       // v0.8.12: undo «завершения» — запоминаем прежний статус/финиш и предлагаем откат
       const prevStatusId = task.status_id;
@@ -339,6 +345,47 @@ export function TaskCard({
           </button>
         </div>
       </div>
+
+      {/* v0.9.1 (№9): диалог выбора статуса при возврате из «Выполнено» */}
+      <ConfirmDialog
+        open={reopenOpen}
+        title={lang === 'ru' ? 'Вернуть в работу' : 'Reopen task'}
+        message={lang === 'ru' ? 'Выберите статус:' : 'Choose the status:'}
+        confirmLabel={lang === 'ru' ? 'Вернуть' : 'Reopen'}
+        cancelLabel={tr(lang, 'cancel')}
+        onConfirm={() => {
+          const targetId = reopenPickId ?? reopenStatusId;
+          if (targetId) {
+            updateTask(task.id, { status_id: targetId });
+            pushToast(lang === 'ru' ? 'Задача возвращена в работу' : 'Task reopened');
+          }
+          setReopenOpen(false);
+          setReopenPickId(null);
+        }}
+        onCancel={() => { setReopenOpen(false); setReopenPickId(null); }}
+      >
+        <div className="flex flex-col gap-1.5 mt-1" onMouseDown={stopBubble} onPointerDown={(e) => e.stopPropagation()} onClick={stopBubble}>
+          {statuses
+            .filter(s => s.is_technical !== 1 && s.behavior !== 'archive')
+            .map(s => (
+              <label key={s.id} className="flex items-center gap-2.5 cursor-pointer text-[13px]">
+                <input
+                  type="radio"
+                  name={`reopen-status-tc-${task.id}`}
+                  value={s.id}
+                  checked={reopenPickId === s.id}
+                  onChange={() => setReopenPickId(s.id)}
+                  className="accent-[var(--accent)]"
+                />
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ background: s.color }}
+                />
+                {s.name}
+              </label>
+            ))}
+        </div>
+      </ConfirmDialog>
     </div>
   );
 }

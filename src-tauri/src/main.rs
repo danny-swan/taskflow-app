@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (c) 2026 Daniil Lebedev (danny-swan)
+// PolyForm Noncommercial License 1.0.0
+// https://polyformproject.org/licenses/noncommercial/1.0.0/
+//
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 

@@ -592,6 +592,9 @@ function AboutSection({ lang }: { lang: 'ru' | 'en' }) {
             github.com/danny-swan/taskflow-app
           </a>
         </p>
+        <p className="mt-2 text-[10.5px] opacity-60">
+          © 2026 Daniil Lebedev (danny-swan) · PolyForm Noncommercial License 1.0.0
+        </p>
       </div>
     </div>
   );

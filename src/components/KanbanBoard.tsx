@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Status, Task, useStore } from '../store/useStore';
 import { KanbanColumn } from './KanbanColumn';
+import { KanbanCard } from './KanbanCard';
 import {
   DndContext, closestCorners, PointerSensor, useSensor, useSensors,
   DragEndEvent, DragOverlay, DragStartEvent,
@@ -154,8 +155,14 @@ export function KanbanBoard({
         </div>
         <DragOverlay dropAnimation={null}>
           {draggedTask ? (
-            <div className="bg-surface border border-accent rounded-lg px-3 py-2 shadow-lg opacity-95 text-[13px] font-semibold max-w-[270px] truncate">
-              {draggedTask.title}
+            <div
+              className="w-[270px] rotate-1 shadow-xl cursor-grabbing"
+              style={{ pointerEvents: 'none' }}
+            >
+              <KanbanCard
+                task={draggedTask}
+                onOpenModal={() => {}}
+              />
             </div>
           ) : null}
         </DragOverlay>

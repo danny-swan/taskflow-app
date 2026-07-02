@@ -13,6 +13,30 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.1',
+    date: '2026-07-02',
+    items: {
+      ru: [
+        'Косметика графика «Активность»: линия «Новые» теперь всегда синяя (раньше окрашивалась в акцент темы и могла сливаться с другими).',
+        'График «Активность»: задачи с дедлайном «сегодня» больше не попадают в серию «Просрочено».',
+        'Вставка чекбокса в комментарий: префикс «- [ ]» теперь вставляется в начало текущей строки, а не переносит текст на новую. Повторное нажатие на уже отмеченной строке переключает [ ] ↔ [x] → без чекбокса.',
+        'Шапка страницы «Задачи»: поменяли местами кнопки «Свернуть всё» и переключатель «Список / Канбан», чтобы переключатель всегда был рядом с «+ Новая», независимо от вида списка.',
+        'Канбан-карточка пересобрана: тег теперь расположен между названием и комментарием, значок прогресса чек-листа — справа от тега. В футере добавилась кнопка «Открыть задачу» (иконка ⊕). Клик открывает модалку только с комментария или с кнопки — теперь тянуть карточку за любую зону безопасно.',
+        'Канбан: во время перетаскивания под курсором теперь показывается полноценная превью-карточка вместо сжатой полоски с одним только названием.',
+        'Возврат задачи из «Выполнено» (кнопка «↺» на карточке списка или канбана) теперь показывает диалог выбора статуса — как восстановление из Статистики.',
+      ],
+      en: [
+        'Activity chart: the “New” line is now always blue (previously followed the theme accent and could blend with other lines).',
+        'Activity chart: tasks with a deadline of “today” are no longer counted as overdue.',
+        'Checkbox insertion in a comment: the “- [ ]” prefix is now inserted at the start of the current line instead of pushing the text onto a new line. Pressing the button again on a line that already has the prefix toggles [ ] ↔ [x] → no checkbox.',
+        'Tasks page header: swapped “Collapse all” and the “List / Kanban” toggle so the toggle always sits next to “+ New”, regardless of the current view.',
+        'Kanban card redesigned: the tag now sits between the title and the comment, the checklist-progress badge is placed right next to the tag. A new “Open task” button (⊕ icon) was added to the footer. Clicking the card opens the modal only from the comment area or that button — you can now drag the card by any other area safely.',
+        'Kanban: during a drag, the item under the cursor now shows a full preview card instead of a squeezed strip with just the title.',
+        'Reopening a task from “Done” (the “↺” button on a list or kanban card) now shows a status-picker dialog — mirroring the restore flow from the Statistics tab.',
+      ],
+    },
+  },
+  {
     version: '0.9.0',
     date: '2026-06-07',
     items: {

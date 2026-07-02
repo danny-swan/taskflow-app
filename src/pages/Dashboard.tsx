@@ -108,8 +108,10 @@ export function DashboardPage() {
           if (startKey === key) created++;
           const fin = t.finish_date ? t.finish_date.slice(0, 10) : '';
           if (fin === key && archiveStatusIds.has(t.status_id)) completed++;
-          // Просрочено в этот день: дедлайн == key, не выполнено к этому дню, day <= today
-          if (t.deadline && t.deadline === key && key <= todayKey && !archiveStatusIds.has(t.status_id)) {
+          // v0.9.1: просрочено в этот день: дедлайн == key, не выполнено к этому дню,
+          // и день уже в прошлом (строго <). Задача с дедлайном «сегодня» ещё
+          // не просрочена — просрочка наступает с завтрашнего дня.
+          if (t.deadline && t.deadline === key && key < todayKey && !archiveStatusIds.has(t.status_id)) {
             overdue++;
           }
         }
@@ -414,7 +416,9 @@ export function DashboardPage() {
                 labelFormatter={activityTooltipLabelFormatter}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
-              <Line type="monotone" dataKey="created" name={L.series_created} stroke="var(--accent)" strokeWidth={2} dot={false} />
+              {/* v0.9.1: цвет линии «Новые» жёстко зафиксирован как синий
+                  и не зависит от темы (раньше var(--accent) менялся с темой). */}
+              <Line type="monotone" dataKey="created" name={L.series_created} stroke="#3B82F6" strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="completed" name={L.series_completed} stroke="#22A06B" strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="overdue" name={L.series_overdue} stroke="var(--status-important)" strokeWidth={2} dot={false} />
             </LineChart>
