@@ -21,12 +21,19 @@ export function KanbanColumn({
   onOpenTask,
   onAdd,
   lang,
+  dropIndicator,
 }: {
   status: Status;
   tasks: Task[];
   onOpenTask: (t: Task) => void;
   onAdd?: () => void;
   lang: 'ru' | 'en';
+  /**
+   * v0.9.2: если не null — перед какой позицией надо показать полоску-плейсхолдер.
+   * Активен только при переносе карточки между колонками (внутри колонки сам
+   * SortableContext двигает карточки). index считается от 0..tasks.length (в конце списка).
+   */
+  dropIndicator?: number | null;
 }) {
   const containerId = `col-${status.id}`;
   const { setNodeRef, isOver } = useDroppable({
@@ -69,10 +76,15 @@ export function KanbanColumn({
           }
           style={{ scrollbarWidth: 'thin', minHeight: 80 }}
         >
-          {tasks.map(t => (
-            <SortableKanbanTask key={t.id} task={t} onOpenTask={onOpenTask} />
+          {tasks.map((t, i) => (
+            <div key={t.id}>
+              {dropIndicator === i && <DropSlot />}
+              <SortableKanbanTask task={t} onOpenTask={onOpenTask} />
+            </div>
           ))}
-          {tasks.length === 0 && !isOver && (
+          {/* Плейсхолдер в конце списка (или в пустой колонке — единственный индикатор) */}
+          {dropIndicator !== null && dropIndicator !== undefined && dropIndicator >= tasks.length && <DropSlot />}
+          {tasks.length === 0 && !isOver && dropIndicator == null && (
             <div className="text-[11px] text-faint italic text-center py-3">
               {lang === 'ru' ? 'пусто' : 'empty'}
             </div>
@@ -80,6 +92,23 @@ export function KanbanColumn({
         </div>
       </SortableContext>
     </div>
+  );
+}
+
+// v0.9.2: визуальный слот-подсветка места, куда встанет карточка при drop.
+// Высота от средней карточки (≈ 60px), цвет — accent с низкой непрозрачностью.
+function DropSlot() {
+  return (
+    <div
+      className="rounded-md border-2 border-dashed transition-colors"
+      style={{
+        borderColor: 'var(--accent)',
+        backgroundColor: 'color-mix(in oklab, var(--accent) 12%, transparent)',
+        height: 60,
+        marginBottom: 8,
+      }}
+      aria-hidden="true"
+    />
   );
 }
 

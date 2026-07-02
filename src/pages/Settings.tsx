@@ -59,6 +59,8 @@ function GeneralSection() {
   const setFontSize = useStore(s => s.setFontSize);
   const defaultTab = useStore(s => s.defaultTab);
   const setDefaultTab = useStore(s => s.setDefaultTab);
+  const overdueMode = useStore(s => s.overdueMode);         // v0.9.2 (№1)
+  const setOverdueMode = useStore(s => s.setOverdueMode);   // v0.9.2 (№1)
 
   return (
     <div className="max-w-xl space-y-6">
@@ -95,6 +97,31 @@ function GeneralSection() {
           <option value="dashboard">{tr(lang, 'nav_dashboard')}</option>
           <option value="stats">{tr(lang, 'nav_stats')}</option>
         </select>
+      </Row>
+
+      {/* v0.9.2 (№1): режим подсчёта просрочки и остатка дней на карточках задач */}
+      <Row label={lang === 'ru' ? 'Считать просрочку' : 'Overdue counting'}>
+        <div className="flex flex-col gap-1">
+          <div className="flex gap-2">
+            {(['calendar', 'business'] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => setOverdueMode(m)}
+                className={'px-3 py-1 text-[13px] rounded border ' +
+                  (overdueMode === m ? 'bg-accent text-white border-accent' : 'border-border-soft hover:bg-surface-alt')}
+              >
+                {m === 'calendar'
+                  ? (lang === 'ru' ? 'Календарные дни' : 'Calendar days')
+                  : (lang === 'ru' ? 'Рабочие дни (Пн–Пт)' : 'Business days (Mon–Fri)')}
+              </button>
+            ))}
+          </div>
+          <div className="text-[11px] text-muted">
+            {lang === 'ru'
+              ? 'Влияет на «Просрочено N дн.» и «Дней осталось N» на карточках, а также на чип «Внимание». Праздники не учитываются — только Пн–Пт.'
+              : 'Affects «Overdue N d» and «N days left» on task cards, plus the «Attention» chip. Holidays are not tracked — Mon–Fri only.'}
+          </div>
+        </div>
       </Row>
     </div>
   );

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { CheckSquare, Loader2, PauseCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
+import { daysUntilDeadline } from '../lib/utils';
 
 /**
  * Compact metric chips shown in the Topbar on the Tasks screen.
@@ -16,6 +17,7 @@ export function MetricChips() {
   const statuses = useStore(s => s.statuses);
   const activeFilter = useStore(s => s.taskStatusFilter);
   const setFilter = useStore(s => s.setTaskStatusFilter);
+  const overdueMode = useStore(s => s.overdueMode); // v0.9.2 (№1)
 
   const metrics = useMemo(() => {
     const techIds = new Set(
@@ -28,9 +30,8 @@ export function MetricChips() {
       statuses.filter(s => s.behavior === 'bottom' || s.behavior === 'paused').map(s => s.id),
     );
     const today = new Date().toISOString().slice(0, 10);
-    // v0.8.6: «внимание» — дедлайн в интервале [today; today+3], не просрочен, активная задача
-    const dToday = new Date(today + 'T00:00:00');
-    const attentionMaxMs = dToday.getTime() + 3 * 86400000;
+    // v0.8.6: «внимание» — дедлайн в [today; today+3], не просрочен, активная задача.
+    // v0.9.2 (№1): в business-режиме «3 дня» = 3 будних дня, в calendar = 3 календарных.
     let total = 0, inProgress = 0, paused = 0, done = 0, overdue = 0, attention = 0;
     for (const t of allTasks) {
       if (t.archived || techIds.has(t.status_id)) continue;
@@ -45,15 +46,15 @@ export function MetricChips() {
         if (t.deadline && t.deadline < today) {
           overdue++;
         } else if (t.deadline) {
-          const dDL = new Date(t.deadline + 'T00:00:00');
-          if (dDL.getTime() >= dToday.getTime() && dDL.getTime() <= attentionMaxMs) {
+          const diff = daysUntilDeadline(t.deadline, today, overdueMode);
+          if (diff >= 0 && diff <= 3) {
             attention++;
           }
         }
       }
     }
     return { total, inProgress, paused, done, overdue, attention };
-  }, [allTasks, statuses]);
+  }, [allTasks, statuses, overdueMode]);
 
   const onToggle = (key: string) => {
     setFilter(activeFilter === key ? null : key);

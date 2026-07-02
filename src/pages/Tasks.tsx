@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useStore, Task } from '../store/useStore';
 import { tr } from '../lib/i18n';
+import { daysUntilDeadline } from '../lib/utils';
 import { StatusGroup } from '../components/StatusGroup';
 import { TaskModal } from '../components/TaskModal';
 import { NewTaskModal } from '../components/NewTaskModal';
@@ -36,6 +37,7 @@ export function TasksPage() {
   const createTaskFromTemplate = useStore(s => s.createTaskFromTemplate);
   const tasksView = useStore(s => s.tasksView);
   const setTasksView = useStore(s => s.setTasksView);
+  const overdueMode = useStore(s => s.overdueMode); // v0.9.2 (№1)
 
   const techIds = useMemo(() => new Set(allStatuses.filter(s => s.is_technical === 1).map(s => s.id)), [allStatuses]);
 
@@ -127,19 +129,18 @@ export function TasksPage() {
       if (statusFilter === 'overdue') {
         if (!t.deadline || t.deadline >= today || archiveStatusIds.has(t.status_id) || pausedStatusIds.has(t.status_id)) return false;
       }
-      // v0.8.6: «внимание» — дедлайн в [today, today+3], исключая архив/паузу/просрочку
+      // v0.8.6: «внимание» — дедлайн в [today, today+3], исключая архив/паузу/просрочку.
+      // v0.9.2 (№1): в business-режиме «3 дня» — это 3 будних дня, в calendar — 3 календарных.
       if (statusFilter === 'attention') {
         if (!t.deadline || t.deadline < today || archiveStatusIds.has(t.status_id) || pausedStatusIds.has(t.status_id)) return false;
-        const dToday = new Date(today + 'T00:00:00');
-        const dDL = new Date(t.deadline + 'T00:00:00');
-        const diffDays = Math.round((dDL.getTime() - dToday.getTime()) / 86400000);
+        const diffDays = daysUntilDeadline(t.deadline, today, overdueMode);
         if (diffDays < 0 || diffDays > 3) return false;
       }
       if (statusFilter === 'paused' && !pausedStatusIds.has(t.status_id)) return false;
       if (statusFilter === 'done' && !archiveStatusIds.has(t.status_id)) return false;
       return true;
     });
-  }, [tasks, query, tagFilter, statusFilter, archiveStatusIds, pausedStatusIds]);
+  }, [tasks, query, tagFilter, statusFilter, archiveStatusIds, pausedStatusIds, overdueMode]);
 
   const grouped = useMemo(() => {
     return statuses.map(s => ({

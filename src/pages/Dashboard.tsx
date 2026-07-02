@@ -2,6 +2,7 @@ import { useMemo, useState, useRef, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { formatDate, formatMonthDay } from '../lib/format';
+import { overdueEventsByDate } from '../lib/overdue';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
   PieChart, Pie, Cell, BarChart, Bar,
@@ -90,16 +91,23 @@ export function DashboardPage() {
     return customRange;
   }, [period, customRange]);
 
-  // v0.8.9: серии «новые / выполненные / просроченные» по дню за период
+  // v0.8.9: серии «новые / выполненные / просроченные» по дню за период.
+  // v0.9.2: «Просрочено» теперь читается из таблицы overdue_events —
+  // фиксируется КАЖДЫЙ раз, когда задача перешла в состояние просрочки
+  // (даже если потом сдвинули дедлайн вперёд и она снова просрочилась —
+  // это новое событие). Без бэкфилла: события считаются только с v0.9.2.
+  const overdueTick = useStore(s => s.overdueTick);
   const activityDates = useMemo(() => {
-    const todayKey = localDayKey(new Date());
     const buildPoints = (from: Date, to: Date) => {
+      const fromKey = localDayKey(from);
+      const toKey = localDayKey(to);
+      // Один SQL-запрос на весь период вместо N перебираемых задач за каждый день.
+      const overdueMap = overdueEventsByDate(fromKey, toKey);
       const result: { date: string; created: number; completed: number; overdue: number; isoDate: string }[] = [];
       for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
         const key = localDayKey(d);
         let created = 0;
         let completed = 0;
-        let overdue = 0;
         for (const t of dashTasks) {
           // v0.8.11: для серии «Новые» используем дату Старта (start_date), а не created_at —
           // это позволяет корректно отображать ретроспективно внесённые задачи.
@@ -108,16 +116,11 @@ export function DashboardPage() {
           if (startKey === key) created++;
           const fin = t.finish_date ? t.finish_date.slice(0, 10) : '';
           if (fin === key && archiveStatusIds.has(t.status_id)) completed++;
-          // v0.9.1: просрочено в этот день: дедлайн == key, не выполнено к этому дню,
-          // и день уже в прошлом (строго <). Задача с дедлайном «сегодня» ещё
-          // не просрочена — просрочка наступает с завтрашнего дня.
-          if (t.deadline && t.deadline === key && key < todayKey && !archiveStatusIds.has(t.status_id)) {
-            overdue++;
-          }
         }
         result.push({
           date: formatMonthDay(key.slice(5), lang),
-          created, completed, overdue,
+          created, completed,
+          overdue: overdueMap.get(key) ?? 0,
           isoDate: key,
         });
       }
@@ -131,7 +134,11 @@ export function DashboardPage() {
     const from = new Date();
     from.setDate(from.getDate() - (periodDays - 1));
     return buildPoints(from, to);
-  }, [dashTasks, periodDays, period, dateRange, lang, archiveStatusIds]);
+    // overdueTick подписывается на счётчик из стора: как только детектор создал
+    // новое событие (например, в updateTask), useMemo пересчитается и график
+    // обновится без ручного refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dashTasks, periodDays, period, dateRange, lang, archiveStatusIds, overdueTick]);
 
   // ─── Текущий срез (не зависит от периода) ────────────────────────────────
   const snapshot = useMemo(() => {

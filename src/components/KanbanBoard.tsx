@@ -4,9 +4,13 @@ import { KanbanColumn } from './KanbanColumn';
 import { KanbanCard } from './KanbanCard';
 import {
   DndContext, closestCorners, PointerSensor, useSensor, useSensors,
-  DragEndEvent, DragOverlay, DragStartEvent,
+  DragEndEvent, DragOverlay, DragStartEvent, DragOverEvent,
 } from '@dnd-kit/core';
 import { useState } from 'react';
+
+// v0.9.2: плейсхолдер-подсветка при переносе между колонками.
+// { columnId, index } — в какой колонке и перед какой позицией будет вставлена карточка.
+export type DropIndicator = { columnId: number; index: number } | null;
 
 /**
  * KanbanBoard — горизонтальный ряд колонок по visible-статусам (v0.9.0).
@@ -49,16 +53,54 @@ export function KanbanBoard({
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const [activeId, setActiveId] = useState<string | null>(null);
+  // v0.9.2: подсветка целевой позиции при переносе между колонками
+  const [dropIndicator, setDropIndicator] = useState<DropIndicator>(null);
 
   const findTaskById = (idStr: string): Task | null => {
     const num = parseInt(idStr.replace('task-', ''), 10);
     return tasks.find(t => t.id === num) ?? null;
   };
 
-  const onDragStart = (e: DragStartEvent) => { setActiveId(String(e.active.id)); };
+  const onDragStart = (e: DragStartEvent) => {
+    setActiveId(String(e.active.id));
+    setDropIndicator(null);
+  };
+
+  // v0.9.2: визуальный плейсхолдер при drag между колонками. Внутри колонки
+  // SortableContext уже сам двигает карточки — там индикатор не нужен, выключаем его.
+  const onDragOver = (e: DragOverEvent) => {
+    const { active, over } = e;
+    if (!over) { setDropIndicator(null); return; }
+    const activeData = active.data.current as any;
+    const overData = over.data.current as any;
+    if (!activeData || activeData.type !== 'task') return;
+
+    const sourceStatusId: number = activeData.statusId;
+    let targetStatusId: number | null = null;
+    let targetIndex: number = 0;
+
+    if (overData?.type === 'task') {
+      targetStatusId = overData.statusId;
+      const g = grouped.find(g => g.status.id === targetStatusId);
+      if (g) targetIndex = g.tasks.findIndex(t => t.id === overData.taskId);
+    } else if (overData?.type === 'group') {
+      targetStatusId = overData.statusId;
+      const g = grouped.find(g => g.status.id === targetStatusId);
+      targetIndex = g ? g.tasks.length : 0;
+    }
+
+    if (targetStatusId === null || targetStatusId === sourceStatusId) {
+      // Внутри колонки SortableContext сам двигает карточки — индикатор лишний.
+      setDropIndicator(null);
+      return;
+    }
+    if (targetIndex < 0) targetIndex = 0;
+    setDropIndicator({ columnId: targetStatusId, index: targetIndex });
+  };
 
   const onDragEnd = (e: DragEndEvent) => {
     setActiveId(null);
+    setDropIndicator(null);
     const { active, over } = e;
     if (!over) return;
 
@@ -140,6 +182,7 @@ export function KanbanBoard({
         sensors={sensors}
         collisionDetection={closestCorners}
         onDragStart={onDragStart}
+        onDragOver={onDragOver}
         onDragEnd={onDragEnd}
       >
         <div className="flex gap-3 h-full items-stretch min-w-min">
@@ -150,6 +193,10 @@ export function KanbanBoard({
               tasks={g.tasks}
               onOpenTask={onOpenTask}
               lang={lang}
+              dropIndicator={
+                dropIndicator && dropIndicator.columnId === g.status.id
+                  ? dropIndicator.index : null
+              }
             />
           ))}
         </div>
