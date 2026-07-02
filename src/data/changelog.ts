@@ -13,6 +13,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.3',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Хотфикс: в некоторых сценариях страница «Дашборд» открывалась пустой сразу после установки 0.9.2. Причина — при инициализации Tauri-приложения in-memory кеш БД не содержал таблицы overdue_events, и запрос истории просрочек ронял отрисовку страницы. Схема кеша обновлена, данные из нативной БД теперь подтягиваются полностью, а сам запрос защищён fallback-ом на пустой результат.',
+        'Детектор пересечений дедлайна также обёрнут в защитный try/catch — сбой на одной задаче больше не влияет на инициализацию приложения.',
+      ],
+      en: [
+        'Hotfix: in some scenarios the Dashboard page opened blank right after installing 0.9.2. The root cause: on Tauri app init, the in-memory DB cache did not contain the overdue_events table, so the deadline-history query crashed the page render. The cache schema is now updated, data from the native DB is fully hydrated, and the query itself is guarded with a fallback to an empty result.',
+        'The deadline-crossing detector is now wrapped in a defensive try/catch — a failure on a single task no longer breaks app initialisation.',
+      ],
+    },
+  },
+  {
     version: '0.9.2',
     date: '2026-07-02',
     items: {

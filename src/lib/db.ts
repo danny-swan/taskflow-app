@@ -285,6 +285,15 @@ function ensureSchema(d: Database) {
       created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
       updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS overdue_events (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id           INTEGER NOT NULL,
+      deadline_snapshot TEXT    NOT NULL,
+      event_date        TEXT    NOT NULL,
+      created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_overdue_events_date ON overdue_events(event_date);
+    CREATE INDEX IF NOT EXISTS idx_overdue_events_task ON overdue_events(task_id, id DESC);
   `);
 }
 
@@ -517,6 +526,10 @@ export async function initDb(): Promise<void> {
     let templates: any[] = [];
     try { templates = await d.select('SELECT * FROM task_templates ORDER BY sort_order, id'); }
     catch (e) { console.warn('[initDb] task_templates not available yet:', e); }
+    // v0.9.2: overdue_events появляется после миграции v4. Аналогично защищаемся.
+    let overdueEvents: any[] = [];
+    try { overdueEvents = await d.select('SELECT * FROM overdue_events'); }
+    catch (e) { console.warn('[initDb] overdue_events not available yet:', e); }
 
     webDb = new SQL!.Database();
     ensureSchema(webDb);
@@ -545,6 +558,12 @@ export async function initDb(): Promise<void> {
       webDb.run(
         `INSERT OR REPLACE INTO task_templates (id,name,title,comment,status_id,tag_id,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
         [t.id, t.name, t.title, t.comment, t.status_id, t.tag_id, t.sort_order, t.created_at, t.updated_at]
+      );
+    }
+    for (const e of overdueEvents) {
+      webDb.run(
+        `INSERT OR REPLACE INTO overdue_events (id, task_id, deadline_snapshot, event_date, created_at) VALUES (?,?,?,?,?)`,
+        [e.id, e.task_id, e.deadline_snapshot, e.event_date, e.created_at]
       );
     }
   } else {

@@ -44,24 +44,30 @@ export function detectOverdueEventForTask(
   if (status.behavior === 'archive' || status.is_technical === 1 || task.archived) return false;
 
   // Проверяем последнее событие по этой задаче.
-  const last = db.get<{ deadline_snapshot: string }>(
-    `SELECT deadline_snapshot FROM overdue_events
-     WHERE task_id = ? ORDER BY id DESC LIMIT 1`,
-    [task.id],
-  );
-  if (last && last.deadline_snapshot === task.deadline) {
-    // Событие для этого конкретного дедлайна уже есть — не дублируем.
+  try {
+    const last = db.get<{ deadline_snapshot: string }>(
+      `SELECT deadline_snapshot FROM overdue_events
+       WHERE task_id = ? ORDER BY id DESC LIMIT 1`,
+      [task.id],
+    );
+    if (last && last.deadline_snapshot === task.deadline) {
+      // Событие для этого конкретного дедлайна уже есть — не дублируем.
+      return false;
+    }
+
+    // Создаём новое событие. event_date = сегодня (день, когда мы поняли,
+    // что задача просрочена). deadline_snapshot = дедлайн на момент события.
+    db.run(
+      `INSERT INTO overdue_events (task_id, deadline_snapshot, event_date)
+       VALUES (?, ?, ?)`,
+      [task.id, task.deadline, today],
+    );
+    return true;
+  } catch (e) {
+    // v0.9.3 hotfix: если таблица overdue_events недоступна — не валим детектор.
+    console.warn('[overdue] detect skipped for task', task.id, e);
     return false;
   }
-
-  // Создаём новое событие. event_date = сегодня (день, когда мы поняли,
-  // что задача просрочена). deadline_snapshot = дедлайн на момент события.
-  db.run(
-    `INSERT INTO overdue_events (task_id, deadline_snapshot, event_date)
-     VALUES (?, ?, ?)`,
-    [task.id, task.deadline, today],
-  );
-  return true;
 }
 
 /**
@@ -94,13 +100,19 @@ export function detectOverdueEvents(
  * — вызывающая сторона должна сама заполнять нули для оси X.
  */
 export function overdueEventsByDate(fromDate: string, toDate: string): Map<string, number> {
-  const rows = db.all<{ event_date: string; c: number }>(
-    `SELECT event_date, COUNT(*) AS c FROM overdue_events
-     WHERE event_date >= ? AND event_date <= ?
-     GROUP BY event_date`,
-    [fromDate, toDate],
-  );
   const map = new Map<string, number>();
-  for (const r of rows) map.set(r.event_date, Number(r.c));
+  try {
+    const rows = db.all<{ event_date: string; c: number }>(
+      `SELECT event_date, COUNT(*) AS c FROM overdue_events
+       WHERE event_date >= ? AND event_date <= ?
+       GROUP BY event_date`,
+      [fromDate, toDate],
+    );
+    for (const r of rows) map.set(r.event_date, Number(r.c));
+  } catch (e) {
+    // v0.9.3 hotfix: если таблица overdue_events по какой-то причине недоступна
+    // (старый webDb-кеш без миграции, баг в миграторе и т.п.), не валим дашборд.
+    console.warn('[overdue] overdueEventsByDate failed, returning empty map:', e);
+  }
   return map;
 }
