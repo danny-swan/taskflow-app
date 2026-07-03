@@ -4,9 +4,11 @@
  * Copyright (c) 2026 Daniil Lebedev (danny-swan)
  *
  * v0.9.4 — Вкладка «Календарь».
- * Месячная сетка (7×N, старт с Пн) с задачами по дедлайну, docked-панель
- * «Без дедлайна» снизу, DnD между панелью и ячейками — назначает/меняет
- * дедлайн через updateTask({ deadline }).
+ * v0.9.5 — Режимы «Неделя» / «Месяц» (Неделя по умолчанию), стрелки в рамках,
+ *          «Сегодня» вынесена вправо, полные названия в панели «Без дедлайна»
+ *          с вертикальным скроллом. В недельном режиме карточка задачи
+ *          показывает полный заголовок с переносом строк (высота адаптивная).
+ * Docked-панель «Без дедлайна» — единая для обоих режимов.
  */
 import { useMemo, useState } from 'react';
 import {
@@ -37,26 +39,33 @@ const MONTH_KEYS: (keyof Dict)[] = [
   'month_september', 'month_october', 'month_november', 'month_december',
 ];
 
-/** Заголовок «Июль 2026» — родительный падеж уже зашит в i18n (для RU). */
+/** Заголовок «Июль 2026» — именительный падеж. */
 function monthTitle(lang: Lang, y: number, m: number): string {
   const monthName = tr(lang, MONTH_KEYS[m]);
-  if (lang === 'ru') {
-    // «июля 2026» — с прописной первой буквы.
-    return monthName.charAt(0).toUpperCase() + monthName.slice(1) + ' ' + y;
+  return monthName.charAt(0).toUpperCase() + monthName.slice(1) + ' ' + y;
+}
+
+/** Заголовок для недели, например «1–7 июля 2026» / «29 июня — 5 июля 2026». */
+function weekTitle(lang: Lang, start: Date): string {
+  const end = new Date(start.getTime() + 6 * MS_DAY);
+  const startMonth = tr(lang, MONTH_KEYS[start.getMonth()]);
+  const endMonth = tr(lang, MONTH_KEYS[end.getMonth()]);
+  const startDay = start.getDate();
+  const endDay = end.getDate();
+  const y = end.getFullYear();
+  if (start.getMonth() === end.getMonth()) {
+    return `${startDay}–${endDay} ${startMonth} ${y}`;
   }
-  return monthName + ' ' + y;
+  return `${startDay} ${startMonth} — ${endDay} ${endMonth} ${y}`;
 }
 
 /**
  * Возвращает 6-недельную сетку (42 дня), начинающуюся с понедельника той недели,
- * куда попадает 1-е число месяца. Всегда 6 строк — чтобы сетка не «прыгала»
- * при переключении месяцев.
+ * куда попадает 1-е число месяца. Всегда 6 строк — чтобы сетка не «прыгала».
  */
 function monthGrid(year: number, monthIdx: number): Date[] {
   const first = new Date(year, monthIdx, 1);
-  const dow = first.getDay(); // 0 = Вс, 1 = Пн, ...
-  // Смещаем начало на понедельник этой недели.
-  // Пн=1 → offset 0, Вт=2 → 1, ..., Вс=0 → 6.
+  const dow = first.getDay();
   const offset = (dow + 6) % 7;
   const start = new Date(first.getFullYear(), first.getMonth(), first.getDate() - offset);
   const cells: Date[] = [];
@@ -65,6 +74,21 @@ function monthGrid(year: number, monthIdx: number): Date[] {
   }
   return cells;
 }
+
+/** Понедельник недели, содержащей data. */
+function weekStart(d: Date): Date {
+  const dow = d.getDay();
+  const offset = (dow + 6) % 7;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - offset);
+}
+
+function weekGrid(start: Date): Date[] {
+  const cells: Date[] = [];
+  for (let i = 0; i < 7; i++) cells.push(new Date(start.getTime() + i * MS_DAY));
+  return cells;
+}
+
+type CalView = 'week' | 'month';
 
 // ─── компоненты ──────────────────────────────────────────────────────────────
 
@@ -75,17 +99,13 @@ export function CalendarPage() {
   const tags = useStore(s => s.tags);
   const updateTask = useStore(s => s.updateTask);
 
-  const [cursor, setCursor] = useState<Date>(() => {
-    const n = new Date();
-    return new Date(n.getFullYear(), n.getMonth(), 1);
-  });
+  const [view, setView] = useState<CalView>('week'); // v0.9.5: по умолчанию неделя
+  // Для month-режима — курсор на 1-е число месяца.
+  // Для week-режима — курсор на понедельник видимой недели.
+  const [cursor, setCursor] = useState<Date>(() => weekStart(new Date()));
   const [openTask, setOpenTask] = useState<Task | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
-
-  const year = cursor.getFullYear();
-  const monthIdx = cursor.getMonth();
-  const cells = useMemo(() => monthGrid(year, monthIdx), [year, monthIdx]);
 
   // Индексы для быстрого доступа
   const statusById = useMemo(() => {
@@ -119,7 +139,6 @@ export function CalendarPage() {
       arr.push(t);
       m.set(t.deadline, arr);
     }
-    // Сортировка внутри дня по sort_order (стабильная порядковая).
     for (const arr of m.values()) arr.sort((a, b) => a.sort_order - b.sort_order);
     return m;
   }, [tasks, statuses]);
@@ -148,115 +167,151 @@ export function CalendarPage() {
     const currentDeadline: string | null = activeData.deadline ?? null;
     const targetDate: string = overData.date;
 
-    // Тот же день — ничего не делаем.
     if (currentDeadline === targetDate) return;
-
     updateTask(taskId, { deadline: targetDate });
   };
 
   const today = todayYmd();
 
-  const goPrev = () => setCursor(new Date(year, monthIdx - 1, 1));
-  const goNext = () => setCursor(new Date(year, monthIdx + 1, 1));
+  // Навигация зависит от режима
+  const goPrev = () => {
+    if (view === 'week') {
+      setCursor(new Date(cursor.getTime() - 7 * MS_DAY));
+    } else {
+      setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1));
+    }
+  };
+  const goNext = () => {
+    if (view === 'week') {
+      setCursor(new Date(cursor.getTime() + 7 * MS_DAY));
+    } else {
+      setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1));
+    }
+  };
   const goToday = () => {
-    const n = new Date();
-    setCursor(new Date(n.getFullYear(), n.getMonth(), 1));
+    if (view === 'week') {
+      setCursor(weekStart(new Date()));
+    } else {
+      const n = new Date();
+      setCursor(new Date(n.getFullYear(), n.getMonth(), 1));
+    }
+  };
+
+  // При переключении вида — нормализуем курсор, чтобы попадал в текущий отрезок
+  const switchView = (v: CalView) => {
+    if (v === view) return;
+    if (v === 'week') {
+      // Из «месяц» — переходим на понедельник недели, куда попадает cursor.
+      setCursor(weekStart(cursor));
+    } else {
+      // Из «неделя» — переходим на 1-е число месяца этой недели.
+      setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), 1));
+    }
+    setView(v);
   };
 
   const activeTask = activeId
     ? [...tasks].find(t => `cal-task-${t.id}` === activeId) ?? null
     : null;
 
+  // Заголовок
+  const headerTitle = view === 'week'
+    ? weekTitle(lang, cursor)
+    : monthTitle(lang, cursor.getFullYear(), cursor.getMonth());
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-        {/* Header с навигацией */}
+        {/* Header с навигацией и переключателем вида */}
         <div className="px-5 py-3 flex items-center gap-3 border-b border-border-soft shrink-0">
           <div className="flex items-center gap-2">
             <CalendarDays size={16} className="text-muted" />
             <div className="font-display text-[16px] font-semibold tabular">
-              {monthTitle(lang, year, monthIdx)}
+              {headerTitle}
             </div>
           </div>
+
+          {/* View toggle: Неделя / Месяц (как Список / Канбан) */}
+          <div className="ml-2 inline-flex rounded border border-border-soft overflow-hidden">
+            <button
+              onClick={() => switchView('week')}
+              className={
+                'px-2.5 py-1 text-[12px] transition-colors ' +
+                (view === 'week'
+                  ? 'bg-surface-alt text-text'
+                  : 'text-muted hover:bg-surface-alt/60')
+              }
+            >
+              {tr(lang, 'cal_view_week')}
+            </button>
+            <button
+              onClick={() => switchView('month')}
+              className={
+                'px-2.5 py-1 text-[12px] transition-colors border-l border-border-soft ' +
+                (view === 'month'
+                  ? 'bg-surface-alt text-text'
+                  : 'text-muted hover:bg-surface-alt/60')
+              }
+            >
+              {tr(lang, 'cal_view_month')}
+            </button>
+          </div>
+
+          {/* Стрелки навигации — теперь с рамкой */}
           <div className="flex items-center gap-1 ml-2">
             <button
               onClick={goPrev}
-              className="p-1 rounded hover:bg-surface-alt text-muted"
-              aria-label={tr(lang, 'cal_prev_month')}
-              title={tr(lang, 'cal_prev_month')}
+              className="px-2 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft inline-flex items-center"
+              aria-label={tr(lang, view === 'week' ? 'cal_prev_week' : 'cal_prev_month')}
+              title={tr(lang, view === 'week' ? 'cal_prev_week' : 'cal_prev_month')}
             >
-              <ChevronLeft size={16} />
-            </button>
-            <button
-              onClick={goToday}
-              className="px-2 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft"
-            >
-              {tr(lang, 'cal_today')}
+              <ChevronLeft size={14} />
             </button>
             <button
               onClick={goNext}
-              className="p-1 rounded hover:bg-surface-alt text-muted"
-              aria-label={tr(lang, 'cal_next_month')}
-              title={tr(lang, 'cal_next_month')}
+              className="px-2 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft inline-flex items-center"
+              aria-label={tr(lang, view === 'week' ? 'cal_next_week' : 'cal_next_month')}
+              title={tr(lang, view === 'week' ? 'cal_next_week' : 'cal_next_month')}
             >
-              <ChevronRight size={16} />
+              <ChevronRight size={14} />
+            </button>
+          </div>
+
+          {/* «Сегодня» — вынесена вправо, отдельная группа */}
+          <div className="ml-auto">
+            <button
+              onClick={goToday}
+              className="px-2.5 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft"
+            >
+              {tr(lang, 'cal_today')}
             </button>
           </div>
         </div>
 
-        {/* Сетка */}
-        <div className="flex-1 flex flex-col overflow-hidden px-5 pt-3 pb-2 min-h-0">
-          {/* Дни недели */}
-          <div className="grid grid-cols-7 gap-[6px] mb-1 shrink-0">
-            {(['dow_mon', 'dow_tue', 'dow_wed', 'dow_thu', 'dow_fri', 'dow_sat', 'dow_sun'] as (keyof Dict)[])
-              .map((k, i) => (
-                <div
-                  key={k}
-                  className={
-                    'text-center text-[11px] font-mono uppercase tracking-wider py-1 ' +
-                    (i >= 5 ? 'text-muted/60' : 'text-muted')
-                  }
-                >
-                  {tr(lang, k)}
-                </div>
-              ))}
-          </div>
+        {/* Сетка — Week или Month */}
+        {view === 'month' ? (
+          <MonthGrid
+            cursor={cursor}
+            today={today}
+            tasksByDate={tasksByDate}
+            statusById={statusById}
+            tagById={tagById}
+            onOpenTask={setOpenTask}
+            lang={lang}
+          />
+        ) : (
+          <WeekGrid
+            cursor={cursor}
+            today={today}
+            tasksByDate={tasksByDate}
+            statusById={statusById}
+            tagById={tagById}
+            onOpenTask={setOpenTask}
+            lang={lang}
+          />
+        )}
 
-          {/* Сетка ячеек — заполняет доступную высоту, каждая строка растягивается равномерно */}
-          <div
-            className="grid grid-cols-7 gap-[6px] flex-1 min-h-0"
-            style={{ gridTemplateRows: 'repeat(6, minmax(0, 1fr))' }}
-          >
-            {cells.map((d, i) => {
-              const dateStr = ymd(d);
-              const inMonth = d.getMonth() === monthIdx;
-              const isToday = dateStr === today;
-              const dow = d.getDay(); // 0=Вс, 6=Сб
-              const isWeekend = dow === 0 || dow === 6;
-              const dayTasks = tasksByDate.get(dateStr) ?? [];
-              const isPast = dateStr < today;
-              const hasOverdue = isPast && dayTasks.length > 0;
-              return (
-                <CalendarCell
-                  key={i}
-                  date={d}
-                  dateStr={dateStr}
-                  inMonth={inMonth}
-                  isToday={isToday}
-                  isWeekend={isWeekend}
-                  hasOverdue={hasOverdue}
-                  tasks={dayTasks}
-                  statusById={statusById}
-                  tagById={tagById}
-                  onOpenTask={setOpenTask}
-                  lang={lang}
-                />
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Docked-панель «Без дедлайна» */}
+        {/* Docked-панель «Без дедлайна» — единая для обоих режимов */}
         <div
           className="shrink-0 border-t border-border-soft"
           style={{ background: 'var(--surface)' }}
@@ -277,7 +332,7 @@ export function CalendarPage() {
           </button>
           {panelOpen && (
             <div
-              className="px-5 pb-3 pt-1 overflow-x-auto"
+              className="px-5 pb-3 pt-1 overflow-y-auto"
               style={{ maxHeight: 140 }}
             >
               {noDeadlineTasks.length === 0 ? (
@@ -320,11 +375,145 @@ export function CalendarPage() {
   );
 }
 
+// ─── Month grid (7×6) ────────────────────────────────────────────────────────
+
+function MonthGrid({
+  cursor, today, tasksByDate, statusById, tagById, onOpenTask, lang,
+}: {
+  cursor: Date;
+  today: string;
+  tasksByDate: Map<string, Task[]>;
+  statusById: Map<number, Status>;
+  tagById: Map<number, Tag>;
+  onOpenTask: (t: Task) => void;
+  lang: Lang;
+}) {
+  const year = cursor.getFullYear();
+  const monthIdx = cursor.getMonth();
+  const cells = useMemo(() => monthGrid(year, monthIdx), [year, monthIdx]);
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden px-5 pt-3 pb-2 min-h-0">
+      {/* Дни недели */}
+      <div className="grid grid-cols-7 gap-[6px] mb-1 shrink-0">
+        {(['dow_mon', 'dow_tue', 'dow_wed', 'dow_thu', 'dow_fri', 'dow_sat', 'dow_sun'] as (keyof Dict)[])
+          .map((k, i) => (
+            <div
+              key={k}
+              className={
+                'text-center text-[11px] font-mono uppercase tracking-wider py-1 ' +
+                (i >= 5 ? 'text-muted/60' : 'text-muted')
+              }
+            >
+              {tr(lang, k)}
+            </div>
+          ))}
+      </div>
+
+      <div
+        className="grid grid-cols-7 gap-[6px] flex-1 min-h-0"
+        style={{ gridTemplateRows: 'repeat(6, minmax(0, 1fr))' }}
+      >
+        {cells.map((d, i) => {
+          const dateStr = ymd(d);
+          const inMonth = d.getMonth() === monthIdx;
+          const isToday = dateStr === today;
+          const dow = d.getDay();
+          const isWeekend = dow === 0 || dow === 6;
+          const dayTasks = tasksByDate.get(dateStr) ?? [];
+          const isPast = dateStr < today;
+          const hasOverdue = isPast && dayTasks.length > 0;
+          return (
+            <CalendarCell
+              key={i}
+              date={d}
+              dateStr={dateStr}
+              inMonth={inMonth}
+              isToday={isToday}
+              isWeekend={isWeekend}
+              hasOverdue={hasOverdue}
+              tasks={dayTasks}
+              statusById={statusById}
+              tagById={tagById}
+              onOpenTask={onOpenTask}
+              variant="month"
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Week grid (7 колонок) ───────────────────────────────────────────────────
+
+function WeekGrid({
+  cursor, today, tasksByDate, statusById, tagById, onOpenTask, lang,
+}: {
+  cursor: Date;
+  today: string;
+  tasksByDate: Map<string, Task[]>;
+  statusById: Map<number, Status>;
+  tagById: Map<number, Tag>;
+  onOpenTask: (t: Task) => void;
+  lang: Lang;
+}) {
+  const cells = useMemo(() => weekGrid(cursor), [cursor]);
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden px-5 pt-3 pb-2 min-h-0">
+      {/* Дни недели */}
+      <div className="grid grid-cols-7 gap-[6px] mb-1 shrink-0">
+        {(['dow_mon', 'dow_tue', 'dow_wed', 'dow_thu', 'dow_fri', 'dow_sat', 'dow_sun'] as (keyof Dict)[])
+          .map((k, i) => (
+            <div
+              key={k}
+              className={
+                'text-center text-[11px] font-mono uppercase tracking-wider py-1 ' +
+                (i >= 5 ? 'text-muted/60' : 'text-muted')
+              }
+            >
+              {tr(lang, k)}
+            </div>
+          ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-[6px] flex-1 min-h-0">
+        {cells.map((d, i) => {
+          const dateStr = ymd(d);
+          const isToday = dateStr === today;
+          const dow = d.getDay();
+          const isWeekend = dow === 0 || dow === 6;
+          const dayTasks = tasksByDate.get(dateStr) ?? [];
+          const isPast = dateStr < today;
+          const hasOverdue = isPast && dayTasks.length > 0;
+          return (
+            <CalendarCell
+              key={i}
+              date={d}
+              dateStr={dateStr}
+              inMonth={true}
+              isToday={isToday}
+              isWeekend={isWeekend}
+              hasOverdue={hasOverdue}
+              tasks={dayTasks}
+              statusById={statusById}
+              tagById={tagById}
+              onOpenTask={onOpenTask}
+              variant="week"
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Ячейка дня (droppable) ──────────────────────────────────────────────────
 
 function CalendarCell({
   date, dateStr, inMonth, isToday, isWeekend, hasOverdue,
-  tasks, statusById, tagById, onOpenTask, lang,
+  tasks, statusById, tagById, onOpenTask, variant,
 }: {
   date: Date;
   dateStr: string;
@@ -336,17 +525,16 @@ function CalendarCell({
   statusById: Map<number, Status>;
   tagById: Map<number, Tag>;
   onOpenTask: (t: Task) => void;
-  lang: Lang;
+  variant: 'week' | 'month';
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: `cal-day-${dateStr}`,
     data: { type: 'cal-day', date: dateStr },
   });
 
-  // Стили ячейки
   const bg = isWeekend ? 'var(--surface-alt)' : 'var(--surface)';
   const borderColor = hasOverdue
-    ? 'rgb(239, 68, 68)' // красная рамка для просроченного дня
+    ? 'rgb(239, 68, 68)'
     : isToday
       ? 'var(--accent)'
       : 'var(--border-soft)';
@@ -391,13 +579,10 @@ function CalendarCell({
             status={statusById.get(t.status_id)}
             tag={t.tag_id ? tagById.get(t.tag_id) : undefined}
             onOpen={() => onOpenTask(t)}
-            variant="cell"
+            variant={variant === 'week' ? 'week-cell' : 'cell'}
           />
         ))}
       </div>
-      {/* NB: nav_calendar / cal_more_n сейчас не используются — все задачи видны через скролл. */}
-      {/* lang нужен только для будущей локализации aria-label */}
-      <span className="sr-only" data-lang={lang} />
     </div>
   );
 }
@@ -411,7 +596,7 @@ function DraggableTaskChip({
   status: Status | undefined;
   tag: Tag | undefined;
   onOpen: () => void;
-  variant: 'cell' | 'panel' | 'overlay';
+  variant: 'cell' | 'week-cell' | 'panel' | 'overlay';
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `cal-task-${task.id}`,
@@ -420,7 +605,8 @@ function DraggableTaskChip({
 
   const dot = status?.color ?? '#888';
   const isPanel = variant === 'panel';
-  const isCell = variant === 'cell';
+  const isMonthCell = variant === 'cell';
+  const isWeekCell = variant === 'week-cell';
 
   const baseStyle: React.CSSProperties = {
     background: 'var(--bg)',
@@ -429,25 +615,31 @@ function DraggableTaskChip({
     cursor: 'grab',
   };
 
+  // Панель и week-cell — полное название с переносами.
+  // Month cell — компакт с truncate.
+  const wrap = isPanel || isWeekCell;
+
   return (
     <div
       ref={setNodeRef}
       {...attributes}
       {...listeners}
       onClick={(e) => {
-        // Клик открывает модалку, но НЕ при перетаскивании.
         if (isDragging) return;
         e.stopPropagation();
         onOpen();
       }}
       className={
-        'rounded flex items-center gap-1.5 select-none transition-colors ' +
-        (isCell ? 'px-1.5 py-1 text-[11px]' : 'px-2 py-1 text-[12px]') +
+        'rounded flex items-start gap-1.5 select-none transition-colors ' +
+        (isMonthCell ? 'px-1.5 py-1 text-[11px]' : 'px-2 py-1 text-[12px]') +
         ' hover:border-accent/60'
       }
       style={{
         ...baseStyle,
-        maxWidth: isPanel ? 220 : undefined,
+        // Панель — задаём минимальную ширину, чтобы длинные названия
+        // читались, но не «съедали» весь ряд. maxWidth не ограничиваем.
+        minWidth: isPanel ? 220 : undefined,
+        maxWidth: isPanel ? 320 : undefined,
       }}
       title={task.title}
     >
@@ -461,9 +653,17 @@ function DraggableTaskChip({
           borderRadius: 999,
           flexShrink: 0,
           border: dot.toLowerCase() === '#ffffff' ? '1px solid var(--border-soft)' : 'none',
+          marginTop: wrap ? 5 : 0, // выравниваем с первой строкой
         }}
       />
-      <span className="truncate flex-1 min-w-0">{task.title}</span>
+      <span
+        className={
+          'flex-1 min-w-0 ' +
+          (wrap ? 'whitespace-normal break-words leading-snug' : 'truncate')
+        }
+      >
+        {task.title}
+      </span>
       {tag && (
         <span
           className="inline-flex items-center px-1 rounded text-[9px] font-mono font-medium uppercase tracking-wide shrink-0"
@@ -471,6 +671,7 @@ function DraggableTaskChip({
             color: tag.color,
             border: `1px solid ${tag.color}55`,
             lineHeight: 1.4,
+            marginTop: wrap ? 3 : 0,
           }}
         >
           {tag.name}
