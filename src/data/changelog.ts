@@ -13,6 +13,26 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.14',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Онбординг: наконец полностью починен — подсказки на втором и дальше шагах больше не мигают в верхнем левом углу перед появлением у нужного элемента.',
+        'Забыли пароль: на экране входа появилась ссылка «Забыли пароль?» — придёт письмо со ссылкой, которая откроет TaskFlow и предложит задать новый пароль.',
+        'Смена пароля и email: в Настройки → Аккаунт добавлены кнопки «Сменить пароль» и «Сменить email» (только для аккаунтов через пароль). Для смены email на новый адрес придёт письмо-подтверждение.',
+        'Запомнить меня: чекбокс на экране входа — email префиллится при следующем запуске. Пароль не хранится из соображений безопасности.',
+        'Подтверждение email: новые регистрации через email/пароль теперь требуют подтверждения по ссылке из письма. Существующие аккаунты остаются как есть.',
+      ],
+      en: [
+        'Onboarding: fully fixed at last — tooltips on step 2 and beyond no longer flash in the top-left corner before appearing on the correct element.',
+        'Forgot password: a "Forgot password?" link now appears on the sign-in screen. An email with a link opens TaskFlow and prompts you to set a new password.',
+        'Change password and email: Settings → Account now has "Change password" and "Change email" buttons (email/password accounts only). Changing email requires confirmation via a link sent to the new address.',
+        'Remember me: a checkbox on the sign-in screen — your email is prefilled on the next launch. The password itself is never stored, for security.',
+        'Email verification: new email/password sign-ups now require confirmation via a link. Existing accounts stay as-is.',
+      ],
+    },
+  },
+  {
     version: '0.9.13',
     date: '2026-07-03',
     items: {

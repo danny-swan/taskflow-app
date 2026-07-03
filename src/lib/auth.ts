@@ -3,7 +3,21 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  * Copyright (c) 2026 Daniil Lebedev (danny-swan)
  *
- * v0.9.9 — Authentication hook и helpers.
+ * v0.9.9  — Authentication hook и helpers.
+ * v0.9.14 — Password reset, change password/email, remember email.
+ *
+ * Remember email:
+ *   - Сам пароль НЕ хранится. Supabase JWT-сессия и так в localStorage,
+ *     так что второй вход в течение недели вообще не нужен.
+ *   - Запоминаем только email в localStorage (ключ REMEMBERED_EMAIL_KEY),
+ *     чтобы префиллить поле на экране входа после явного signOut.
+ *
+ * Password reset flow:
+ *   1. AuthScreen → «Забыли пароль?» → requestPasswordReset(email)
+ *   2. Supabase отправляет письмо → taskflow://auth/callback#type=recovery&access_token=…
+ *   3. handleAuthCallback возвращает type='recovery',
+ *      App.tsx показывает экран ввода нового пароля.
+ *   4. Новый пароль → updatePassword() → автовход.
  *
  * Логика grace period:
  *   - При успешном login сохраняем last_online_at в settings.
@@ -19,6 +33,25 @@ import * as db from './db';
 
 const LAST_ONLINE_KEY = 'auth_last_online_at';
 const GRACE_PERIOD_DAYS = 7;
+// v0.9.14: ключ localStorage для «запомнить email».
+const REMEMBERED_EMAIL_KEY = 'tf.remembered_email';
+
+/** v0.9.14: возвращает сохранённый email для префилла поля входа. */
+export function getRememberedEmail(): string | null {
+  try {
+    return localStorage.getItem(REMEMBERED_EMAIL_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** v0.9.14: сохранить email для будущего входа (null → удалить). */
+export function setRememberedEmail(email: string | null) {
+  try {
+    if (email) localStorage.setItem(REMEMBERED_EMAIL_KEY, email);
+    else localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+  } catch { /* silent */ }
+}
 
 export function getLastOnline(): number | null {
   try {
@@ -137,6 +170,39 @@ export async function signInWithPassword(email: string, password: string) {
   return data;
 }
 
+/**
+ * v0.9.14 — отправка письма для сброса пароля.
+ * Supabase отправляет письмо с ссылкой на redirectTo,
+ * в фрагменте придёт type=recovery + access_token/refresh_token.
+ */
+export async function requestPasswordReset(email: string) {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: 'taskflow://auth/callback',
+  });
+  if (error) throw error;
+}
+
+/**
+ * v0.9.14 — смена пароля.
+ * Требует активной сессии (либо обычная, либо recovery после handleAuthCallback).
+ */
+export async function updatePassword(newPassword: string) {
+  const { data, error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * v0.9.14 — смена email.
+ * Supabase отправляет письмо-подтверждение на НОВЫЙ адрес.
+ * После клика по ссылке email в auth.users обновляется.
+ */
+export async function updateEmail(newEmail: string) {
+  const { data, error } = await supabase.auth.updateUser({ email: newEmail });
+  if (error) throw error;
+  return data;
+}
+
 /** Регистрация по email/password. */
 export async function signUpWithPassword(email: string, password: string) {
   const { data, error } = await supabase.auth.signUp({ email, password });
@@ -179,13 +245,26 @@ export async function signInWithGoogle() {
 }
 
 /**
- * v0.9.11 — обработчик deep link taskflow://auth/callback#…
- * Вызывается из App.tsx при emit события от Rust.
+ * v0.9.11  — обработчик deep link taskflow://auth/callback#…
+ * v0.9.14 — возвращает тип callback'а, чтобы App.tsx мог различить
+ *           обычный OAuth-вход и recovery (сброс пароля).
  *
- * Supabase отдаёт токены в hash fragment: #access_token=…&refresh_token=…&expires_in=…&token_type=bearer
- * (это implicit flow; PKCE Supabase пока не требует для OAuth через свой callback).
+ * Supabase отдаёт токены в hash fragment:
+ *   #access_token=…&refresh_token=…&expires_in=…&token_type=bearer&type=<signup|recovery|magiclink|…>
+ *
+ * Категории возврата:
+ *
+ *   - 'oauth'    — вход через Google (нет type в fragment)
+ *   - 'recovery' — сброс пароля, нужно показать экран ввода нового пароля
+ *   - 'signup'   — подтверждение email при регистрации
+ *   - 'other'    — magiclink / invite / что-то ещё
  */
-export async function handleAuthCallback(url: string): Promise<boolean> {
+
+export type AuthCallbackResult =
+  | { ok: true; type: 'oauth' | 'recovery' | 'signup' | 'other' }
+  | { ok: false };
+
+export async function handleAuthCallback(url: string): Promise<AuthCallbackResult> {
   try {
     // Парсим даже если URL с custom scheme — URL API его принимает.
     const u = new URL(url);
@@ -195,18 +274,25 @@ export async function handleAuthCallback(url: string): Promise<boolean> {
 
     const access_token = params.get('access_token');
     const refresh_token = params.get('refresh_token');
+    const type = params.get('type'); // 'recovery' | 'signup' | 'magiclink' | 'invite' | null
     const error_desc = params.get('error_description') || params.get('error');
 
     if (error_desc) throw new Error(error_desc);
-    if (!access_token || !refresh_token) return false;
+    if (!access_token || !refresh_token) return { ok: false };
 
     const { error } = await supabase.auth.setSession({ access_token, refresh_token });
     if (error) throw error;
     setLastOnline();
-    return true;
+
+    const kind: 'oauth' | 'recovery' | 'signup' | 'other' =
+      type === 'recovery' ? 'recovery'
+      : type === 'signup' ? 'signup'
+      : type == null ? 'oauth'
+      : 'other';
+    return { ok: true, type: kind };
   } catch (e) {
     console.error('[deep-link] auth callback failed:', e);
-    return false;
+    return { ok: false };
   }
 }
 

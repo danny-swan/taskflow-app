@@ -43,6 +43,25 @@
  *                поздний рендер страницы после navigate().
  *            (4) Пока target не найден — tooltip показывается
  *                visibility:hidden, чтобы не мерцал.
+ * v0.9.14  — Полное решение проблемы мигания на 2-м+ шагах:
+ *            Корневая причина — рассинхрон между step (React state) и
+ *            floating-ui, у которого своя внутренняя аккумуляция позиции.
+ *            Промежуточные рендеры между сменой step и первым успешным
+ *            computePosition давали {top:0,left:0}.
+ *
+ *            Решение — многослойная защита:
+ *            (1) `key={step}` на floating-tooltip: React полностью
+ *                размонтирует старый tooltip при смене шага, useFloating
+ *                инициализируется с нуля, isPositioned гарантированно
+ *                false до первого расчёта.
+ *            (2) `activeStep` — отдельный state, который выставляется
+ *                ТОЛЬКО когда floating-ui подтвердил позицию (или шаг
+ *                центрированный). Render использует activeStep, а не step.
+ *            (3) `useLayoutEffect` для сброса targetEl вместо useEffect —
+ *                выполняется синхронно перед paint, без промежуточного
+ *                видимого кадра со старым reference.
+ *            (4) hideTooltip = step !== activeStep — единственный источник
+ *                правды видимости, без гонок с resolving/isPositioned.
  *
  * Public API (не менять сигнатуры — используется в Help.tsx и App.tsx):
  *   - <Onboarding />          — маунтится один раз в App.tsx
@@ -223,8 +242,9 @@ export function Onboarding() {
   const [step, setStep] = useState(0);
   const [targetEl, setTargetEl] = useState<HTMLElement | null>(null);
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
-  // v0.9.11: пока идёт поиск target — прячем tooltip, чтобы не мерцал.
-  const [resolving, setResolving] = useState(false);
+  // v0.9.14: activeStep — шаг, для которого позиция уже подтверждена.
+  // null — позиция ещё не готова для текущего step → tooltip скрыт.
+  const [activeStep, setActiveStep] = useState<number | null>(null);
 
   const cur = STEPS[step];
   const isLast = step === STEPS.length - 1;
@@ -238,22 +258,27 @@ export function Onboarding() {
     return () => clearTimeout(t);
   }, [ready]);
 
-  // v0.9.11: сначала СИНХРОННО сбрасываем targetEl, чтобы первый рендер
-  // нового шага не позиционировался относительно старого элемента.
-  // Затем — navigate и поиск target с ретраями на случай позднего рендера.
-  useEffect(() => {
+  // v0.9.14: сброс targetEl и activeStep в useLayoutEffect — до paint,
+  // без промежуточного видимого кадра со старым reference.
+  useLayoutEffect(() => {
     if (!open) return;
-
-    // Сброс состояния target — синхронно
     setTargetEl(null);
     setTargetRect(null);
-    setResolving(cur.target !== null);
+    // Пока не подтвердилась позиция для нового шага — сбрасываем в null.
+    setActiveStep(null);
+  }, [open, step]);
+
+  // navigate + поиск target — обычным useEffect, после paint.
+  useEffect(() => {
+    if (!open) return;
 
     if (cur.route) {
       navigate(cur.route);
     }
+
+    // Центрированный шаг — сразу активируем.
     if (!cur.target) {
-      setResolving(false);
+      setActiveStep(step);
       return;
     }
 
@@ -261,7 +286,9 @@ export function Onboarding() {
     let attempts = 0;
     const maxAttempts = 20;
     let timerId: number;
+    let cancelled = false;
     const tick = () => {
+      if (cancelled) return;
       attempts += 1;
       const el = document.querySelector<HTMLElement>(
         `[data-onboarding="${cur.target}"]`
@@ -269,18 +296,21 @@ export function Onboarding() {
       if (el) {
         setTargetEl(el);
         setTargetRect(el.getBoundingClientRect());
-        setResolving(false);
+        // activeStep выставит следующий эффект, когда isPositioned=true.
         return;
       }
       if (attempts < maxAttempts) {
         timerId = window.setTimeout(tick, 50);
       } else {
-        // Не нашли — fallback в центр
-        setResolving(false);
+        // Не нашли — fallback: активируем центрированный вариант.
+        setActiveStep(step);
       }
     };
     timerId = window.setTimeout(tick, 50);
-    return () => window.clearTimeout(timerId);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timerId);
+    };
   }, [open, step, cur.target, cur.route, navigate]);
 
   // Обновляем rect на resize/scroll — spotlight должен двигаться вместе с UI
@@ -307,10 +337,9 @@ export function Onboarding() {
     top: 'top', right: 'right', bottom: 'bottom', left: 'left',
   };
 
-  // v0.9.11.1: reference — через elements (синхронный контракт floating-ui v2).
-  // isPositioned=true — только когда позиция реально вычислена для текущего reference.
-  // Без этого между сменой targetEl и пересчётом floatingStyles бывает tick,
-  // когда tooltip рендерится с top:0/left:0 — это и был баг «в левый верхний угол».
+  // v0.9.14: reference — через elements (синхронный контракт floating-ui v2).
+  // Компонент tooltip мы монтируем с key={step}, поэтому useFloating
+  // здесь инициализируется с нуля при каждой смене шага.
   const { refs, floatingStyles, isPositioned } = useFloating({
     strategy: 'fixed',
     placement: placementMap[cur.placement ?? 'bottom'],
@@ -319,11 +348,17 @@ export function Onboarding() {
     elements: { reference: targetEl },
   });
 
-  // v0.9.11.1: тултип невидим пока:
-  //  1) идёт поиск target (resolving), ЛИБО
-  //  2) target есть, но floating-ui ещё не пересчитал позицию («в угле 0,0»).
-  // Центрированный вариант не зависит от floating-ui — показываем сразу.
-  const hideTooltip = resolving || (!isCentered && !isPositioned);
+  // Когда floating-ui подтвердил позицию — активируем шаг.
+  useEffect(() => {
+    if (!open) return;
+    if (isCentered) return; // центрированный уже активирован в поиске.
+    if (isPositioned && targetEl) {
+      setActiveStep(step);
+    }
+  }, [open, isCentered, isPositioned, targetEl, step]);
+
+  // v0.9.14: единственный источник видимости — совпадение step и activeStep.
+  const hideTooltip = activeStep !== step;
 
   if (!open) return null;
 
@@ -417,8 +452,11 @@ export function Onboarding() {
 
       {/* Tooltip.
           v0.9.8: если нет target — центрируем через translate(-50%,-50%),
-          floating-ui игнорируем (иначе tooltip прилипает к (0,0)). */}
+          floating-ui игнорируем (иначе tooltip прилипает к (0,0)).
+          v0.9.14: key={step} — при смене шага React полностью
+          пересоздаёт tooltip и useFloating внутри, без остаточных стилей. */}
       <div
+        key={step}
         ref={refs.setFloating as any}
         style={{
           ...(isCentered

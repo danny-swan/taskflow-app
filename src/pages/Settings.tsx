@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
-import { useAuth, signOut, deleteAccount } from '../lib/auth';
+import { useAuth, signOut, deleteAccount, updateEmail } from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
 import { PrivacyModal } from '../components/PrivacyModal';
+import { PasswordResetModal } from '../components/PasswordResetModal';
+import { usePrompt } from '../components/PromptDialog';
 import pkg from '../../package.json';
 import { downloadFile } from '../lib/utils';
 import { resetDatabase, isTauri, buildBackup, applyBackup, getSchemaVersion, type BackupPayload } from '../lib/db';
@@ -1636,10 +1638,22 @@ function AccountSection() {
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
+  // v0.9.14: modal-флаги для смены пароля/email.
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const { prompt, PromptUI } = usePrompt();
 
   const t = (ru: string, en: string) => (isRu ? ru : en);
 
   const user = auth.session?.user;
+  // v0.9.14: проверяем провайдер. Для Google-аккаунтов пароль/email меняются через Google, не через Supabase.
+  const isEmailProvider = (() => {
+    const identities = (user as any)?.identities as Array<{ provider: string }> | undefined;
+    if (identities && identities.length > 0) {
+      return identities.some(i => i.provider === 'email');
+    }
+    // fallback: если identities нет, смотрим app_metadata.provider.
+    return (user?.app_metadata as any)?.provider !== 'google';
+  })();
   const createdAt = user?.created_at ? new Date(user.created_at).toLocaleDateString(isRu ? 'ru-RU' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
   const lastSignIn = user?.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString(isRu ? 'ru-RU' : 'en-US') : '—';
 
@@ -1651,6 +1665,39 @@ function AccountSection() {
       pushToast(t('Вы вышли из аккаунта', 'You have been signed out'));
     } catch (e: any) {
       pushToast(e?.message ?? t('Ошибка выхода', 'Sign out error'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // v0.9.14: смена email — Supabase пошлёт письмо-подтверждение на новый адрес.
+  const handleChangeEmail = async () => {
+    const newEmail = await prompt({
+      title: t('Смена email', 'Change email'),
+      placeholder: 'new@example.com',
+      defaultValue: '',
+      confirmLabel: t('Отправить', 'Send'),
+      cancelLabel: t('Отмена', 'Cancel'),
+      validate: v => {
+        if (!v || !v.includes('@') || !v.includes('.')) {
+          return t('Введите корректный email', 'Please enter a valid email');
+        }
+        if (v.toLowerCase() === user?.email?.toLowerCase()) {
+          return t('Это ваш текущий email', 'This is your current email');
+        }
+        return null;
+      },
+    });
+    if (!newEmail) return;
+    setBusy(true);
+    try {
+      await updateEmail(newEmail);
+      pushToast(t(
+        'На новый адрес отправлено письмо — перейдите по ссылке, чтобы подтвердить смену',
+        'A confirmation link has been sent to the new address',
+      ));
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка смены email', 'Email change error'));
     } finally {
       setBusy(false);
     }
@@ -1716,6 +1763,28 @@ function AccountSection() {
         )}
       </div>
 
+      {/* v0.9.14: смена пароля и email — только для email-провайдера. Google-юзеры меняют в своём аккаунте Google. */}
+      {isEmailProvider && (
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={() => setShowChangePassword(true)}
+            disabled={busy}
+            className="w-full sm:w-auto flex items-center justify-start gap-2 px-4 py-2 text-[13px] border border-border-soft rounded-md hover:bg-surface-alt disabled:opacity-50"
+          >
+            <KeyRound size={14} />
+            {t('Сменить пароль', 'Change password')}
+          </button>
+          <button
+            onClick={handleChangeEmail}
+            disabled={busy}
+            className="w-full sm:w-auto flex items-center justify-start gap-2 px-4 py-2 text-[13px] border border-border-soft rounded-md hover:bg-surface-alt disabled:opacity-50"
+          >
+            <Mail size={14} />
+            {t('Сменить email', 'Change email')}
+          </button>
+        </div>
+      )}
+
       <div>
         <button
           onClick={() => setShowPrivacy(true)}
@@ -1747,6 +1816,10 @@ function AccountSection() {
       </div>
 
       {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
+      {showChangePassword && (
+        <PasswordResetModal onClose={() => setShowChangePassword(false)} />
+      )}
+      <PromptUI />
 
       <ConfirmDialog
         open={confirmDelete}
