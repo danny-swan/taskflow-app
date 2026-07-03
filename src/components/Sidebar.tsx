@@ -45,6 +45,7 @@ export function Sidebar() {
     <aside
       className="flex flex-col shrink-0 border-r border-border-soft"
       style={{ width: 220, background: 'var(--surface)' }}
+      data-onboarding="sidebar"
     >
       {/* Brand */}
       <div className="px-5 pt-5 pb-4">
@@ -63,6 +64,7 @@ export function Sidebar() {
             <NavLink
               key={it.to}
               to={it.to}
+              data-onboarding={`nav-${it.key}`}
               className={({ isActive }) =>
                 'flex items-center gap-2.5 px-3 py-1.5 mb-0.5 rounded-md text-[13px] transition-colors ' +
                 (isActive
