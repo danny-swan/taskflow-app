@@ -13,6 +13,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.10',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Исправлено «Failed to fetch» при регистрации и входе: расширена политика безопасности приложения (CSP), теперь запросы к серверу аутентификации проходят корректно.',
+        'Политика конфиденциальности: временный контакт разработчика заменён на GitHub Issues (data-request). Добавлено человеческое объяснение того, что такое «хеш пароля» — сам пароль не хранится нигде и не может быть восстановлен, включая разработчиком.',
+      ],
+      en: [
+        'Fixed «Failed to fetch» during sign up and sign in: the app’s Content Security Policy (CSP) has been broadened so that requests to the auth server now go through.',
+        'Privacy Policy: the developer’s temporary contact has been replaced with GitHub Issues (data-request). Added a plain-language explanation of what a «password hash» is — the password itself is not stored anywhere and cannot be recovered, including by the developer.',
+      ],
+    },
+  },
+  {
     version: '0.9.9',
     date: '2026-07-03',
     items: {
