@@ -13,6 +13,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.13',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Удаление аккаунта: починена серверная часть — раньше при удалении из-под Google-аккаунта возвращалась ошибка «Invalid or expired token». Теперь функция валидирует токен через штатный клиент Supabase и корректно удаляет учётную запись как для email/пароля, так и для входа через Google.',
+      ],
+      en: [
+        'Delete account: fixed the server side — previously deletion under a Google-signed session failed with "Invalid or expired token". The Edge Function now validates the JWT through the standard Supabase client and correctly removes accounts signed in with either email/password or Google.',
+      ],
+    },
+  },
+  {
     version: '0.9.12',
     date: '2026-07-03',
     items: {
