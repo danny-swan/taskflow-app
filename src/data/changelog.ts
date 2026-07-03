@@ -13,6 +13,27 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.5',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Календарь: новый режим «Неделя» (по умолчанию) + переключатель «Неделя/Месяц» (по принципу «Список/Канбан»).',
+        'В режиме «Неделя» карточка задачи показывает полное название (с переносом строк), высота адаптивная. В режиме «Месяц» остаётся компактный вид (с усечением «…»).',
+        'Панель «Без дедлайна»: теперь показывает полное название задачи с переносом строк, карточки шире. Если все не влезают — вертикальный скролл (высота панели прежняя).',
+        'Панель «Без дедлайна» — единая для обоих режимов и по расположению, и по виду.',
+        'Навигация: стрелки «‹» и «›» теперь оформлены как кнопки с рамкой (в стиле «Сегодня»). Кнопка «Сегодня» вынесена вправо и отделена от стрелок — меньше путаницы в группе кнопок.',
+        'Названия месяцев в заголовке — теперь в именительном падеже («Июнь 2026», а не «Июня 2026»).',
+      ],
+      en: [
+        'Calendar: new “Week” view (default) and a Week/Month toggle (in the style of List/Kanban).',
+        'In Week view a task card shows the full title with line wrapping and adaptive height. Month view keeps the compact card with “…” truncation.',
+        'The “No deadline” panel now shows full task titles with line wrapping and wider cards. If they overflow, the panel scrolls vertically (the panel height stays the same).',
+        'The “No deadline” panel is shared between Week and Month views — same location and layout.',
+        'Navigation: “‹” and “›” are now bordered buttons (matching “Today”). The “Today” button is moved to the right and separated from the arrows — less confusion in the button group.',
+      ],
+    },
+  },
+  {
     version: '0.9.4',
     date: '2026-07-03',
     items: {
