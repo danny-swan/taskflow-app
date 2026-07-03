@@ -145,18 +145,69 @@ export async function signUpWithPassword(email: string, password: string) {
   return data;
 }
 
-/** Логин через Google OAuth. */
+/**
+ * v0.9.11 — Google OAuth через deep link taskflow://auth/callback.
+ *
+ * Flow:
+ *   1. Клиент вызывает signInWithOAuth({ skipBrowserRedirect: true }) —
+ *      Supabase возвращает URL, который мы сами открываем в системном браузере.
+ *   2. Google → Supabase → redirect на taskflow://auth/callback#access_token=…&refresh_token=…
+ *   3. ONE (Windows) открывает taskflow.exe, Tauri emit'ит deep-link://auth-callback,
+ *      listener в App.tsx вызывает handleAuthCallback(url) из этого файла.
+ *   4. Парсим fragment, вызываем supabase.auth.setSession → SIGNED_IN.
+ */
 export async function signInWithGoogle() {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      // В Tauri desktop OAuth flow работает через system browser + deep link
-      // (детали настройки — в docs/AUTH_GOOGLE.md, добавим позже)
-      redirectTo: 'http://localhost:1420/auth/callback',
+      redirectTo: 'taskflow://auth/callback',
+      skipBrowserRedirect: true,
     },
   });
   if (error) throw error;
+  if (!data.url) throw new Error('Supabase не вернул OAuth URL');
+
+  // Открываем в системном браузере через tauri-plugin-shell.
+  try {
+    const { open } = await import('@tauri-apps/plugin-shell');
+    await open(data.url);
+  } catch {
+    // Фолбэк для dev-web (вне Tauri, когда vite открыт в браузере напрямую).
+    window.open(data.url, '_blank');
+  }
   return data;
+}
+
+/**
+ * v0.9.11 — обработчик deep link taskflow://auth/callback#…
+ * Вызывается из App.tsx при emit события от Rust.
+ *
+ * Supabase отдаёт токены в hash fragment: #access_token=…&refresh_token=…&expires_in=…&token_type=bearer
+ * (это implicit flow; PKCE Supabase пока не требует для OAuth через свой callback).
+ */
+export async function handleAuthCallback(url: string): Promise<boolean> {
+  try {
+    // Парсим даже если URL с custom scheme — URL API его принимает.
+    const u = new URL(url);
+    // Приоритет — hash (implicit); fallback — query (если Supabase переключаться на code flow).
+    const raw = u.hash.startsWith('#') ? u.hash.slice(1) : u.search.replace(/^\?/, '');
+    const params = new URLSearchParams(raw);
+
+    const access_token = params.get('access_token');
+    const refresh_token = params.get('refresh_token');
+    const error_desc = params.get('error_description') || params.get('error');
+
+    if (error_desc) throw new Error(error_desc);
+    if (!access_token || !refresh_token) return false;
+
+    const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+    if (error) throw error;
+    setLastOnline();
+    return true;
+  } catch (e) {
+    console.error('[deep-link] auth callback failed:', e);
+    return false;
+  }
 }
 
 /** Выход. Токены удаляются из localStorage. */
@@ -169,15 +220,16 @@ export async function signOut() {
   } catch { /* silent */ }
 }
 
-/** Удалить аккаунт. Нужен свежий JWT — auth.users на стороне БД удаляется каскадом. */
+/**
+ * v0.9.11 — удаление аккаунта через Edge Function delete_account.
+ *
+ * Edge Function использует service_role key (внутри Supabase, не виден клиенту)
+ * и вызывает auth.admin.deleteUser(user.id). При этом profiles и все связанные
+ * строки удаляются каскадом (см. миграции).
+ */
 export async function deleteAccount() {
-  // Supabase не даёт удалить свой auth.users через anon key (безопасность).
-  // Мы удаляем profile — а auth.users надо удалить через Edge Function с
-  // service_role. Пока просто signOut + помечаем profile как deleted через RPC.
-  // TODO(v0.9.10): создать Edge Function delete-account, вызывать через .rpc('delete_account')
-  const { data: { user } } = await supabase.auth.getUser();
-  if (user) {
-    await supabase.from('profiles').update({ metadata: { deleted_at: new Date().toISOString() } }).eq('id', user.id);
-  }
+  const { data, error } = await supabase.functions.invoke('delete_account');
+  if (error) throw error;
+  if (data && data.error) throw new Error(String(data.error));
   await signOut();
 }

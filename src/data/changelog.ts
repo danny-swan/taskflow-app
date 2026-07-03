@@ -13,6 +13,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.11',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Онбординг: полностью починено позиционирование промежуточных шагов — подсказки больше не мелькают в углу и появляются только после того, как найден целевой элемент.',
+        'Вход через Google: теперь можно войти одним кликом через Google-аккаунт. Открывается системный браузер, после подтверждения вы возвращаетесь в приложение автоматически.',
+        'Удаление аккаунта: теперь удаляется по-настоящему — вместе с учётной записью Supabase auth (раньше очищался только профиль). Сможете зарегистрироваться на тот же email заново.',
+      ],
+      en: [
+        'Onboarding: intermediate-step tooltip positioning is fully fixed — hints no longer flash in the corner and only appear after the target element is located.',
+        'Sign in with Google: one-click sign in via a Google account. Your system browser opens, and after you confirm you are returned to the app automatically.',
+        'Delete account: your account is now really deleted — the Supabase auth record is removed together with your profile (previously only the profile was wiped). You can register again with the same email.',
+      ],
+    },
+  },
+  {
     version: '0.9.10',
     date: '2026-07-03',
     items: {

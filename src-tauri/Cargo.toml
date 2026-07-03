@@ -1,6 +1,6 @@
 [package]
 name = "taskflow"
-version = "0.9.10"
+version = "0.9.11"
 description = "TaskFlow — менеджер задач"
 authors = ["TaskFlow"]
 edition = "2021"
@@ -16,6 +16,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-os = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 dirs = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

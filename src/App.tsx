@@ -13,7 +13,7 @@ import { Topbar } from './components/Topbar';
 import { ToastStack } from './components/Toast';
 import { Onboarding } from './components/Onboarding';
 import { AuthScreen } from './components/AuthScreen';
-import { useAuth } from './lib/auth';
+import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { TasksPage } from './pages/Tasks';
 // v0.8.6: AddTaskPage больше не подключается — заменена на NewTaskModal
@@ -38,6 +38,30 @@ function App() {
 
   // v0.9.9: auth guard
   const auth = useAuth();
+
+  // v0.9.11: слушаем deep link taskflow://auth/callback из Rust.
+  // Приходит массив URL (обычно один). Звёнываем всех до первого успеха.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlisten = await listen<string[]>('deep-link://auth-callback', async (event) => {
+          const urls = event.payload ?? [];
+          for (const u of urls) {
+            const ok = await handleAuthCallback(u);
+            if (ok) {
+              pushToast(lang === 'ru' ? 'Вы вошли через Google' : 'Signed in with Google');
+              break;
+            }
+          }
+        });
+      } catch {
+        // Не Tauri (dev-web) — deep link не актуален.
+      }
+    })();
+    return () => { if (unlisten) unlisten(); };
+  }, [lang, pushToast]);
 
   useEffect(() => {
     init().catch(err => console.error('DB init failed', err));

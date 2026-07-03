@@ -8,7 +8,8 @@
 
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct DbConfig {
@@ -301,15 +302,46 @@ fn load_saved_db_path(app: &tauri::AppHandle) -> Option<String> {
 
 fn main() {
     let app = tauri::Builder::default()
+        // v0.9.11: single-instance с фичей deep-link — вторая копия приложения
+        // передаёт ссылку в основную и завершается. Обязателен для Windows OAuth.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // Просто фокусируем главное окно; сам URL придёт через on_open_url.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+                let _ = window.unminimize();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             let saved = load_saved_db_path(&app.handle());
             app.manage(AppState { db_path: Mutex::new(saved) });
+
+            // v0.9.11: обработчик deep link taskflow://auth/callback#...
+            // Эмитим событие во фронт; там парсим fragment и вызываем supabase.setSession.
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                let urls: Vec<String> = event.urls().iter().map(|u| u.to_string()).collect();
+                let _ = handle.emit("deep-link://auth-callback", urls);
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.set_focus();
+                    let _ = window.unminimize();
+                }
+            });
+
+            // В dev-режиме (npm run tauri dev) регистрируем scheme на лету —
+            // installer не запускался, но без этого redirect из браузера не долетит.
+            // В release scheme регистрируется NSIS installer'ом; register() тогда — no-op.
+            #[cfg(desktop)]
+            {
+                let _ = app.deep_link().register("taskflow");
+            }
+
             Ok(())
         })
         // v0.8.11: автоматическая резервная копия при закрытии окна (best-effort, не блокирует выход).
