@@ -13,6 +13,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.18',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'Онбординг полностью переписан. Вместо тултипа, который пытался прилепиться к кнопкам интерфейса (и иногда уезжал за экран) — теперь один аккуратный модал по центру экрана. На каждом шаге автоматически переключается соответствующая вкладка, чтобы видно было о чём речь. Сверху карточки — прогресс-полоска.',
+        'Содержание тура расширено: 10 шагов вместо 11 (убрал дубль «Навигация»), добавлена вкладка Статистики, упомянута синхронизация через Supabase.',
+      ],
+      en: [
+        'Onboarding rewritten from scratch. Instead of a tooltip trying to stick to UI buttons (and sometimes drifting off-screen), the tour now shows one clean modal centered on the screen. Each step automatically switches to the relevant tab in the background so you can see what is being described. Progress bar sits at the top of the card.',
+        'Content expanded: 10 steps instead of 11 (removed duplicate «Navigation»), added a Stats step, mentioned optional Supabase cloud sync.',
+      ],
+    },
+  },
+  {
     version: '0.9.17',
     date: '2026-07-04',
     items: {
