@@ -30,6 +30,19 @@
  *            autoUpdate работает штатно. Для шагов без target (welcome/final)
  *            reference не устанавливается, tooltip центрируется собственным
  *            style (position:fixed + translate(-50%,-50%)).
+ * v0.9.11  — Итоговый фикс левого-верхнего угла (0,0):
+ *            (1) refs.setReference(el) в useLayoutEffect всё ещё отставал от
+ *                рендера — floating-ui успевал вычислить позицию с
+ *                reference=null и вернуть {top:0,left:0}. Перевели на
+ *                elements: { reference: targetEl } — нативный контракт
+ *                floating-ui v2, пересчёт синхронен с рендером React.
+ *            (2) targetEl сбрасывается СИНХРОННО в useEffect смены шага
+ *                до таймера, чтобы isCentered=true срабатывало в первом
+ *                рендере нового шага и не оставалось старого reference.
+ *            (3) Поиск target — с ретраями (до 1с), чтобы пережить
+ *                поздний рендер страницы после navigate().
+ *            (4) Пока target не найден — tooltip показывается
+ *                visibility:hidden, чтобы не мерцал.
  *
  * Public API (не менять сигнатуры — используется в Help.tsx и App.tsx):
  *   - <Onboarding />          — маунтится один раз в App.tsx
@@ -210,6 +223,8 @@ export function Onboarding() {
   const [step, setStep] = useState(0);
   const [targetEl, setTargetEl] = useState<HTMLElement | null>(null);
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
+  // v0.9.11: пока идёт поиск target — прячем tooltip, чтобы не мерцал.
+  const [resolving, setResolving] = useState(false);
 
   const cur = STEPS[step];
   const isLast = step === STEPS.length - 1;
@@ -223,25 +238,49 @@ export function Onboarding() {
     return () => clearTimeout(t);
   }, [ready]);
 
-  // При смене шага: навигация → поиск target → сохранение rect
+  // v0.9.11: сначала СИНХРОННО сбрасываем targetEl, чтобы первый рендер
+  // нового шага не позиционировался относительно старого элемента.
+  // Затем — navigate и поиск target с ретраями на случай позднего рендера.
   useEffect(() => {
     if (!open) return;
+
+    // Сброс состояния target — синхронно
+    setTargetEl(null);
+    setTargetRect(null);
+    setResolving(cur.target !== null);
+
     if (cur.route) {
-      // navigate синхронный; хешовые роуты обрабатываются сразу
       navigate(cur.route);
     }
-    // Даём React отрисовать страницу перед поиском target
-    const t = setTimeout(() => {
-      if (!cur.target) {
-        setTargetEl(null);
-        setTargetRect(null);
+    if (!cur.target) {
+      setResolving(false);
+      return;
+    }
+
+    // Поиск с ретраями: 20 попыток × 50ms = 1s.
+    let attempts = 0;
+    const maxAttempts = 20;
+    let timerId: number;
+    const tick = () => {
+      attempts += 1;
+      const el = document.querySelector<HTMLElement>(
+        `[data-onboarding="${cur.target}"]`
+      );
+      if (el) {
+        setTargetEl(el);
+        setTargetRect(el.getBoundingClientRect());
+        setResolving(false);
         return;
       }
-      const el = document.querySelector<HTMLElement>(`[data-onboarding="${cur.target}"]`);
-      setTargetEl(el);
-      setTargetRect(el ? el.getBoundingClientRect() : null);
-    }, 60);
-    return () => clearTimeout(t);
+      if (attempts < maxAttempts) {
+        timerId = window.setTimeout(tick, 50);
+      } else {
+        // Не нашли — fallback в центр
+        setResolving(false);
+      }
+    };
+    timerId = window.setTimeout(tick, 50);
+    return () => window.clearTimeout(timerId);
   }, [open, step, cur.target, cur.route, navigate]);
 
   // Обновляем rect на resize/scroll — spotlight должен двигаться вместе с UI
@@ -268,20 +307,15 @@ export function Onboarding() {
     top: 'top', right: 'right', bottom: 'bottom', left: 'left',
   };
 
+  // v0.9.11: reference передаётся через elements — нативный контракт
+  // floating-ui v2, синхронный с рендером React (без refs.setReference в effect).
   const { refs, floatingStyles } = useFloating({
     strategy: 'fixed',
     placement: placementMap[cur.placement ?? 'bottom'],
     middleware: [offset(12), flip(), shift({ padding: 12 })],
     whileElementsMounted: autoUpdate,
+    elements: { reference: targetEl },
   });
-
-  // v0.9.9: reference — реальный DOM-элемент.
-  // Если его нет (шаг без target или target не нашёлся) — сбрасываем reference,
-  // чтобы floating-ui не пытался вычислять позицию; тогда включается
-  // isCentered-ветка с translate(-50%,-50%).
-  useLayoutEffect(() => {
-    refs.setReference(targetEl);
-  }, [targetEl, refs]);
 
   if (!open) return null;
 
@@ -378,18 +412,19 @@ export function Onboarding() {
           floating-ui игнорируем (иначе tooltip прилипает к (0,0)). */}
       <div
         ref={refs.setFloating as any}
-        style={
-          isCentered
+        style={{
+          ...(isCentered
             ? {
-                position: 'fixed',
+                position: 'fixed' as const,
                 top: '50%',
                 left: '50%',
                 transform: 'translate(-50%, -50%)',
-                zIndex: 91,
                 width: 'min(440px, 92vw)',
               }
-            : { ...floatingStyles, zIndex: 91, width: 'min(400px, 92vw)' }
-        }
+            : { ...floatingStyles, width: 'min(400px, 92vw)' }),
+          zIndex: 91,
+          visibility: resolving ? ('hidden' as const) : ('visible' as const),
+        }}
         className="scale-in"
       >
         <div className="bg-surface border border-border rounded-xl shadow-2xl overflow-hidden">
