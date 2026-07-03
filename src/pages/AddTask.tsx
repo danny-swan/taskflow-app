@@ -5,6 +5,7 @@ import { AutoGrowTextarea } from '../components/AutoGrowTextarea';
 import { StatusPill } from '../components/StatusPill';
 import { TagChip } from '../components/TagChip';
 import { useNavigate } from 'react-router-dom';
+import { DatePicker } from '../components/DatePicker';
 
 export function AddTaskPage() {
   const lang = useStore(s => s.language);
@@ -117,19 +118,15 @@ export function AddTaskPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <Field label={tr(lang, 'start')}>
-              <input
-                type="date"
-                value={start}
-                onChange={(e) => setStart(e.target.value)}
-                className="w-full bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+              <DatePicker
+                value={start || null}
+                onChange={(v) => setStart(v ?? '')}
               />
             </Field>
             <Field label={tr(lang, 'deadline')}>
-              <input
-                type="date"
-                value={deadline}
-                onChange={(e) => setDeadline(e.target.value)}
-                className="w-full bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+              <DatePicker
+                value={deadline || null}
+                onChange={(v) => setDeadline(v ?? '')}
               />
             </Field>
           </div>

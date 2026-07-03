@@ -7,6 +7,7 @@ import { Trash2, X, AlertTriangle, Smile, FilePlus } from 'lucide-react';
 import { EmojiPicker, useEmojiPicker } from './EmojiPicker';
 import { usePrompt } from './PromptDialog';
 import { insertCheckboxLines } from '../lib/checkboxes';
+import { DatePicker } from './DatePicker';
 
 export function TaskModal({
   task, onClose,
@@ -257,19 +258,15 @@ export function TaskModal({
 
           <div className="grid grid-cols-2 gap-4">
             <Field label={tr(lang, 'start')}>
-              <input
-                type="date"
-                value={draft.start_date || ''}
-                onChange={(e) => setDraft({ ...draft, start_date: e.target.value || null })}
-                className="w-full bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+              <DatePicker
+                value={draft.start_date || null}
+                onChange={(v) => setDraft({ ...draft, start_date: v })}
               />
             </Field>
             <Field label={tr(lang, 'deadline')}>
-              <input
-                type="date"
-                value={draft.deadline || ''}
-                onChange={(e) => setDraft({ ...draft, deadline: e.target.value || null })}
-                className="w-full bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+              <DatePicker
+                value={draft.deadline || null}
+                onChange={(v) => setDraft({ ...draft, deadline: v })}
               />
             </Field>
           </div>

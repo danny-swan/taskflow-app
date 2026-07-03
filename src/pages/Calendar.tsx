@@ -5,9 +5,12 @@
  *
  * v0.9.4 — Вкладка «Календарь».
  * v0.9.5 — Режимы «Неделя» / «Месяц» (Неделя по умолчанию), стрелки в рамках,
- *          «Сегодня» вынесена вправо, полные названия в панели «Без дедлайна»
- *          с вертикальным скроллом. В недельном режиме карточка задачи
- *          показывает полный заголовок с переносом строк (высота адаптивная).
+ *          полные названия в панели «Без дедлайна» с вертикальным скроллом.
+ * v0.9.6 — Переставлены кнопки header'а: «Сегодня» + ‹/› слева,
+ *          переключатель «Неделя/Месяц» — справа. При выборе Месяца
+ *          открывается месяц текущей даты (не курсора). Обратный DnD:
+ *          перетаскивание карточки из ячейки в панель «Без дедлайна»
+ *          очищает deadline (updateTask({deadline: null})).
  * Docked-панель «Без дедлайна» — единая для обоих режимов.
  */
 import { useMemo, useState } from 'react';
@@ -161,14 +164,23 @@ export function CalendarPage() {
     const activeData = active.data.current as any;
     const overData = over.data.current as any;
     if (!activeData || activeData.type !== 'cal-task') return;
-    if (!overData || overData.type !== 'cal-day') return;
+    if (!overData) return;
 
     const taskId: number = activeData.taskId;
     const currentDeadline: string | null = activeData.deadline ?? null;
-    const targetDate: string = overData.date;
 
-    if (currentDeadline === targetDate) return;
-    updateTask(taskId, { deadline: targetDate });
+    // v0.9.6: обратный DnD — в панель «Без дедлайна» → очищаем deadline
+    if (overData.type === 'cal-nodeadline') {
+      if (currentDeadline == null) return;
+      updateTask(taskId, { deadline: null });
+      return;
+    }
+
+    if (overData.type === 'cal-day') {
+      const targetDate: string = overData.date;
+      if (currentDeadline === targetDate) return;
+      updateTask(taskId, { deadline: targetDate });
+    }
   };
 
   const today = todayYmd();
@@ -197,15 +209,15 @@ export function CalendarPage() {
     }
   };
 
-  // При переключении вида — нормализуем курсор, чтобы попадал в текущий отрезок
+  // При переключении вида — всегда приводим курсор к текущей дате
+  // (v0.9.6): Month показывает текущий месяц, Week — текущую неделю.
   const switchView = (v: CalView) => {
     if (v === view) return;
+    const now = new Date();
     if (v === 'week') {
-      // Из «месяц» — переходим на понедельник недели, куда попадает cursor.
-      setCursor(weekStart(cursor));
+      setCursor(weekStart(now));
     } else {
-      // Из «неделя» — переходим на 1-е число месяца этой недели.
-      setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), 1));
+      setCursor(new Date(now.getFullYear(), now.getMonth(), 1));
     }
     setView(v);
   };
@@ -231,8 +243,36 @@ export function CalendarPage() {
             </div>
           </div>
 
-          {/* View toggle: Неделя / Месяц (как Список / Канбан) */}
-          <div className="ml-2 inline-flex rounded border border-border-soft overflow-hidden">
+          {/* v0.9.6: «Сегодня» рядом с заголовком */}
+          <button
+            onClick={goToday}
+            className="ml-2 px-2.5 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft"
+          >
+            {tr(lang, 'cal_today')}
+          </button>
+
+          {/* Стрелки навигации — в рамке, сразу после «Сегодня» */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={goPrev}
+              className="px-2 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft inline-flex items-center"
+              aria-label={tr(lang, view === 'week' ? 'cal_prev_week' : 'cal_prev_month')}
+              title={tr(lang, view === 'week' ? 'cal_prev_week' : 'cal_prev_month')}
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <button
+              onClick={goNext}
+              className="px-2 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft inline-flex items-center"
+              aria-label={tr(lang, view === 'week' ? 'cal_next_week' : 'cal_next_month')}
+              title={tr(lang, view === 'week' ? 'cal_next_week' : 'cal_next_month')}
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+
+          {/* v0.9.6: View toggle — вынесен вправо (ml-auto) */}
+          <div className="ml-auto inline-flex rounded border border-border-soft overflow-hidden">
             <button
               onClick={() => switchView('week')}
               className={
@@ -254,36 +294,6 @@ export function CalendarPage() {
               }
             >
               {tr(lang, 'cal_view_month')}
-            </button>
-          </div>
-
-          {/* Стрелки навигации — теперь с рамкой */}
-          <div className="flex items-center gap-1 ml-2">
-            <button
-              onClick={goPrev}
-              className="px-2 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft inline-flex items-center"
-              aria-label={tr(lang, view === 'week' ? 'cal_prev_week' : 'cal_prev_month')}
-              title={tr(lang, view === 'week' ? 'cal_prev_week' : 'cal_prev_month')}
-            >
-              <ChevronLeft size={14} />
-            </button>
-            <button
-              onClick={goNext}
-              className="px-2 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft inline-flex items-center"
-              aria-label={tr(lang, view === 'week' ? 'cal_next_week' : 'cal_next_month')}
-              title={tr(lang, view === 'week' ? 'cal_next_week' : 'cal_next_month')}
-            >
-              <ChevronRight size={14} />
-            </button>
-          </div>
-
-          {/* «Сегодня» — вынесена вправо, отдельная группа */}
-          <div className="ml-auto">
-            <button
-              onClick={goToday}
-              className="px-2.5 py-1 rounded text-[12px] hover:bg-surface-alt text-muted border border-border-soft"
-            >
-              {tr(lang, 'cal_today')}
             </button>
           </div>
         </div>
@@ -312,50 +322,15 @@ export function CalendarPage() {
         )}
 
         {/* Docked-панель «Без дедлайна» — единая для обоих режимов */}
-        <div
-          className="shrink-0 border-t border-border-soft"
-          style={{ background: 'var(--surface)' }}
-        >
-          <button
-            onClick={() => setPanelOpen(o => !o)}
-            className="w-full px-5 py-2 flex items-center gap-2 text-[13px] text-muted hover:bg-surface-alt transition-colors"
-            aria-label={tr(lang, 'cal_toggle_panel')}
-          >
-            {panelOpen ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-            <span className="font-medium">{tr(lang, 'cal_no_deadline')}</span>
-            <span className="text-faint tabular">· {noDeadlineTasks.length}</span>
-            {noDeadlineTasks.length > 0 && (
-              <span className="ml-2 text-[11px] text-faint italic hidden md:inline">
-                {tr(lang, 'cal_no_deadline_hint')}
-              </span>
-            )}
-          </button>
-          {panelOpen && (
-            <div
-              className="px-5 pb-3 pt-1 overflow-y-auto"
-              style={{ maxHeight: 140 }}
-            >
-              {noDeadlineTasks.length === 0 ? (
-                <div className="text-[12px] text-faint italic py-4">
-                  {tr(lang, 'no_tasks')}
-                </div>
-              ) : (
-                <div className="flex gap-2 flex-wrap">
-                  {noDeadlineTasks.map(t => (
-                    <DraggableTaskChip
-                      key={t.id}
-                      task={t}
-                      status={statusById.get(t.status_id)}
-                      tag={t.tag_id ? tagById.get(t.tag_id) : undefined}
-                      onOpen={() => setOpenTask(t)}
-                      variant="panel"
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <NoDeadlinePanel
+          open={panelOpen}
+          onToggle={() => setPanelOpen(o => !o)}
+          tasks={noDeadlineTasks}
+          statusById={statusById}
+          tagById={tagById}
+          onOpenTask={setOpenTask}
+          lang={lang}
+        />
 
         <DragOverlay dropAnimation={null}>
           {activeTask ? (
@@ -676,6 +651,77 @@ function DraggableTaskChip({
         >
           {tag.name}
         </span>
+      )}
+    </div>
+  );
+}
+
+// ─── Панель «Без дедлайна» (droppable) ────────────────────────────────────────
+
+function NoDeadlinePanel({
+  open, onToggle, tasks, statusById, tagById, onOpenTask, lang,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  tasks: Task[];
+  statusById: Map<number, Status>;
+  tagById: Map<number, Tag>;
+  onOpenTask: (t: Task) => void;
+  lang: Lang;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: 'cal-nodeadline',
+    data: { type: 'cal-nodeadline' },
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className="shrink-0 border-t border-border-soft transition-colors"
+      style={{
+        background: 'var(--surface)',
+        outline: isOver ? '2px solid var(--accent)' : 'none',
+        outlineOffset: -2,
+      }}
+    >
+      <button
+        onClick={onToggle}
+        className="w-full px-5 py-2 flex items-center gap-2 text-[13px] text-muted hover:bg-surface-alt transition-colors"
+        aria-label={tr(lang, 'cal_toggle_panel')}
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+        <span className="font-medium">{tr(lang, 'cal_no_deadline')}</span>
+        <span className="text-faint tabular">· {tasks.length}</span>
+        {tasks.length > 0 && (
+          <span className="ml-2 text-[11px] text-faint italic hidden md:inline">
+            {tr(lang, 'cal_no_deadline_hint')}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div
+          className="px-5 pb-3 pt-1 overflow-y-auto"
+          style={{ maxHeight: 140 }}
+        >
+          {tasks.length === 0 ? (
+            <div className="text-[12px] text-faint italic py-4">
+              {tr(lang, 'no_tasks')}
+            </div>
+          ) : (
+            <div className="flex gap-2 flex-wrap">
+              {tasks.map(t => (
+                <DraggableTaskChip
+                  key={t.id}
+                  task={t}
+                  status={statusById.get(t.status_id)}
+                  tag={t.tag_id ? tagById.get(t.tag_id) : undefined}
+                  onOpen={() => onOpenTask(t)}
+                  variant="panel"
+                />
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
