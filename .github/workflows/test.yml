@@ -3,6 +3,8 @@ name: Test TaskFlow
 # v0.9.20: unit-тесты + typecheck. Отдельный workflow, чтобы:
 # - PR-ы получали быстрый статус (Ubuntu-runner ~1 мин вместо Windows-runner ~10 мин),
 # - build.yml на теги мог гейтить сборку через needs: test.
+# v0.9.21: добавлен job e2e (Playwright + Chromium) — работает в browser-режиме
+# через Vite dev-server, обходя auth-gate через ?e2e=1 (dev-only байпас).
 
 on:
   push:
@@ -38,3 +40,37 @@ jobs:
 
       - name: Run Vitest
         run: npm test -- --reporter=verbose
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

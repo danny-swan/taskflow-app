@@ -125,8 +125,17 @@ function App() {
     );
   }
 
+  // v0.9.21: E2E-байпас AuthScreen для Playwright.
+  // Срабатывает только в dev-билде (import.meta.env.DEV=true) и
+  // только когда URL содержит ?e2e=1. В prod-билде (production Vite и
+  // Tauri release) этот блок вырезается tree-shaking'ом.
+  const e2eBypass =
+    import.meta.env.DEV &&
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('e2e') === '1';
+
   // v0.9.9: если нет сессии или требуется перелогин — AuthScreen над всем UI
-  if (!auth.session || auth.needsReauth) {
+  if (!e2eBypass && (!auth.session || auth.needsReauth)) {
     return (
       <ThemeProvider>
         <AuthScreen reason={auth.needsReauth ? 'grace-expired' : 'first-run'} />
