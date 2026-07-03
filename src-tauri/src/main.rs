@@ -306,6 +306,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_os::init())
         .setup(|app| {
             let saved = load_saved_db_path(&app.handle());
             app.manage(AppState { db_path: Mutex::new(saved) });

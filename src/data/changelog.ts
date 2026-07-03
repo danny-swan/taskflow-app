@@ -13,6 +13,26 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.9',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Новое: регистрация и вход по email/паролю (и Google-вход — в следующем обновлении). После первого входа приложение работает офлайн до 7 дней, затем просит перелогин. Новая секция Настройки → Аккаунт с профилем, выходом и удалением аккаунта. Содержимое задач по-прежнему хранится только локально — на сервер оно не отправляется.',
+        'Онбординг: исправлено позиционирование промежуточных шагов — больше не уезжают в левый верхний угол, появляются рядом с подсвеченным элементом.',
+        'Анимации карточек стали заметнее: более плавные fade+scale при создании/удалении задачи и более выразительные layout-переходы при смене статуса.',
+        'Релизы: файлы подписи .sig больше не видны в списке артефактов — подписи вшиты в latest.json авто-апдейтера. Пользователь видит только 5 файлов вместо 8.',
+        'Добавлена Политика конфиденциальности — полное описание того, какие данные собираются (email, версия приложения, OS, базовая телеметрия без содержимого задач), где хранятся и как удалить аккаунт.',
+      ],
+      en: [
+        'New: sign up and sign in with email/password (Google login coming next update). After first login, the app works offline for up to 7 days and then asks you to sign in again. New Settings → Account section with profile, sign out and account deletion. Task content is still stored only locally — nothing is sent to the server.',
+        'Onboarding: intermediate step tooltips no longer drift to the top-left corner; they now appear next to the highlighted UI element.',
+        'Card animations are more noticeable: smoother fade+scale on task create/delete and more expressive layout transitions on status change.',
+        'Releases: .sig signature files no longer clutter the assets list — signatures are embedded in the auto-updater latest.json. Users now see just 5 files instead of 8.',
+        'Added a Privacy Policy with a full description of what data is collected (email, app version, OS, basic telemetry without task content), where it is stored, and how to delete your account.',
+      ],
+    },
+  },
+  {
     version: '0.9.8',
     date: '2026-07-03',
     items: {

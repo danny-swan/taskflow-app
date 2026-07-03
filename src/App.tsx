@@ -12,6 +12,9 @@ import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { ToastStack } from './components/Toast';
 import { Onboarding } from './components/Onboarding';
+import { AuthScreen } from './components/AuthScreen';
+import { useAuth } from './lib/auth';
+import { logEvent } from './lib/telemetry';
 import { TasksPage } from './pages/Tasks';
 // v0.8.6: AddTaskPage больше не подключается — заменена на NewTaskModal
 // v0.8.12 (п. 24 code splitting): второстепенные вкладки грузим лениво —
@@ -33,6 +36,9 @@ function App() {
   const lang = useStore(s => s.language);
   const navigate = useNavigate();
 
+  // v0.9.9: auth guard
+  const auth = useAuth();
+
   useEffect(() => {
     init().catch(err => console.error('DB init failed', err));
     // © 2026 Daniil Lebedev (danny-swan) · PolyForm Noncommercial License 1.0.0
@@ -41,6 +47,14 @@ function App() {
     console.info('%cTaskFlow%c © 2026 Daniil Lebedev · PolyForm NC 1.0.0',
       'font-weight:bold', 'color:#888');
   }, [init]);
+
+  // v0.9.9: телеметрия старта приложения (один раз на логин)
+  useEffect(() => {
+    if (auth.session?.user && ready) {
+      logEvent('app_start');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.session?.user?.id, ready]);
 
   // v0.9.8: автопроверка обновлений через 5 сек после готовности — только если включено.
   // Не блокирует, не показывает диалог — просто тост с кнопкой «Обновить».
@@ -64,14 +78,24 @@ function App() {
     return () => clearTimeout(t);
   }, [ready, autoUpdate, pushToast, lang, navigate]);
 
-  if (!ready) {
+  if (!ready || auth.loading) {
     return (
       <div className="h-full flex items-center justify-center bg-bg text-muted">
         <div className="text-center">
           <div className="font-display text-[18px] font-bold mb-1">TaskFlow</div>
-          <div className="text-[12px]">Загрузка...</div>
+          <div className="text-[12px]">{lang === 'ru' ? 'Загрузка...' : 'Loading...'}</div>
         </div>
       </div>
+    );
+  }
+
+  // v0.9.9: если нет сессии или требуется перелогин — AuthScreen над всем UI
+  if (!auth.session || auth.needsReauth) {
+    return (
+      <ThemeProvider>
+        <AuthScreen reason={auth.needsReauth ? 'grace-expired' : 'first-run'} />
+        <ToastStack />
+      </ThemeProvider>
     );
   }
 

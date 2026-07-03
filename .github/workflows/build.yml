@@ -137,11 +137,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          # v0.9.9: .sig файлы больше не публикуем в релизе (они остаются
+          # в workflow artifacts для дебага). Подписи для авто-апдейтера уже
+          # вшиты в latest.json (поле signature). Пользовательский релиз —
+          # чистые 5 файлов: 3 инсталлятора + portable + latest.json.
           files: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.sig
             src-tauri/target/x86_64-pc-windows-msvc/release/taskflow.exe
             latest.json
           generate_release_notes: true

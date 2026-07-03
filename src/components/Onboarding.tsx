@@ -21,6 +21,15 @@
  *                текст ссылается именно на неё.
  *            (3) Новые шаги: фильтры по тэгам на «Задачах» и метрик-чипы в
  *                шапке (data-onboarding=tag-filters / metric-chips).
+ * v0.9.9   — Исправление позиционирования промежуточных шагов.
+ *            Раньше через virtualRef.getBoundingClientRect() отдавался rect
+ *            с координатами target, но floating-ui не пересчитывал позицию
+ *            при смене virtualRef (autoUpdate слушает resize/scroll, а не
+ *            смену reference). В итоге tooltip прилипал к (0,0).
+ *            Теперь reference — реальный DOM-элемент через refs.setReference(el),
+ *            autoUpdate работает штатно. Для шагов без target (welcome/final)
+ *            reference не устанавливается, tooltip центрируется собственным
+ *            style (position:fixed + translate(-50%,-50%)).
  *
  * Public API (не менять сигнатуры — используется в Help.tsx и App.tsx):
  *   - <Onboarding />          — маунтится один раз в App.tsx
@@ -28,7 +37,7 @@
  *   - markOnboardingSeen()    — проставить флаг
  *   - resetOnboarding()       — сбросить флаг (Help → «Пройти тур заново»)
  */
-import { useState, useEffect, useMemo, useLayoutEffect } from 'react';
+import { useState, useEffect, useLayoutEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   useFloating, offset, flip, shift, autoUpdate, FloatingPortal,
@@ -251,43 +260,28 @@ export function Onboarding() {
     };
   }, [open, targetEl]);
 
-  // v0.9.8: floating-ui используем ТОЛЬКО когда есть реальный target.
-  // Для шагов без target (welcome/финальный) tooltip центрируется через
-  // position:fixed + translate(-50%,-50%) — иначе виртуальный reference с
-  // width=height=0 давал permanent bottom-start-к-точке-центра, а translate
-  // на половину ширины tooltip'а не применялся.
-  const isCentered = !targetRect;
-  const virtualRef = useMemo(() => {
-    // Если нет target — вернём rect для точки (0,0), floating-ui нам не нужен,
-    // но hook должен получить какой-то reference; результаты игнорируем
-    // и рисуем tooltip через собственный style.
-    return {
-      getBoundingClientRect: () => {
-        if (targetRect) return targetRect;
-        return {
-          x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0,
-          width: 0, height: 0, toJSON: () => ({}),
-        } as DOMRect;
-      },
-    };
-  }, [targetRect]);
+  // v0.9.9: центрируем только когда target явно указан null (welcome/финальный).
+  // Если target указан но не нашёлся — тоже центрируем (fallback вместо (0,0)).
+  const isCentered = cur.target === null || !targetEl;
 
   const placementMap: Record<Placement, 'top' | 'right' | 'bottom' | 'left'> = {
     top: 'top', right: 'right', bottom: 'bottom', left: 'left',
   };
 
-  const { refs, floatingStyles, update } = useFloating({
+  const { refs, floatingStyles } = useFloating({
     strategy: 'fixed',
     placement: placementMap[cur.placement ?? 'bottom'],
     middleware: [offset(12), flip(), shift({ padding: 12 })],
     whileElementsMounted: autoUpdate,
   });
 
-  // Подставляем virtual reference
-  useEffect(() => {
-    refs.setReference(virtualRef as any);
-    update();
-  }, [virtualRef, refs, update]);
+  // v0.9.9: reference — реальный DOM-элемент.
+  // Если его нет (шаг без target или target не нашёлся) — сбрасываем reference,
+  // чтобы floating-ui не пытался вычислять позицию; тогда включается
+  // isCentered-ветка с translate(-50%,-50%).
+  useLayoutEffect(() => {
+    refs.setReference(targetEl);
+  }, [targetEl, refs]);
 
   if (!open) return null;
 
