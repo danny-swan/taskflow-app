@@ -1,0 +1,40 @@
+name: Test TaskFlow
+
+# v0.9.20: unit-тесты + typecheck. Отдельный workflow, чтобы:
+# - PR-ы получали быстрый статус (Ubuntu-runner ~1 мин вместо Windows-runner ~10 мин),
+# - build.yml на теги мог гейтить сборку через needs: test.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Type-check + unit-тесты
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Type-check TypeScript
+        run: npx tsc --noEmit
+
+      - name: Run Vitest
+        run: npm test -- --reporter=verbose

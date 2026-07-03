@@ -36,3 +36,6 @@ lerna-debug.log*
 .env.development.local
 .env.test.local
 .env.production.local
+
+# v0.9.20: Vitest coverage output
+coverage/

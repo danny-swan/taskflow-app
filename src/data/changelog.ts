@@ -13,6 +13,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.20',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'Инфраструктура: в проект добавлены unit-тесты (Vitest). Первые 73 теста покрывают форматирование дат, markdown-чекбоксы в комментариях (parse/toggle/insert), детектор пересечений дедлайна, расчёт календарных / будних дней до дедлайна, выбор читаемого цвета текста для тегов и деривед-хелперы Zustand-стора (visibleStatuses / visibleTasks / getDeletedStatusId / тосты).',
+        'CI: добавлен workflow `test.yml` на Ubuntu — запускается на каждый PR и push в main (прогон ~1 минута). Сборка инсталляторов на тег теперь гейтится через needs: test — если тесты или typecheck падают, тег не соберётся, релиз не создастся.',
+        'Для кода видимых изменений нет — это чисто девелопмент-релиз: в следующих версиях обновления будут стабильнее, регрессы ловятся до выпуска.',
+      ],
+      en: [
+        'Infrastructure: unit tests added (Vitest). The first 73 tests cover date formatting, markdown checkboxes in comments (parse / toggle / insert), the overdue-event detector, calendar / business days-to-deadline math, readable text colour for tags, and Zustand store derived helpers (visibleStatuses / visibleTasks / getDeletedStatusId / toasts).',
+        'CI: new `test.yml` workflow on Ubuntu — runs on every PR and push to main (~1 minute). The installers build on tag is now gated by `needs: test` — if tests or typecheck fail, no tag is built and no release is published.',
+        'No user-visible code changes — this is a pure infrastructure release. Future updates should be more stable, regressions caught before shipping.',
+      ],
+    },
+  },
+  {
     version: '0.9.19',
     date: '2026-07-04',
     items: {
