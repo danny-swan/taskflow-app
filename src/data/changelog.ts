@@ -13,6 +13,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.19',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'В онбординг вернулась подсветка: элемент интерфейса, о котором идёт речь на текущем шаге (фильтры по тегам, переключатель Список/Kanban, кнопка «Новая задача», метрика‑чипы, пункты сайдбара), выделяется мягким «прожектором» — вокруг него затемняется фон, а сам элемент остаётся ярким. Между шагами подсветка плавно переезжает с одного элемента на другой (240 мс).',
+        'Позиционирование карточки — безопасное: карточка всегда в одном из трёх фиксированных положений (сверху / по центру / снизу) и выбирается автоматически по тому, где сейчас находится подсветка. За экран ничего не уезжает, даже на маленьких окнах.',
+      ],
+      en: [
+        'Spotlight is back in the onboarding: the UI element referenced by the current step (tag filters, List/Kanban toggle, «New task» button, metric chips, sidebar items) is highlighted with a soft spotlight — the surrounding area dims while the element itself stays bright. Between steps the spotlight smoothly slides from one element to another (240 ms).',
+        'Tooltip positioning is now safe: the card is always in one of three fixed positions (top / center / bottom), picked automatically based on where the spotlight is. Nothing can drift off-screen anymore, even in small windows.',
+      ],
+    },
+  },
+  {
     version: '0.9.18',
     date: '2026-07-04',
     items: {
