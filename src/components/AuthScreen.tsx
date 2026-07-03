@@ -3,19 +3,28 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  * Copyright (c) 2026 Daniil Lebedev (danny-swan)
  *
- * v0.9.9 — Экран авторизации.
+ * v0.9.9  — Экран авторизации.
+ * v0.9.14 — Забыли пароль, запомнить email, верификация email при регистрации.
+ *
  * Показывается при первом запуске или когда grace period истёк и
- * requires re-login. Email/Password + Google OAuth (заготовка).
- * Обязательный чекбокс согласия с Политикой конфиденциальности.
+ * requires re-login. Email/Password + Google OAuth.
+ * Обязательный чекбокс согласия с Политикой конфиденциальности при регистрации.
  */
 import { useState } from 'react';
-import { Sparkles, Mail, Lock, AlertCircle, Loader2 } from 'lucide-react';
-import { signInWithPassword, signUpWithPassword, signInWithGoogle } from '../lib/auth';
+import { Sparkles, Mail, Lock, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
+import {
+  signInWithPassword,
+  signUpWithPassword,
+  signInWithGoogle,
+  requestPasswordReset,
+  getRememberedEmail,
+  setRememberedEmail,
+} from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
 import { useStore } from '../store/useStore';
 import { PrivacyModal } from './PrivacyModal';
 
-type Mode = 'signin' | 'signup';
+type Mode = 'signin' | 'signup' | 'forgot';
 
 interface Props {
   reason?: 'first-run' | 'grace-expired' | 'signed-out';
@@ -26,18 +35,52 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
   const isRu = lang === 'ru';
 
   const [mode, setMode] = useState<Mode>('signin');
-  const [email, setEmail] = useState('');
+  // v0.9.14: префиллим email из localStorage, если пользователь прошлый раз поставил «Запомнить».
+  const [email, setEmail] = useState(() => getRememberedEmail() ?? '');
   const [password, setPassword] = useState('');
+  // v0.9.14: чекбокс «Запомнить» — определяет, сохранить ли email после входа.
+  const [rememberMe, setRememberMe] = useState<boolean>(() => getRememberedEmail() !== null);
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v0.9.14: success-баннер — используется для «Письмо отправлено»
+  // после forgot password и после signup с verify email.
+  const [notice, setNotice] = useState<string | null>(null);
 
   const t = (ru: string, en: string) => (isRu ? ru : en);
+
+  // v0.9.14: применяем «rememberMe» к email перед любым входом/регистрацией.
+  const persistEmailIfNeeded = () => {
+    setRememberedEmail(rememberMe ? email : null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setNotice(null);
+
+    // v0.9.14: forgot-ветка — отдельный flow без пароля.
+    if (mode === 'forgot') {
+      if (!email) {
+        setError(t('Введите email', 'Enter your email'));
+        return;
+      }
+      setLoading(true);
+      try {
+        await requestPasswordReset(email);
+        setNotice(t(
+          'Письмо со ссылкой отправлено. Проверьте почту и перейдите по ссылке — приложение откроет экран ввода нового пароля.',
+          'A reset link has been sent. Check your inbox and follow the link — the app will open a screen to set a new password.',
+        ));
+        persistEmailIfNeeded();
+      } catch (err: any) {
+        setError(err?.message ?? t('Не удалось отправить письмо', 'Failed to send reset email'));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     if (mode === 'signup' && !privacyAccepted) {
       setError(t('Примите Политику конфиденциальности', 'Please accept the Privacy Policy'));
@@ -53,11 +96,19 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
       if (mode === 'signup') {
         await signUpWithPassword(email, password);
         await logEvent('signup');
+        persistEmailIfNeeded();
+        // v0.9.14: если в Supabase включена верификация email, сессии ещё нет —
+        // показываем сообщение «проверьте email».
+        setNotice(t(
+          'Аккаунт создан. Проверьте почту и подтвердите email по ссылке, чтобы войти.',
+          'Account created. Check your inbox and confirm your email via the link to sign in.',
+        ));
       } else {
         await signInWithPassword(email, password);
         await logEvent('login');
+        persistEmailIfNeeded();
       }
-      // После успеха useAuth автоматически обновит состояние
+      // После успеха useAuth автоматически обновит состояние (если сессия есть)
     } catch (err: any) {
       setError(err?.message ?? t('Ошибка авторизации', 'Authentication error'));
     } finally {
@@ -67,6 +118,7 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
 
   const handleGoogle = async () => {
     setError(null);
+    setNotice(null);
     if (mode === 'signup' && !privacyAccepted) {
       setError(t('Примите Политику конфиденциальности', 'Please accept the Privacy Policy'));
       return;
@@ -104,9 +156,9 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
             <div>
               <div className="font-display font-semibold text-[16px]">TaskFlow</div>
               <div className="text-[12px] text-muted">
-                {mode === 'signin'
-                  ? t('Вход в аккаунт', 'Sign in to your account')
-                  : t('Создание аккаунта', 'Create an account')}
+                {mode === 'signin' && t('Вход в аккаунт', 'Sign in to your account')}
+                {mode === 'signup' && t('Создание аккаунта', 'Create an account')}
+                {mode === 'forgot' && t('Восстановление пароля', 'Reset your password')}
               </div>
             </div>
           </div>
@@ -134,23 +186,55 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
               </div>
             </div>
 
-            <div>
-              <label className="text-[11px] font-medium text-muted uppercase tracking-wide">
-                {t('Пароль', 'Password')}
-              </label>
-              <div className="relative mt-1">
-                <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-                <input
-                  type="password"
-                  required
-                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder={mode === 'signup' ? t('минимум 6 символов', 'at least 6 characters') : '••••••••'}
-                  className="w-full pl-9 pr-3 py-2 text-[13px] bg-surface-alt border border-border-soft rounded-md focus:outline-none focus:border-accent"
-                />
+            {mode !== 'forgot' && (
+              <div>
+                <label className="text-[11px] font-medium text-muted uppercase tracking-wide">
+                  {t('Пароль', 'Password')}
+                </label>
+                <div className="relative mt-1">
+                  <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+                  <input
+                    type="password"
+                    required
+                    autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder={mode === 'signup' ? t('минимум 6 символов', 'at least 6 characters') : '••••••••'}
+                    className="w-full pl-9 pr-3 py-2 text-[13px] bg-surface-alt border border-border-soft rounded-md focus:outline-none focus:border-accent"
+                  />
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* v0.9.14: «Запомнить меня» — доступен и для входа, и для регистрации. */}
+            {mode !== 'forgot' && (
+              <label className="flex items-center gap-2 text-[12px] text-text cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={e => setRememberMe(e.target.checked)}
+                  className="shrink-0"
+                />
+                <span>{t('Запомнить меня на этом устройстве', 'Remember me on this device')}</span>
+              </label>
+            )}
+
+            {/* v0.9.14: ссылка «Забыли пароль?» — только в режиме входа. */}
+            {mode === 'signin' && (
+              <div className="flex justify-end -mt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('forgot');
+                    setError(null);
+                    setNotice(null);
+                  }}
+                  className="text-[12px] text-accent hover:underline"
+                >
+                  {t('Забыли пароль?', 'Forgot password?')}
+                </button>
+              </div>
+            )}
 
             {mode === 'signup' && (
               <label className="flex items-start gap-2 text-[12px] text-text cursor-pointer">
@@ -184,6 +268,14 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
               </div>
             )}
 
+            {/* v0.9.14: notice-баннер — «письмо отправлено» и «подтвердите email». */}
+            {notice && (
+              <div className="flex items-start gap-2 px-3 py-2 bg-green-500/10 border border-green-500/30 rounded-md text-[12px] text-green-700">
+                <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
+                <span className="leading-snug">{notice}</span>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={loading}
@@ -191,24 +283,29 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
               style={{ background: 'var(--accent)' }}
             >
               {loading && <Loader2 size={14} className="animate-spin" />}
-              {mode === 'signin' ? t('Войти', 'Sign in') : t('Создать аккаунт', 'Create account')}
+              {mode === 'signin' && t('Войти', 'Sign in')}
+              {mode === 'signup' && t('Создать аккаунт', 'Create account')}
+              {mode === 'forgot' && t('Отправить ссылку', 'Send reset link')}
             </button>
 
-            <div className="relative py-1">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-border-soft" />
-              </div>
-              <div className="relative flex justify-center">
-                <span className="bg-surface px-2 text-[11px] text-muted">{t('или', 'or')}</span>
-              </div>
-            </div>
+            {/* v0.9.14: Google-кнопка скрыта в режиме forgot — там нужен именно email. */}
+            {mode !== 'forgot' && (
+              <>
+                <div className="relative py-1">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-border-soft" />
+                  </div>
+                  <div className="relative flex justify-center">
+                    <span className="bg-surface px-2 text-[11px] text-muted">{t('или', 'or')}</span>
+                  </div>
+                </div>
 
-            <button
-              type="button"
-              onClick={handleGoogle}
-              disabled={loading}
-              className="w-full flex items-center justify-center gap-2 py-2.5 text-[13px] font-medium border border-border-soft rounded-md hover:bg-surface-alt disabled:opacity-50"
-            >
+                <button
+                  type="button"
+                  onClick={handleGoogle}
+                  disabled={loading}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 text-[13px] font-medium border border-border-soft rounded-md hover:bg-surface-alt disabled:opacity-50"
+                >
               <svg width="14" height="14" viewBox="0 0 24 24">
                 <path
                   fill="#4285F4"
@@ -227,22 +324,39 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
                   d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
                 />
               </svg>
-              {t('Продолжить с Google', 'Continue with Google')}
-            </button>
+                  {t('Продолжить с Google', 'Continue with Google')}
+                </button>
+              </>
+            )}
 
             <div className="text-center pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setMode(mode === 'signin' ? 'signup' : 'signin');
-                  setError(null);
-                }}
-                className="text-[12px] text-muted hover:text-text"
-              >
-                {mode === 'signin'
-                  ? t('Нет аккаунта? Зарегистрироваться', "Don't have an account? Sign up")
-                  : t('Уже есть аккаунт? Войти', 'Already have an account? Sign in')}
-              </button>
+              {mode === 'forgot' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('signin');
+                    setError(null);
+                    setNotice(null);
+                  }}
+                  className="text-[12px] text-muted hover:text-text"
+                >
+                  {t('← Назад ко входу', '← Back to sign in')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode(mode === 'signin' ? 'signup' : 'signin');
+                    setError(null);
+                    setNotice(null);
+                  }}
+                  className="text-[12px] text-muted hover:text-text"
+                >
+                  {mode === 'signin'
+                    ? t('Нет аккаунта? Зарегистрироваться', "Don't have an account? Sign up")
+                    : t('Уже есть аккаунт? Войти', 'Already have an account? Sign in')}
+                </button>
+              )}
             </div>
           </form>
 

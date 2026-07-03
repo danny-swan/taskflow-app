@@ -4,7 +4,7 @@
  * Copyright (c) 2026 Daniil Lebedev (danny-swan)
  * https://polyformproject.org/licenses/noncommercial/1.0.0/
  */
-import { useEffect, lazy, Suspense } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from './store/useStore';
 import { ThemeProvider, ThemeWatermarks } from './themes/ThemeProvider';
@@ -13,6 +13,7 @@ import { Topbar } from './components/Topbar';
 import { ToastStack } from './components/Toast';
 import { Onboarding } from './components/Onboarding';
 import { AuthScreen } from './components/AuthScreen';
+import { PasswordResetModal } from './components/PasswordResetModal';
 import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { TasksPage } from './pages/Tasks';
@@ -39,8 +40,12 @@ function App() {
   // v0.9.9: auth guard
   const auth = useAuth();
 
+  // v0.9.14: флаг открытой модалки смены пароля (после recovery deep-link)
+  const [showPasswordReset, setShowPasswordReset] = useState(false);
+
   // v0.9.11: слушаем deep link taskflow://auth/callback из Rust.
-  // Приходит массив URL (обычно один). Звёнываем всех до первого успеха.
+  // v0.9.14: если это recovery-link — открываем экран ввода нового пароля
+  // вместо тоста «вы вошли».
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     (async () => {
@@ -49,9 +54,15 @@ function App() {
         unlisten = await listen<string[]>('deep-link://auth-callback', async (event) => {
           const urls = event.payload ?? [];
           for (const u of urls) {
-            const ok = await handleAuthCallback(u);
-            if (ok) {
-              pushToast(lang === 'ru' ? 'Вы вошли через Google' : 'Signed in with Google');
+            const result = await handleAuthCallback(u);
+            if (result.ok) {
+              if (result.type === 'recovery') {
+                setShowPasswordReset(true);
+              } else if (result.type === 'oauth') {
+                pushToast(lang === 'ru' ? 'Вы вошли через Google' : 'Signed in with Google');
+              } else if (result.type === 'signup') {
+                pushToast(lang === 'ru' ? 'Email подтверждён' : 'Email confirmed');
+              }
               break;
             }
           }
@@ -155,6 +166,9 @@ function App() {
         </main>
         <ToastStack />
         <Onboarding />
+        {showPasswordReset && (
+          <PasswordResetModal onClose={() => setShowPasswordReset(false)} />
+        )}
       </div>
     </ThemeProvider>
   );
