@@ -13,6 +13,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.16',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Онбординг: убрали микро-прыжки в центр при переключении шагов. Теперь tooltip плавно перемещается между шагами с CSS-анимацией 220ms, без вспышек в центре экрана.',
+      ],
+      en: [
+        'Onboarding: removed micro-jumps to center on step transitions. The tooltip now smoothly slides between steps with a 220ms CSS animation, no more center-screen flashes.',
+      ],
+    },
+  },
+  {
     version: '0.9.15',
     date: '2026-07-03',
     items: {

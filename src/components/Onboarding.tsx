@@ -8,16 +8,24 @@
  *   floating-ui асинхронный: между сменой step и первым computePosition
  *   всегда есть один рендер с не-подтверждённой позицией.
  *
- * v0.9.15 — Радикальное упрощение: floating-ui выкинут полностью. Позиция
- *   считается вручную:
- *     1. useEffect на смене step: navigate() + поиск target с ретраями.
- *     2. Как только target найден — вычисляется targetRect.
- *     3. useLayoutEffect после рендера tooltip: измеряется его собственный
- *        размер (offsetWidth/offsetHeight) и считается финальная позиция из
- *        targetRect + placement + tooltipSize.
- *     4. Пока позиция не посчитана — visibility: hidden (никакого «мигания»
- *        в (0,0) быть не может, потому что мы никогда не рендерим позицию,
- *        которую не подтвердили).
+ * v0.9.15 — floating-ui выкинут, позиция считается вручную через useLayoutEffect.
+ *   Осталась проблема микро-прыжка в центр из-за key={step}.
+ *
+ * v0.9.16 — Фикс микро-прыжка в центр при переходе между шагами:
+ *   Корневая причина — key={step} заставлял React полностью размонтировать
+ *   tooltip и заново смонтировать. Новый элемент рендерился без координат
+ *   (top/left не выставлены), CSS-анимация scale-in запускалась сразу,
+ *   в этот кадр позиция была (0,0)/край экрана — получалась вспышка в центре/углу
+ *   перед переходом к целевому target.
+ *
+ *   Решение:
+ *   (1) Убрали key={step}. Tooltip теперь всегда один и тот же DOM-элемент,
+ *       React обновляет только style/текст. Никакого remount — браузер
+ *       не проходит через «кадр без координат».
+ *   (2) CSS scale-in только на самом первом показе тура, не на каждом шаге.
+ *       Смена шагов — плавная транзиция left/top через CSS transition.
+ *   (3) Позиция измеряется в useLayoutEffect в том же commit-кадре, что
+ *       и смена контента — браузер паинтит уже с правильными координатами.
  *
  * Public API (не менять сигнатуры — используется в Help.tsx и App.tsx):
  *   - <Onboarding />          — маунтится один раз в App.tsx
@@ -25,7 +33,7 @@
  *   - markOnboardingSeen()    — проставить флаг
  *   - resetOnboarding()       — сбросить флаг (Help → «Пройти тур заново»)
  */
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X, ChevronRight, ChevronLeft, Sparkles } from 'lucide-react';
 import { useStore } from '../store/useStore';
@@ -244,6 +252,9 @@ export function Onboarding() {
   const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
 
   const tooltipRef = useRef<HTMLDivElement | null>(null);
+  // v0.9.16: scale-in анимация только на первом показе тура,
+  // не на каждой смене шага.
+  const firstShow = useRef(true);
 
   const cur = STEPS[step];
   const isLast = step === STEPS.length - 1;
@@ -259,14 +270,21 @@ export function Onboarding() {
     return () => clearTimeout(t);
   }, [ready]);
 
-  // v0.9.15: при смене step СИНХРОННО сбрасываем всё, что зависит от старого
-  // step — targetEl, targetRect, tooltipPos. Это гарантирует, что первый
-  // рендер нового step никогда не покажет остаточную позицию предыдущего.
+  // v0.9.16: ПРИ СМЕНЕ ШАГА НЕ СБРАСЫВАЕМ tooltipPos.
+  // Это ключевое отличие от v0.9.15: tooltip остаётся на старой позиции
+  // пока не посчитана новая (CSS transition плавно переместит его).
+  // Сбрасываем только targetEl/Rect — это триггерит поиск нового target.
   useLayoutEffect(() => {
     if (!open) return;
     setTargetEl(null);
     setTargetRect(null);
-    setTooltipPos(null);
+    // если это центрированный шаг (welcome/final) — сбрасываем tooltipPos,
+    // чтобы он пересчитался как sentinel {-1,-1} (координаты от targetRect
+    // бессмысленны). Для таргетных шагов — не трогаем, старая позиция
+    // будет плавно заменена новой через CSS transition.
+    if (STEPS[step].target === null) {
+      setTooltipPos(null);
+    }
   }, [open, step]);
 
   // navigate + поиск target с ретраями.
@@ -300,15 +318,13 @@ export function Onboarding() {
     };
   }, [open, step, cur.target, cur.route, navigate]);
 
-  // v0.9.15: расчёт позиции tooltip после того, как он смонтировался в DOM.
-  // useLayoutEffect выполняется СИНХРОННО перед paint — пользователь никогда
-  // не увидит промежуточный кадр с неверной позицией.
+  // v0.9.16: расчёт позиции tooltip.
+  // useLayoutEffect выполняется СИНХРОННО перед paint. Tooltip всегда смонтирован
+  // (без key={step} — тот же DOM-узел), поэтому его размер стабилен.
   useLayoutEffect(() => {
     if (!open) return;
     if (isCentered) {
-      // Центрированный tooltip не требует расчёта — его позицию задаёт CSS
-      // через translate(-50%,-50%). Но tooltipPos не null, чтобы показать.
-      // Используем sentinel {top:-1,left:-1} — рендер это распознает.
+      // Сантинел {-1,-1} — рендер включает CSS translate(-50%,-50%).
       setTooltipPos({ top: -1, left: -1 });
       return;
     }
@@ -377,26 +393,49 @@ export function Onboarding() {
     return dict[lang === 'ru' ? 'ru' : 'en'][k];
   };
 
-  // Скрываем tooltip, пока позиция не рассчитана. sentinel {-1,-1} = центрированный,
-  // ему позиция не нужна — CSS translate.
-  const isCenteredSentinel = tooltipPos && tooltipPos.top === -1 && tooltipPos.left === -1;
+  // v0.9.16: sentinel {-1,-1} = центрированный tooltip.
+  const isCenteredSentinel = tooltipPos !== null && tooltipPos.top === -1 && tooltipPos.left === -1;
   const showTooltip = tooltipPos !== null;
 
-  // Стиль позиционирования: центрированный через translate, обычный — top/left.
-  const positionStyle: React.CSSProperties = isCenteredSentinel
-    ? {
+  // Отслеживаем первый показ для scale-in анимации. После первого
+  // видимого кадра сбрасываем — дальше только CSS transition.
+  const shouldAnimate = firstShow.current && showTooltip;
+  useEffect(() => {
+    if (showTooltip && firstShow.current) {
+      // Оставляем firstShow=true на один кадр, потом снимаем.
+      const raf = requestAnimationFrame(() => {
+        firstShow.current = false;
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [showTooltip]);
+
+  // Стиль позиционирования. Transform: центрированный — translate(-50%,-50%),
+  // обычный — top/left. transition — плавное перемещение между шагами,
+  // но только когда tooltip уже видим (чтобы первый показ не анимировался из
+  // случайной точки).
+  const positionStyle: React.CSSProperties = useMemo(() => {
+    // Центрированный.
+    if (isCenteredSentinel) {
+      return {
         position: 'fixed',
         top: '50%',
         left: '50%',
         transform: 'translate(-50%, -50%)',
         width: 'min(440px, 92vw)',
-      }
-    : {
-        position: 'fixed',
-        top: tooltipPos?.top ?? 0,
-        left: tooltipPos?.left ?? 0,
-        width: 'min(400px, 92vw)',
       };
+    }
+    return {
+      position: 'fixed',
+      top: tooltipPos?.top ?? 0,
+      left: tooltipPos?.left ?? 0,
+      width: 'min(400px, 92vw)',
+      // CSS transition — плавное перемещение tooltip между шагами.
+      // При первом показе (firstShow=true) transition отключён,
+      // чтобы не анимировать из (0,0).
+      transition: firstShow.current ? undefined : 'top 220ms ease, left 220ms ease',
+    };
+  }, [isCenteredSentinel, tooltipPos?.top, tooltipPos?.left]);
 
   return (
     <>
@@ -435,22 +474,20 @@ export function Onboarding() {
       </svg>
 
       {/*
-        Tooltip. v0.9.15: key={step} — при смене шага React полностью
-        размонтирует старый tooltip. Первый рендер нового tooltip идёт с
-        visibility:hidden и position:{0,0} (эти координаты никогда не paint'ятся,
-        потому что visibility:hidden), useLayoutEffect считает реальную позицию
-        и выставляет tooltipPos ДО paint. Пользователь видит только финальную
-        позицию — никаких промежуточных кадров.
+        v0.9.16: НЕТ key={step}. Tooltip всегда один и тот же DOM-узел,
+        React при смене шага обновляет только style и текст. Никакого remount —
+        браузер не проходит через кадр без координат. CSS transition
+        плавно перемещает tooltip из старой позиции в новую (220ms ease).
+        scale-in — только на первом показе тура (firstShow.current).
       */}
       <div
-        key={step}
         ref={tooltipRef}
         style={{
           ...positionStyle,
           zIndex: 91,
           visibility: showTooltip ? 'visible' : 'hidden',
         }}
-        className="scale-in"
+        className={shouldAnimate ? 'scale-in' : undefined}
       >
         <div className="bg-surface border border-border rounded-xl shadow-2xl overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-soft">
