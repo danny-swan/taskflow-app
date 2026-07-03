@@ -11,7 +11,7 @@
  * Обязательный чекбокс согласия с Политикой конфиденциальности при регистрации.
  */
 import { useState } from 'react';
-import { Sparkles, Mail, Lock, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
+import { Sparkles, Mail, Lock, AlertCircle, Loader2, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import {
   signInWithPassword,
   signUpWithPassword,
@@ -38,6 +38,8 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
   // v0.9.14: префиллим email из localStorage, если пользователь прошлый раз поставил «Запомнить».
   const [email, setEmail] = useState(() => getRememberedEmail() ?? '');
   const [password, setPassword] = useState('');
+  // v0.9.15: toggle «глаз» — показать/скрыть пароль.
+  const [showPassword, setShowPassword] = useState(false);
   // v0.9.14: чекбокс «Запомнить» — определяет, сохранить ли email после входа.
   const [rememberMe, setRememberMe] = useState<boolean>(() => getRememberedEmail() !== null);
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
@@ -186,6 +188,7 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
               </div>
             </div>
 
+            {/* v0.9.15: иконка «глаз» — клик переключает type между password и text. */}
             {mode !== 'forgot' && (
               <div>
                 <label className="text-[11px] font-medium text-muted uppercase tracking-wide">
@@ -194,14 +197,23 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
                 <div className="relative mt-1">
                   <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
                   <input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     required
                     autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     placeholder={mode === 'signup' ? t('минимум 6 символов', 'at least 6 characters') : '••••••••'}
-                    className="w-full pl-9 pr-3 py-2 text-[13px] bg-surface-alt border border-border-soft rounded-md focus:outline-none focus:border-accent"
+                    className="w-full pl-9 pr-9 py-2 text-[13px] bg-surface-alt border border-border-soft rounded-md focus:outline-none focus:border-accent"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(s => !s)}
+                    tabIndex={-1}
+                    aria-label={showPassword ? t('Скрыть пароль', 'Hide password') : t('Показать пароль', 'Show password')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-muted hover:text-text hover:bg-surface"
+                  >
+                    {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
                 </div>
               </div>
             )}

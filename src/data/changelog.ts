@@ -13,6 +13,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.15',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Онбординг: тултипы больше не мигают. Полностью отказались от асинхронного floating-ui — позиция теперь считается одним синхронным шагом до paint.',
+        'Смена пароля: теперь спрашивается текущий пароль. Если не помните его — выйдите и воспользуйтесь ссылкой «Забыли пароль?» на экране входа.',
+        'Иконка «глаз» в полях пароля: клик включает превью введённого пароля. Работает на входе, регистрации и в модалке смены пароля.',
+      ],
+      en: [
+        'Onboarding: tooltips no longer flash. floating-ui is out — the position is now computed in one synchronous step before paint.',
+        'Change password: the current password is now required. If you forgot it, sign out and use "Forgot password?" on the sign-in screen.',
+        'Eye icon in password fields: click to preview the typed password. Works on sign-in, sign-up and in the change-password modal.',
+      ],
+    },
+  },
+  {
     version: '0.9.14',
     date: '2026-07-03',
     items: {

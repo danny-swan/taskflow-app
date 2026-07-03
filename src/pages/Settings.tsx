@@ -1817,7 +1817,11 @@ function AccountSection() {
 
       {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
       {showChangePassword && (
-        <PasswordResetModal onClose={() => setShowChangePassword(false)} />
+        <PasswordResetModal
+          mode="change"
+          userEmail={user?.email}
+          onClose={() => setShowChangePassword(false)}
+        />
       )}
       <PromptUI />
 
