@@ -1,7 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw } from 'lucide-react';
+import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
+import pkg from '../../package.json';
 import { downloadFile } from '../lib/utils';
 import { resetDatabase, isTauri, buildBackup, applyBackup, getSchemaVersion, type BackupPayload } from '../lib/db';
 import { logger } from '../lib/logger';
@@ -9,7 +11,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 
-type Sub = 'general' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage';
+type Sub = 'general' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'updates';
 
 export function SettingsPage() {
   const lang = useStore(s => s.language);
@@ -24,6 +26,7 @@ export function SettingsPage() {
     { key: 'templates', label: lang === 'ru' ? 'Шаблоны задач' : 'Task templates' },
     { key: 'io', label: tr(lang, 'settings_io') },
     { key: 'storage', label: tr(lang, 'storage_section') },
+    { key: 'updates', label: lang === 'ru' ? 'Обновления' : 'Updates' },
   ];
 
   return (
@@ -47,6 +50,7 @@ export function SettingsPage() {
         {sub === 'templates' && <TemplatesSection lang={lang} />}
         {sub === 'io' && <IOSection />}
         {sub === 'storage' && <StorageSection />}
+        {sub === 'updates' && <UpdatesSection />}
       </div>
     </div>
   );
@@ -1438,6 +1442,177 @@ function TemplatesSection({ lang }: { lang: 'ru' | 'en' }) {
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// v0.9.8: секция «Обновления» — Tauri auto-updater
+function UpdatesSection() {
+  const lang = useStore(s => s.language);
+  const autoUpdate = useStore(s => s.autoUpdateEnabled);
+  const setAutoUpdate = useStore(s => s.setAutoUpdateEnabled);
+  const currentVersion = pkg.version;
+
+  const [checking, setChecking] = useState(false);
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+
+  const tauri = isTauri();
+
+  const check = async () => {
+    setChecking(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await checkForUpdate(currentVersion);
+      setInfo(res);
+      setLastChecked(new Date());
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const install = async () => {
+    setInstalling(true);
+    setError(null);
+    setProgress(0);
+    try {
+      await downloadAndInstall(setProgress);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+      setInstalling(false);
+    }
+  };
+
+  return (
+    <div className="max-w-xl space-y-6">
+      <h3 className="font-display text-[16px] font-semibold">
+        {lang === 'ru' ? 'Обновления' : 'Updates'}
+      </h3>
+
+      <Row label={lang === 'ru' ? 'Текущая версия' : 'Current version'}>
+        <span className="mono text-[13px]">v{currentVersion}</span>
+      </Row>
+
+      <Row label={lang === 'ru' ? 'Проверять автоматически' : 'Check automatically'}>
+        <div className="flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={() => setAutoUpdate(!autoUpdate)}
+            className={
+              'relative inline-flex h-6 w-11 items-center rounded-full transition-colors ' +
+              (autoUpdate ? 'bg-accent' : 'bg-surface-alt border border-border-soft')
+            }
+            aria-pressed={autoUpdate}
+          >
+            <span
+              className={
+                'inline-block h-4 w-4 transform rounded-full bg-white transition-transform ' +
+                (autoUpdate ? 'translate-x-6' : 'translate-x-1')
+              }
+            />
+          </button>
+          <div className="text-[11px] text-muted">
+            {lang === 'ru'
+              ? 'При включении TaskFlow будет проверять новые версии при запуске приложения. Установка — только по вашему подтверждению.'
+              : 'When enabled, TaskFlow checks for new versions at startup. Installation requires your confirmation.'}
+          </div>
+        </div>
+      </Row>
+
+      <Row label={lang === 'ru' ? 'Проверить сейчас' : 'Check now'}>
+        <div className="flex flex-col gap-2 w-full">
+          <button
+            type="button"
+            onClick={check}
+            disabled={checking || installing || !tauri}
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-[13px] rounded-md border border-border-soft hover:bg-surface-alt disabled:opacity-50 disabled:cursor-not-allowed w-fit"
+          >
+            <RefreshCw className={'w-4 h-4 ' + (checking ? 'animate-spin' : '')} />
+            {checking
+              ? (lang === 'ru' ? 'Проверяю…' : 'Checking…')
+              : (lang === 'ru' ? 'Проверить обновления' : 'Check for updates')}
+          </button>
+          {!tauri && (
+            <div className="text-[11px] text-muted">
+              {lang === 'ru'
+                ? 'Проверка доступна только в собранном приложении (не в dev-режиме браузера).'
+                : 'Available only in the built app (not in browser dev mode).'}
+            </div>
+          )}
+          {lastChecked && !checking && (
+            <div className="text-[11px] text-muted">
+              {lang === 'ru' ? 'Последняя проверка: ' : 'Last checked: '}
+              {lastChecked.toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US')}
+            </div>
+          )}
+        </div>
+      </Row>
+
+      {info && info.available && !installing && (
+        <div className="rounded-lg border border-accent bg-accent-soft p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-accent" />
+            <span className="font-semibold text-[14px]">
+              {lang === 'ru'
+                ? `Доступна новая версия v${info.newVersion}`
+                : `New version v${info.newVersion} available`}
+            </span>
+          </div>
+          {info.notes && (
+            <div className="text-[12px] text-muted whitespace-pre-wrap max-h-32 overflow-y-auto">
+              {info.notes}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={install}
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-[13px] rounded-md bg-accent text-white hover:opacity-90"
+          >
+            <Download className="w-4 h-4" />
+            {lang === 'ru' ? 'Скачать и установить' : 'Download and install'}
+          </button>
+        </div>
+      )}
+
+      {info && !info.available && !checking && (
+        <div className="rounded-lg border border-border-soft p-3 text-[13px] flex items-center gap-2">
+          <Check className="w-4 h-4 text-accent" />
+          {lang === 'ru' ? 'У вас последняя версия.' : 'You are on the latest version.'}
+        </div>
+      )}
+
+      {installing && (
+        <div className="rounded-lg border border-accent bg-accent-soft p-4 space-y-2">
+          <div className="text-[13px] font-semibold">
+            {lang === 'ru' ? 'Устанавливаю обновление…' : 'Installing update…'}
+          </div>
+          <div className="w-full h-2 rounded-full bg-surface-alt overflow-hidden">
+            <div
+              className="h-full bg-accent transition-all"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <div className="text-[11px] text-muted mono">{progress}%</div>
+          <div className="text-[11px] text-muted">
+            {lang === 'ru'
+              ? 'После установки приложение перезапустится автоматически.'
+              : 'The app will restart automatically after installation.'}
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-lg border border-red-400 bg-red-50 dark:bg-red-900/10 p-3 text-[12px] text-red-600 dark:text-red-400 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{error}</span>
         </div>
       )}
     </div>

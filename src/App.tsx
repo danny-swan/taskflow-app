@@ -28,6 +28,10 @@ function App() {
   const init = useStore(s => s.init);
   const statsEnabled = useStore(s => s.statsEnabled);
   const defaultTab = useStore(s => s.defaultTab);
+  const autoUpdate = useStore(s => s.autoUpdateEnabled);
+  const pushToast = useStore(s => s.pushToast);
+  const lang = useStore(s => s.language);
+  const navigate = useNavigate();
 
   useEffect(() => {
     init().catch(err => console.error('DB init failed', err));
@@ -37,6 +41,28 @@ function App() {
     console.info('%cTaskFlow%c © 2026 Daniil Lebedev · PolyForm NC 1.0.0',
       'font-weight:bold', 'color:#888');
   }, [init]);
+
+  // v0.9.8: автопроверка обновлений через 5 сек после готовности — только если включено.
+  // Не блокирует, не показывает диалог — просто тост с кнопкой «Обновить».
+  useEffect(() => {
+    if (!ready || !autoUpdate) return;
+    const t = setTimeout(() => {
+      import('./lib/updater').then(({ checkForUpdate }) => {
+        checkForUpdate('current').then(info => {
+          if (info.available) {
+            pushToast(
+              (lang === 'ru' ? 'Доступно обновление v' : 'Update available v') + info.newVersion,
+              {
+                label: lang === 'ru' ? 'Открыть' : 'Open',
+                onClick: () => navigate('/settings'),
+              }
+            );
+          }
+        }).catch(() => { /* silent */ });
+      });
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [ready, autoUpdate, pushToast, lang, navigate]);
 
   if (!ready) {
     return (

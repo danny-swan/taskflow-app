@@ -12,6 +12,15 @@
  *            родителях). Шаги обновлены под фичи, добавленные в v0.8.13—v0.9.6:
  *            Kanban-вид, Календарь (Неделя/Месяц + DnD + обратный DnD),
  *            локализованный DatePicker, шаблоны задач, метрики.
+ * v0.9.8   — Правки:
+ *            (1) welcome/финальный tooltip центрируется через position:fixed
+ *                + translate(-50%,-50%), а не через floating-ui с виртуальным
+ *                нулевым reference (иначе tooltip прилипал к левому верху и
+ *                перекрывал sidebar).
+ *            (2) Финальный шаг подсвечивает «Помощь» (nav-help), потому что
+ *                текст ссылается именно на неё.
+ *            (3) Новые шаги: фильтры по тэгам на «Задачах» и метрик-чипы в
+ *                шапке (data-onboarding=tag-filters / metric-chips).
  *
  * Public API (не менять сигнатуры — используется в Help.tsx и App.tsx):
  *   - <Onboarding />          — маунтится один раз в App.tsx
@@ -103,6 +112,28 @@ const STEPS: Step[] = [
       en: 'Toggle the Tasks page view: a list with columns or a Kanban board grouped by status.',
     },
   },
+  // v0.9.8: новый шаг — фильтры по тэгам
+  {
+    target: 'tag-filters',
+    route: '/tasks',
+    placement: 'bottom',
+    title: { ru: 'Фильтры по тэгам', en: 'Tag filters' },
+    body: {
+      ru: 'Панель тэгов на вкладке «Задачи»: клик по тэгу оставляет только задачи с ним, повторный клик снимает фильтр. Кнопка «Все» показывает все задачи.',
+      en: 'Tag filter row on the Tasks tab: click a tag to keep only tasks with it, click again to clear. The «All» button shows every task.',
+    },
+  },
+  // v0.9.8: новый шаг — метрик-чипы в шапке
+  {
+    target: 'metric-chips',
+    route: '/tasks',
+    placement: 'bottom',
+    title: { ru: 'Метрики в шапке', en: 'Metric chips' },
+    body: {
+      ru: 'В верхней шапке — быстрые метрики со значками: всего задач, в работе, на паузе, выполнено, просрочено, требуют внимания. Клик по чипу фильтрует список на вкладке «Задачи».',
+      en: 'The top bar shows quick metric chips with icons: total, in progress, paused, done, overdue, needs attention. Clicking a chip filters the list on the Tasks tab.',
+    },
+  },
   {
     target: 'nav-calendar',
     route: '/tasks',
@@ -117,20 +148,32 @@ const STEPS: Step[] = [
     target: 'nav-dashboard',
     route: '/tasks',
     placement: 'right',
-    title: { ru: 'Дашборд и метрики', en: 'Dashboard & metrics' },
+    title: { ru: 'Дашборд', en: 'Dashboard' },
     body: {
-      ru: 'Дашборд — обзор с фильтром дат (локализованный DatePicker) и статистикой. Метрики также видны в шапке любой страницы.',
-      en: 'Dashboard — overview with a date filter (localised DatePicker) and stats. Metric chips are also visible in the top bar of any page.',
+      ru: 'Дашборд — обзор с фильтром дат (локализованный DatePicker) и статистикой по периоду.',
+      en: 'Dashboard — overview with a date filter (localised DatePicker) and stats over a period.',
     },
   },
   {
     target: 'nav-settings',
     route: '/tasks',
     placement: 'right',
-    title: { ru: 'Настройки и Помощь', en: 'Settings & Help' },
+    title: { ru: 'Настройки', en: 'Settings' },
     body: {
-      ru: 'В Настройках — темы, теги, статусы, шаблоны задач, экспорт/импорт. В Помощи можно перезапустить этот тур.',
-      en: 'Settings — themes, tags, statuses, task templates, export/import. In Help you can re-run this tour anytime.',
+      ru: 'В Настройках — темы, теги, статусы, шаблоны задач, экспорт/импорт данных, размер шрифта.',
+      en: 'Settings — themes, tags, statuses, task templates, data export/import, font size.',
+    },
+  },
+  // v0.9.8: финальный шаг теперь подсвечивает «Помощь» (nav-help), потому что
+  //         текст ссылается именно на неё
+  {
+    target: 'nav-help',
+    route: '/tasks',
+    placement: 'right',
+    title: { ru: 'Помощь и перезапуск тура', en: 'Help & re-run the tour' },
+    body: {
+      ru: 'Во вкладке «Помощь» — полная справка, список горячих клавиш и кнопка «Пройти тур заново». Клавиши: 1–5 — вкладки, N — новая задача, / — поиск.',
+      en: 'The «Help» tab has the full reference, hotkey list and a «Re-run the tour» button. Hotkeys: 1–5 tabs, N new task, / search.',
     },
   },
   {
@@ -138,8 +181,8 @@ const STEPS: Step[] = [
     route: null,
     title: { ru: 'Готово', en: 'All set' },
     body: {
-      ru: 'Клавиши: 1–5 — вкладки, N — новая задача, / — поиск. Полная справка во вкладке «Помощь». Приятной работы.',
-      en: 'Shortcuts: 1–5 tabs, N new task, / search. Full reference in the Help tab. Enjoy.',
+      ru: 'Приятной работы. TaskFlow полностью офлайн — данные никуда не отправляются, всё хранится локально в SQLite.',
+      en: 'Enjoy. TaskFlow is fully offline — no data leaves your machine, everything is stored locally in SQLite.',
     },
   },
 ];
@@ -208,16 +251,21 @@ export function Onboarding() {
     };
   }, [open, targetEl]);
 
-  // Floating-ui для tooltip'а. Reference — виртуальный: rect target'а или центр экрана.
+  // v0.9.8: floating-ui используем ТОЛЬКО когда есть реальный target.
+  // Для шагов без target (welcome/финальный) tooltip центрируется через
+  // position:fixed + translate(-50%,-50%) — иначе виртуальный reference с
+  // width=height=0 давал permanent bottom-start-к-точке-центра, а translate
+  // на половину ширины tooltip'а не применялся.
+  const isCentered = !targetRect;
   const virtualRef = useMemo(() => {
+    // Если нет target — вернём rect для точки (0,0), floating-ui нам не нужен,
+    // но hook должен получить какой-то reference; результаты игнорируем
+    // и рисуем tooltip через собственный style.
     return {
       getBoundingClientRect: () => {
         if (targetRect) return targetRect;
-        // Центр окна
-        const cx = window.innerWidth / 2;
-        const cy = window.innerHeight / 2;
         return {
-          x: cx, y: cy, top: cy, left: cx, right: cx, bottom: cy,
+          x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0,
           width: 0, height: 0, toJSON: () => ({}),
         } as DOMRect;
       },
@@ -331,10 +379,23 @@ export function Onboarding() {
         )}
       </svg>
 
-      {/* Tooltip */}
+      {/* Tooltip.
+          v0.9.8: если нет target — центрируем через translate(-50%,-50%),
+          floating-ui игнорируем (иначе tooltip прилипает к (0,0)). */}
       <div
         ref={refs.setFloating as any}
-        style={{ ...floatingStyles, zIndex: 91, width: 'min(400px, 92vw)' }}
+        style={
+          isCentered
+            ? {
+                position: 'fixed',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                zIndex: 91,
+                width: 'min(440px, 92vw)',
+              }
+            : { ...floatingStyles, zIndex: 91, width: 'min(400px, 92vw)' }
+        }
         className="scale-in"
       >
         <div className="bg-surface border border-border rounded-xl shadow-2xl overflow-hidden">

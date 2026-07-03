@@ -77,6 +77,7 @@ interface State {
   tasksView: 'list' | 'kanban';    // v0.9.0: вид страницы Задачи — список или канбан-доска
   overdueMode: 'calendar' | 'business'; // v0.9.2 (№1): как считать просрочку и остаток дней
   overdueTick: number;             // v0.9.2 (№3): счётчик обновлений таблицы overdue_events (для перерисовки графика)
+  autoUpdateEnabled: boolean;      // v0.9.8: автопроверка обновлений при старте (Tauri updater)
 
   // Derived helpers
   getDeletedStatusId(): number | undefined;
@@ -94,6 +95,7 @@ interface State {
   setDefaultTab(t: string): void;
   setTasksView(v: 'list' | 'kanban'): void;
   setOverdueMode(m: 'calendar' | 'business'): void;
+  setAutoUpdateEnabled(v: boolean): void;
 
   addTask(p: Partial<Task>): number;
   updateTask(id: number, p: Partial<Task>): void;
@@ -151,6 +153,7 @@ export const useStore = create<State>((set, get) => ({
   tasksView: 'list',
   overdueMode: 'calendar',
   overdueTick: 0,
+  autoUpdateEnabled: true,
 
   getDeletedStatusId() {
     return get().statuses.find(s => s.is_technical === 1 && s.name === 'Удалено')?.id;
@@ -209,6 +212,8 @@ export const useStore = create<State>((set, get) => ({
       tasksView: (map.tasks_view === 'kanban' ? 'kanban' : 'list') as 'list' | 'kanban',
       // v0.9.2 (№1): режим подсчёта просрочки — календарные дни по умолчанию
       overdueMode: (map.overdue_mode === 'business' ? 'business' : 'calendar') as 'calendar' | 'business',
+      // v0.9.8: автопроверка обновлений — включена по умолчанию
+      autoUpdateEnabled: map.auto_update_enabled !== '0',
       quote,
       columnWidths,
       recentEmojis,
@@ -286,6 +291,10 @@ export const useStore = create<State>((set, get) => ({
   setTasksView(v) {
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['tasks_view', v]);
     set({ tasksView: v });
+  },
+  setAutoUpdateEnabled(v) {
+    db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['auto_update_enabled', v ? '1' : '0']);
+    set({ autoUpdateEnabled: v });
   },
 
   addTask(p) {

@@ -5,6 +5,7 @@ import { StatusDot } from './StatusPill';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useDroppable } from '@dnd-kit/core';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export function StatusGroup({
   status, tasks, onOpenTask, open, onToggle,
@@ -41,9 +42,20 @@ export function StatusGroup({
             className={'space-y-2 transition-colors rounded-lg ' + (isOver ? 'dnd-drop-active' : '')}
             style={{ minHeight: tasks.length === 0 ? 44 : undefined, padding: isOver ? 4 : 0 }}
           >
-            {tasks.map(t => (
-              <SortableTask key={t.id} task={t} onOpenTask={onOpenTask} />
-            ))}
+            <AnimatePresence initial={false}>
+              {tasks.map(t => (
+                <motion.div
+                  key={t.id}
+                  layout
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.18, ease: 'easeOut' }}
+                >
+                  <SortableTask task={t} onOpenTask={onOpenTask} />
+                </motion.div>
+              ))}
+            </AnimatePresence>
             {tasks.length === 0 && !isOver && (
               <div className="text-[12px] text-faint italic ml-6">пусто</div>
             )}
