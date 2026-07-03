@@ -13,6 +13,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.12',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Онбординг: добит крайний случай мигания подсказок в левом верхнем углу между шагами: подсказка теперь появляется только когда floating-ui реально вычислит её позицию (isPositioned=true), а не по самому факту нахождения target-элемента.',
+      ],
+      en: [
+        'Onboarding: patched the last corner-case where the tooltip briefly flashed in the top-left between steps. The tooltip is now shown only once floating-ui has actually positioned it (isPositioned=true), not just when the target element was found.',
+      ],
+    },
+  },
+  {
     version: '0.9.11',
     date: '2026-07-03',
     items: {

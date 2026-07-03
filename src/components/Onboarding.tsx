@@ -307,15 +307,23 @@ export function Onboarding() {
     top: 'top', right: 'right', bottom: 'bottom', left: 'left',
   };
 
-  // v0.9.11: reference передаётся через elements — нативный контракт
-  // floating-ui v2, синхронный с рендером React (без refs.setReference в effect).
-  const { refs, floatingStyles } = useFloating({
+  // v0.9.11.1: reference — через elements (синхронный контракт floating-ui v2).
+  // isPositioned=true — только когда позиция реально вычислена для текущего reference.
+  // Без этого между сменой targetEl и пересчётом floatingStyles бывает tick,
+  // когда tooltip рендерится с top:0/left:0 — это и был баг «в левый верхний угол».
+  const { refs, floatingStyles, isPositioned } = useFloating({
     strategy: 'fixed',
     placement: placementMap[cur.placement ?? 'bottom'],
     middleware: [offset(12), flip(), shift({ padding: 12 })],
     whileElementsMounted: autoUpdate,
     elements: { reference: targetEl },
   });
+
+  // v0.9.11.1: тултип невидим пока:
+  //  1) идёт поиск target (resolving), ЛИБО
+  //  2) target есть, но floating-ui ещё не пересчитал позицию («в угле 0,0»).
+  // Центрированный вариант не зависит от floating-ui — показываем сразу.
+  const hideTooltip = resolving || (!isCentered && !isPositioned);
 
   if (!open) return null;
 
@@ -423,7 +431,7 @@ export function Onboarding() {
               }
             : { ...floatingStyles, width: 'min(400px, 92vw)' }),
           zIndex: 91,
-          visibility: resolving ? ('hidden' as const) : ('visible' as const),
+          visibility: hideTooltip ? ('hidden' as const) : ('visible' as const),
         }}
         className="scale-in"
       >
