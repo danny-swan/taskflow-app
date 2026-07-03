@@ -33,28 +33,34 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization') || ''
-    const jwt = authHeader.replace(/^Bearer\s+/i, '')
-    if (!jwt) {
+    if (!authHeader) {
       return json({ error: 'Missing Authorization header' }, 401)
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-    if (!supabaseUrl || !serviceRoleKey) {
+    if (!supabaseUrl || !serviceRoleKey || !anonKey) {
       return json({ error: 'Server not configured' }, 500)
     }
+
+    // v0.9.13: проверяем JWT через anon-клиент с исходным Authorization header — это
+    // штатный и надёжный способ вместо admin.auth.getUser(jwt) (который иногда
+    // возвращал Invalid даже на валидном токене).
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+    const { data: userData, error: userErr } = await userClient.auth.getUser()
+    if (userErr || !userData?.user) {
+      return json({ error: 'Invalid or expired token', detail: userErr?.message }, 401)
+    }
+    const userId = userData.user.id
 
     // Admin-клиент (service role) — только для admin.deleteUser.
     const admin = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     })
-
-    // Проверяем JWT и достаём user из него.
-    const { data: userData, error: userErr } = await admin.auth.getUser(jwt)
-    if (userErr || !userData?.user) {
-      return json({ error: 'Invalid or expired token' }, 401)
-    }
-    const userId = userData.user.id
 
     // Каскад на уровне БД удалит profiles и т.п. (см. миграцию 0001_init.sql).
     const { error: delErr } = await admin.auth.admin.deleteUser(userId)
