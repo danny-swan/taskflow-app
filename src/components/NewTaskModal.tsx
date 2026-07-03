@@ -10,6 +10,7 @@ import { Modal } from './Modal';
 import { EmojiPicker, useEmojiPicker } from './EmojiPicker';
 import { Smile } from 'lucide-react';
 import { insertCheckboxLines } from '../lib/checkboxes';
+import { DatePicker } from './DatePicker';
 
 export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const lang = useStore(s => s.language);
@@ -199,19 +200,15 @@ export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => 
 
         <div className="grid grid-cols-2 gap-4">
           <Field label={tr(lang, 'start')}>
-            <input
-              type="date"
-              value={start}
-              onChange={(e) => setStart(e.target.value)}
-              className="w-full bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+            <DatePicker
+              value={start || null}
+              onChange={(v) => setStart(v ?? '')}
             />
           </Field>
           <Field label={tr(lang, 'deadline')}>
-            <input
-              type="date"
-              value={deadline}
-              onChange={(e) => setDeadline(e.target.value)}
-              className="w-full bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+            <DatePicker
+              value={deadline || null}
+              onChange={(v) => setDeadline(v ?? '')}
             />
           </Field>
         </div>

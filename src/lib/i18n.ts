@@ -126,6 +126,7 @@ const dict = {
     cal_view_month: 'Месяц',
     cal_prev_week: 'Предыдущая неделя',
     cal_next_week: 'Следующая неделя',
+    cal_dp_clear: 'Очистить',
     // Месяцы (именительный падеж — «июль 2026»)
     month_january:   'январь',   month_february: 'февраль',
     month_march:     'март',     month_april:    'апрель',
@@ -262,6 +263,7 @@ const dict = {
     cal_view_month: 'Month',
     cal_prev_week: 'Previous week',
     cal_next_week: 'Next week',
+    cal_dp_clear: 'Clear',
     // Month names (nominative — «July 2026»)
     month_january:   'January',   month_february: 'February',
     month_march:     'March',     month_april:    'April',

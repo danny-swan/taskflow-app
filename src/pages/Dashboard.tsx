@@ -3,6 +3,7 @@ import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { formatDate, formatMonthDay } from '../lib/format';
 import { overdueEventsByDate } from '../lib/overdue';
+import { DatePicker } from '../components/DatePicker';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
   PieChart, Pie, Cell, BarChart, Bar,
@@ -377,18 +378,16 @@ export function DashboardPage() {
                 <div className="text-[12px] font-medium">{tr(lang, 'dash_custom')}</div>
                 <div className="flex flex-col gap-2">
                   <label className="text-[11px] text-muted">{tr(lang, 'dash_from')}</label>
-                  <input
-                    type="date"
-                    value={draftFrom}
-                    onChange={(e) => setDraftFrom(e.target.value)}
-                    className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px] outline-none focus:border-accent"
+                  <DatePicker
+                    value={draftFrom || null}
+                    onChange={(v) => setDraftFrom(v ?? '')}
+                    className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px]"
                   />
                   <label className="text-[11px] text-muted">{tr(lang, 'dash_to')}</label>
-                  <input
-                    type="date"
-                    value={draftTo}
-                    onChange={(e) => setDraftTo(e.target.value)}
-                    className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px] outline-none focus:border-accent"
+                  <DatePicker
+                    value={draftTo || null}
+                    onChange={(v) => setDraftTo(v ?? '')}
+                    className="bg-surface-alt border border-border-soft rounded px-2 py-1 text-[12px]"
                   />
                 </div>
                 <button

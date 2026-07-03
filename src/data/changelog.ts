@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.6',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Локализация выбора даты: нативный выпадающий календарь (который брал язык из системы Windows) заменён на кастомный компонент. Теперь месяцы, дни недели и кнопки «Очистить» / «Сегодня» — на языке интерфейса приложения (все места: модалка задачи, быстрое добавление, фильтр дат на дашборде).',
+        'Календарь: переставлены кнопки в header’е. «Сегодня» + стрелки ‹/› теперь слева рядом с заголовком, переключатель «Неделя / Месяц» — справа (органичнее визуально).',
+        'При переключении Неделя → Месяц (и наоборот) теперь всегда открывается отрезок, содержащий текущую дату (а не сохранённый курсор).',
+        'Обратный drag-and-drop: карточку из ячейки дня можно перетащить в панель «Без дедлайна» — дедлайн очистится. Панель подсвечивается акцентной рамкой во время перетаскивания.',
+      ],
+      en: [
+        'Date-picker localisation: the native date dropdown (which used to inherit the Windows system language) has been replaced with a custom component. Months, weekdays and the “Clear” / “Today” buttons now follow the app interface language everywhere (task modal, quick add, dashboard date filter).',
+        'Calendar: header buttons have been rearranged. “Today” and the ‹/› arrows are now on the left next to the title, while the Week / Month toggle moved to the right (visually more organic).',
+        'Switching Week ↔ Month now always opens the segment that contains today’s date (instead of the previously saved cursor).',
+        'Reverse drag-and-drop: a card can be dragged from a day cell into the “No deadline” panel — the deadline is cleared. The panel is highlighted with an accent border while dragging.',
+      ],
+    },
+  },
+  {
     version: '0.9.5',
     date: '2026-07-03',
     items: {
