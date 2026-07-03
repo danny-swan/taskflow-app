@@ -316,6 +316,7 @@ export function TasksPage() {
               className="flex items-center bg-surface-alt rounded-md p-0.5 border border-border-soft"
               role="tablist"
               aria-label={lang === 'ru' ? 'Режим просмотра' : 'View mode'}
+              data-onboarding="view-toggle"
             >
               <button
                 type="button"
@@ -353,7 +354,11 @@ export function TasksPage() {
             {/* v0.8.13: split-кнопка «+ Новая задача» │ ▾. Основная часть
                 открывает пустую модалку (поведение как раньше), стрелка — меню со списком
                 шаблонов. Если шаблонов нет — меню прячется, остаётся обычная кнопка. */}
-            <div ref={templatesMenuRef} className="relative inline-flex items-stretch">
+            <div
+              ref={templatesMenuRef}
+              className="relative inline-flex items-stretch"
+              data-onboarding="new-task"
+            >
               <button
                 onClick={() => setNewTaskOpen(true)}
                 className={

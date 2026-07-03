@@ -13,6 +13,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.7',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Обновлённый онбординг для новых пользователей: теперь тур сопровождается подсветкой конкретных элементов интерфейса (dim-фон с «прожектором» вокруг цели), а сам список шагов актуализирован под все возможности, появившиеся с первой версии тура — Kanban-режим, Календарь (Неделя/Месяц + DnD + обратный DnD в «Без дедлайна»), локализованный DatePicker, метрики, шаблоны задач. Тур можно перезапустить в «Помощи».',
+        'Fix: локализованный DatePicker больше не «улетает» в левый верхний угол, когда открывается внутри модалки задачи. Popover теперь позиционируется устойчиво к CSS-трансформациям родителя (strategy=fixed) и всплывает точно под полем ввода.',
+      ],
+      en: [
+        'Refreshed onboarding for new users: the tour now highlights specific UI elements (dim background + spotlight around the target), and the list of steps has been brought up to date with everything introduced since the first tour — Kanban view, Calendar (Week/Month + drag-and-drop + reverse DnD into “No deadline”), localised DatePicker, metric chips, task templates. The tour can be re-run from the Help tab.',
+        'Fix: the localised DatePicker no longer jumps to the top-left corner when opened inside a task modal. The popover is now positioned reliably regardless of CSS transforms on parents (strategy=fixed) and appears exactly under the input field.',
+      ],
+    },
+  },
+  {
     version: '0.9.6',
     date: '2026-07-03',
     items: {

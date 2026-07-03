@@ -4,12 +4,22 @@
  * Copyright (c) 2026 Daniil Lebedev (danny-swan)
  *
  * v0.9.6 — Кастомный локализованный DatePicker.
+ * v0.9.7 — Fix позиционирования popover'а внутри модалок.
+ *
  * Заменяет нативный <input type="date">, потому что WebView2 берёт локаль
  * пикера из системы, а не из <html lang>. Теперь месяц/дни/кнопки всегда
  * на языке интерфейса приложения (RU/EN).
  *
  * Формат value/onChange: 'YYYY-MM-DD' | null — совместимо со схемой БД.
  * Отображаемый формат в кнопке: DD.MM.YYYY (RU) / MM/DD/YYYY (EN).
+ *
+ * Позиционирование:
+ *  - strategy: 'fixed' — координаты относительно viewport, не offsetParent.
+ *    Иначе внутри Modal (createPortal → body + transform scaleIn на
+ *    контейнере модалки) popover уезжал в левый верхний угол.
+ *  - CSS transform: scale-анимация применяется к inner-обёртке, а не к
+ *    самому floating-элементу, потому что transform на floating сбивает
+ *    getBoundingClientRect и middleware.
  */
 import { useMemo, useState } from 'react';
 import {
@@ -103,6 +113,9 @@ export function DatePicker({
       setOpen(o);
     },
     placement: 'bottom-start',
+    // v0.9.7: 'fixed' — координаты от viewport, устойчиво к transform на
+    //         предках (Modal имеет scale-in анимацию).
+    strategy: 'fixed',
     middleware: [
       offset(4),
       flip({ fallbackPlacements: ['top-start', 'bottom-end', 'top-end'] }),
@@ -160,12 +173,19 @@ export function DatePicker({
       </button>
       {open && (
         <FloatingPortal>
+          {/*
+            v0.9.7: outer div — floating-контейнер (без transform!),
+            inner div — визуальная карточка с scale-in анимацией.
+            Без этого разделения scale() на floating сбивал позицию.
+          */}
           <div
             ref={refs.setFloating as any}
             style={{ ...floatingStyles, zIndex: 9999 }}
             {...getFloatingProps()}
-            className="bg-surface border border-border rounded-lg shadow-xl p-3 scale-in"
             onClick={(e) => e.stopPropagation()}
+          >
+          <div
+            className="bg-surface border border-border rounded-lg shadow-xl p-3 scale-in"
           >
             {/* Header: месяц + год + стрелки */}
             <div className="flex items-center gap-2 mb-2">
@@ -277,6 +297,7 @@ export function DatePicker({
                 {tr(lang, 'cal_today')}
               </button>
             </div>
+          </div>
           </div>
         </FloatingPortal>
       )}
