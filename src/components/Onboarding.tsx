@@ -4,27 +4,27 @@
  * Copyright (c) 2026 Daniil Lebedev (danny-swan)
  *
  * v0.8.12 → v0.9.17 — 10 итераций попыток сделать «умный» онбординг
- *   с spotlight-подсветкой и tooltip'ом рядом с целевым элементом.
+ *   с spotlight-подсветкой и tooltip'ом РЯДОМ с целевым элементом.
  *   Каждый раз что-то отваливалось: floating-ui был асинхронный и мигал,
- *   ручной расчёт координат тултип уводил за viewport, key={step} давал
- *   вспышки в центре, v0.9.16 добавил редкий крэш в белый экран.
+ *   ручной расчёт координат уводил tooltip за viewport.
  *
- * v0.9.18 — Полный редизайн. Спот-лайт выкинут. Новый подход:
- *   1. Один модал по центру экрана — всегда. Никакого позиционирования
- *      относительно target-элементов, никакого расчёта координат.
- *   2. Тёмный dim overlay 40% opacity под модалом.
- *   3. На каждом шаге в фоне переключается соответствующая вкладка через
- *      navigate(), чтобы пользователь видел реальный UI под модалкой.
- *   4. Прогресс сверху карточки — тонкая полоска, показывает какой шаг
- *      из скольки, без визуального шума 11 точек.
- *   5. Клик по dim overlay — не закрывает (только по «×», «Пропустить»
- *      или «Готово»), чтобы случайный клик мимо кнопки не прервал тур.
+ * v0.9.18 — Полный редизайн: центрированный модал без spotlight.
  *
- * Результат: 150 строк вместо 560, ноль DOM-логики, ноль возможности
- * упасть в белый экран. Внешне — визуально более цельно, чем полу-рабочий
- * spotlight в v0.9.17.
+ * v0.9.19 — Добавляем spotlight обратно, но безопасно:
+ *   1. Tooltip НЕ пытается прилепиться к target. Он остаётся в фикс. позициях —
+ *      либо верх экрана (top: 15%), либо низ (top: 65%), выбор автоматический:
+ *      если target в верхней половине экрана — tooltip внизу, и наоборот.
+ *      Если target не найден — tooltip по центру (fallback).
+ *   2. SVG-маска рисует «дырку» вокруг target — тот же безопасный код из
+ *      v0.9.17, только без tooltip-позиционирования рядом с target.
+ *   3. Если target не найден за 20 попыток (1 сек) — spotlight просто не
+ *      рисуется, тултип остаётся по центру, шаг идёт дальше.
+ *   4. SVG-mask плавно транзитится через CSS при смене шага (attr rx/x/y/...)
+ *      или, где это не работает, через быстрый JS-tween. Мы делаем через
+ *      state → React перерендерит с новыми координатами, а сам transition
+ *      применяется через animate внутри SVG.
  *
- * Public API (не менять сигнатуры — используется в Help.tsx и App.tsx):
+ * Public API (не менять):
  *   - <Onboarding />          — маунтится один раз в App.tsx (в ErrorBoundary)
  *   - isOnboardingSeen()      — проверка флага в settings
  *   - markOnboardingSeen()    — проставить флаг
@@ -65,9 +65,11 @@ export function resetOnboarding() {
 }
 
 type Step = {
+  /** data-onboarding-значение целевого элемента, вокруг которого рисуется
+   *  spotlight. null → без spotlight, tooltip строго по центру. */
+  target: string | null;
   /** Куда переключить вкладку в фоне при показе этого шага. null — не менять. */
   route: string | null;
-  /** Иконка шага (lucide-react). */
   icon: LucideIcon;
   title: { ru: string; en: string };
   body: { ru: string; en: string };
@@ -75,6 +77,7 @@ type Step = {
 
 const STEPS: Step[] = [
   {
+    target: null,
     route: '/tasks',
     icon: Sparkles,
     title: { ru: 'Добро пожаловать в TaskFlow', en: 'Welcome to TaskFlow' },
@@ -84,33 +87,37 @@ const STEPS: Step[] = [
     },
   },
   {
+    target: 'view-toggle',
     route: '/tasks',
     icon: ListChecks,
     title: { ru: 'Задачи — список и Kanban', en: 'Tasks — list and Kanban' },
     body: {
-      ru: 'На вкладке «Задачи» — два вида: список с колонками и доска Kanban со статусами. Между ними — переключатель в шапке. В верхней панели быстрые метрики (всего, в работе, просрочено, ...) — клик по чипу фильтрует список.',
-      en: 'The Tasks tab has two views: a list with columns and a Kanban board grouped by status. Toggle between them in the header. The top bar shows quick metric chips (total, in progress, overdue, …) — click a chip to filter the list.',
+      ru: 'На вкладке «Задачи» — два вида: список с колонками и доска Kanban со статусами. Переключатель в шапке (подсвечен). В верхней панели быстрые метрики (всего, в работе, просрочено, ...) — клик по чипу фильтрует список.',
+      en: 'The Tasks tab has two views: a list with columns and a Kanban board grouped by status. Toggle in the header (highlighted). The top bar shows quick metric chips (total, in progress, overdue, …) — click a chip to filter the list.',
     },
   },
   {
+    target: 'new-task',
     route: '/tasks',
     icon: Plus,
     title: { ru: 'Создание задач', en: 'Creating tasks' },
     body: {
-      ru: 'Кнопка «+ Новая задача» или клавиша N. Стрелка справа от кнопки открывает меню шаблонов — часто повторяющиеся задачи можно сохранить как шаблон в Настройках.',
-      en: 'The «+ New task» button or press N. The arrow next to it opens a menu of saved templates — recurring tasks can be saved as templates in Settings.',
+      ru: 'Кнопка «+ Новая задача» (подсвечена) или клавиша N. Стрелка справа от кнопки открывает меню шаблонов — часто повторяющиеся задачи можно сохранить как шаблон в Настройках.',
+      en: 'The «+ New task» button (highlighted) or press N. The arrow next to it opens a menu of saved templates — recurring tasks can be saved as templates in Settings.',
     },
   },
   {
+    target: 'tag-filters',
     route: '/tasks',
     icon: Tag,
     title: { ru: 'Тэги и фильтры', en: 'Tags and filters' },
     body: {
-      ru: 'Панель тэгов под шапкой — клик по тэгу оставляет только задачи с ним, повторный клик снимает фильтр. Кнопка «Все» возвращает полный список. Свои тэги настраиваются в Настройках.',
-      en: 'The tag row under the header — click a tag to keep only tasks with it, click again to clear. The «All» button shows every task. Custom tags are configured in Settings.',
+      ru: 'Панель тэгов под шапкой (подсвечена) — клик по тэгу оставляет только задачи с ним, повторный клик снимает фильтр. Кнопка «Все» возвращает полный список. Свои тэги настраиваются в Настройках.',
+      en: 'The tag row under the header (highlighted) — click a tag to keep only tasks with it, click again to clear. The «All» button shows every task. Custom tags are configured in Settings.',
     },
   },
   {
+    target: 'nav-calendar',
     route: '/calendar',
     icon: CalendarDays,
     title: { ru: 'Календарь', en: 'Calendar' },
@@ -120,6 +127,7 @@ const STEPS: Step[] = [
     },
   },
   {
+    target: 'nav-dashboard',
     route: '/dashboard',
     icon: LayoutDashboard,
     title: { ru: 'Дашборд', en: 'Dashboard' },
@@ -129,6 +137,7 @@ const STEPS: Step[] = [
     },
   },
   {
+    target: 'nav-stats',
     route: '/stats',
     icon: BarChart3,
     title: { ru: 'Статистика', en: 'Stats' },
@@ -138,6 +147,7 @@ const STEPS: Step[] = [
     },
   },
   {
+    target: 'nav-settings',
     route: '/settings',
     icon: SettingsIcon,
     title: { ru: 'Настройки', en: 'Settings' },
@@ -147,6 +157,7 @@ const STEPS: Step[] = [
     },
   },
   {
+    target: 'nav-help',
     route: '/help',
     icon: HelpCircle,
     title: { ru: 'Помощь и горячие клавиши', en: 'Help & hotkeys' },
@@ -156,6 +167,7 @@ const STEPS: Step[] = [
     },
   },
   {
+    target: null,
     route: '/tasks',
     icon: Layers,
     title: { ru: 'Готово', en: 'All set' },
@@ -166,6 +178,15 @@ const STEPS: Step[] = [
   },
 ];
 
+/** Толщина «воздушной подушки» вокруг подсвеченного элемента, px. */
+const SPOTLIGHT_PADDING = 8;
+/** Радиус закругления углов spotlight. */
+const SPOTLIGHT_RADIUS = 10;
+/** Максимум попыток найти target в DOM (50ms × 20 = 1 сек). */
+const MAX_TARGET_ATTEMPTS = 20;
+
+type SpotlightRect = { x: number; y: number; w: number; h: number };
+
 export function Onboarding() {
   const lang = useStore(s => s.language);
   const ready = useStore(s => s.ready);
@@ -173,6 +194,8 @@ export function Onboarding() {
 
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
+  /** Прямоугольник target-элемента для spotlight. null → без spotlight. */
+  const [spotlight, setSpotlight] = useState<SpotlightRect | null>(null);
 
   const cur = STEPS[step];
   const isLast = step === STEPS.length - 1;
@@ -189,8 +212,7 @@ export function Onboarding() {
     return () => clearTimeout(t);
   }, [ready]);
 
-  // При смене шага — переключаем вкладку в фоне, чтобы за модалкой был
-  // виден релевантный UI. navigate() безопасен даже если route не изменился.
+  // При смене шага — переключаем вкладку в фоне.
   useEffect(() => {
     if (!open || !cur.route) return;
     try {
@@ -198,12 +220,88 @@ export function Onboarding() {
     } catch { /* silent */ }
   }, [open, step, cur.route, navigate]);
 
+  // Поиск target-элемента для spotlight. Ретраи с интервалом 50ms.
+  // Если за 1 сек не нашли — spotlight не показываем, тултип по центру.
+  useEffect(() => {
+    if (!open) {
+      setSpotlight(null);
+      return;
+    }
+    if (!cur.target) {
+      setSpotlight(null);
+      return;
+    }
+
+    let attempts = 0;
+    let cancelled = false;
+    let timerId: number | null = null;
+
+    const findAndMeasure = () => {
+      if (cancelled) return;
+      attempts += 1;
+      try {
+        const el = document.querySelector<HTMLElement>(`[data-onboarding="${cur.target}"]`);
+        if (el) {
+          const r = el.getBoundingClientRect();
+          setSpotlight({
+            x: Math.max(0, r.left - SPOTLIGHT_PADDING),
+            y: Math.max(0, r.top - SPOTLIGHT_PADDING),
+            w: r.width + SPOTLIGHT_PADDING * 2,
+            h: r.height + SPOTLIGHT_PADDING * 2,
+          });
+          return;
+        }
+      } catch { /* silent — target пропал из DOM, spotlight не рисуем */ }
+      if (attempts < MAX_TARGET_ATTEMPTS) {
+        timerId = window.setTimeout(findAndMeasure, 50);
+      } else {
+        setSpotlight(null);
+      }
+    };
+
+    // Сбрасываем предыдущий spotlight, чтобы SVG-mask не показывал старую
+    // «дырку» на новом шаге пока не найден новый target.
+    setSpotlight(null);
+    timerId = window.setTimeout(findAndMeasure, 50);
+    return () => {
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [open, step, cur.target]);
+
+  // Периодически обновляем spotlight (окно ресайзится, target двигается).
+  // Только когда есть активный target и spotlight уже найден.
+  useEffect(() => {
+    if (!open || !cur.target || !spotlight) return;
+    const update = () => {
+      try {
+        const el = document.querySelector<HTMLElement>(`[data-onboarding="${cur.target}"]`);
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        setSpotlight({
+          x: Math.max(0, r.left - SPOTLIGHT_PADDING),
+          y: Math.max(0, r.top - SPOTLIGHT_PADDING),
+          w: r.width + SPOTLIGHT_PADDING * 2,
+          h: r.height + SPOTLIGHT_PADDING * 2,
+        });
+      } catch { /* silent */ }
+    };
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, cur.target, spotlight?.x, spotlight?.y]);
+
   if (!open) return null;
 
   const close = () => {
     try { markOnboardingSeen(); } catch { /* silent */ }
     setOpen(false);
     setStep(0);
+    setSpotlight(null);
   };
   const next = () => { if (isLast) close(); else setStep(s => s + 1); };
   const prev = () => setStep(s => Math.max(0, s - 1));
@@ -218,22 +316,96 @@ export function Onboarding() {
 
   const Icon = cur.icon;
 
+  // Определяем вертикальное положение tooltip'а:
+  //  - если spotlight в верхней половине экрана → tooltip внизу (top: 65%)
+  //  - если spotlight в нижней половине → tooltip вверху (top: 15%)
+  //  - если spotlight нет → tooltip по центру (top: 50%)
+  // Все три случая — фиксированные top-значения, без расчёта относительно
+  // размера tooltip'а. Ничему уезжать некуда.
+  let tooltipTop: string;
+  let tooltipTransform: string;
+  if (!spotlight) {
+    tooltipTop = '50%';
+    tooltipTransform = 'translate(-50%, -50%)';
+  } else {
+    const vh = window.innerHeight;
+    const spotlightCenter = spotlight.y + spotlight.h / 2;
+    if (spotlightCenter < vh / 2) {
+      // Target в верхней половине → tooltip в нижней трети.
+      tooltipTop = '68%';
+      tooltipTransform = 'translate(-50%, 0)';
+    } else {
+      // Target в нижней половине → tooltip в верхней трети.
+      tooltipTop = '15%';
+      tooltipTransform = 'translate(-50%, 0)';
+    }
+  }
+
   return (
     <>
-      {/* Dim overlay — 40% opacity, клик по нему не закрывает тур. */}
-      <div
+      {/*
+        SVG-оверлей с вырезом (mask) вокруг target-элемента.
+        Если spotlight === null — маска состоит только из fill=white (сплошной
+        затемняющий rect), «дырки» нет.
+      */}
+      <svg
         aria-hidden
+        width="100%"
+        height="100%"
         style={{
           position: 'fixed',
           inset: 0,
           zIndex: 90,
-          background: 'rgba(0, 0, 0, 0.4)',
+          pointerEvents: 'auto',
         }}
-      />
+      >
+        <defs>
+          <mask id="tf-onboarding-mask">
+            <rect x="0" y="0" width="100%" height="100%" fill="white" />
+            {spotlight && (
+              <rect
+                x={spotlight.x}
+                y={spotlight.y}
+                width={spotlight.w}
+                height={spotlight.h}
+                rx={SPOTLIGHT_RADIUS}
+                ry={SPOTLIGHT_RADIUS}
+                fill="black"
+                style={{ transition: 'x 240ms ease, y 240ms ease, width 240ms ease, height 240ms ease' }}
+              />
+            )}
+          </mask>
+        </defs>
+        <rect
+          x="0"
+          y="0"
+          width="100%"
+          height="100%"
+          fill="rgba(0,0,0,0.55)"
+          mask="url(#tf-onboarding-mask)"
+        />
+        {spotlight && (
+          <rect
+            x={spotlight.x}
+            y={spotlight.y}
+            width={spotlight.w}
+            height={spotlight.h}
+            rx={SPOTLIGHT_RADIUS}
+            ry={SPOTLIGHT_RADIUS}
+            fill="none"
+            stroke="var(--accent, #6366f1)"
+            strokeWidth="2"
+            style={{
+              filter: 'drop-shadow(0 0 8px var(--accent, #6366f1))',
+              transition: 'x 240ms ease, y 240ms ease, width 240ms ease, height 240ms ease',
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+      </svg>
 
-      {/* Центрированный модал. Использует уже проверенный класс .scale-in
-          из globals.css — тот же, что применяется в Modal, DatePicker,
-          StatusPill; никаких новых анимаций. */}
+      {/* Модал в одной из двух фиксированных позиций (top: 15% / 50% / 68%).
+          Плавно перемещается через CSS transition по top. */}
       <div
         role="dialog"
         aria-modal="true"
@@ -241,11 +413,12 @@ export function Onboarding() {
         className="scale-in"
         style={{
           position: 'fixed',
-          top: '50%',
+          top: tooltipTop,
           left: '50%',
-          transform: 'translate(-50%, -50%)',
+          transform: tooltipTransform,
           width: 'min(460px, 92vw)',
           zIndex: 91,
+          transition: 'top 260ms ease',
         }}
       >
         <div className="bg-surface border border-border rounded-xl shadow-2xl overflow-hidden">
@@ -289,7 +462,7 @@ export function Onboarding() {
             {cur.body[lang === 'ru' ? 'ru' : 'en']}
           </div>
 
-          {/* Футер: счётчик шагов + управление. */}
+          {/* Футер. */}
           <div className="flex items-center justify-between px-4 py-3 border-t border-border-soft">
             <div className="text-[11px] font-mono text-muted tabular-nums">
               {tr('step_of')} {step + 1} / {STEPS.length}
