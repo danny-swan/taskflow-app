@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
+import { useAuth, signOut, deleteAccount } from '../lib/auth';
+import { logEvent } from '../lib/telemetry';
+import { PrivacyModal } from '../components/PrivacyModal';
 import pkg from '../../package.json';
 import { downloadFile } from '../lib/utils';
 import { resetDatabase, isTauri, buildBackup, applyBackup, getSchemaVersion, type BackupPayload } from '../lib/db';
@@ -11,7 +14,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 
-type Sub = 'general' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'updates';
+type Sub = 'general' | 'account' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'updates';
 
 export function SettingsPage() {
   const lang = useStore(s => s.language);
@@ -19,6 +22,7 @@ export function SettingsPage() {
 
   const subs: { key: Sub; label: string }[] = [
     { key: 'general', label: tr(lang, 'settings_general') },
+    { key: 'account', label: lang === 'ru' ? 'Аккаунт' : 'Account' },
     { key: 'tags', label: tr(lang, 'settings_tags') },
     { key: 'statuses', label: tr(lang, 'settings_statuses') },
     { key: 'stats', label: tr(lang, 'settings_stats') },
@@ -43,6 +47,7 @@ export function SettingsPage() {
       </div>
       <div className="flex-1 overflow-y-auto px-6 py-5">
         {sub === 'general' && <GeneralSection />}
+        {sub === 'account' && <AccountSection />}
         {sub === 'tags' && <TagsSection />}
         {sub === 'statuses' && <StatusesSection />}
         {sub === 'stats' && <StatsToggleSection />}
@@ -1615,6 +1620,147 @@ function UpdatesSection() {
           <span>{error}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================================
+// v0.9.9: AccountSection — email, дата регистрации, выход, удаление аккаунта
+// ============================================================================
+function AccountSection() {
+  const lang = useStore(s => s.language);
+  const isRu = lang === 'ru';
+  const auth = useAuth();
+  const pushToast = useStore(s => s.pushToast);
+
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const t = (ru: string, en: string) => (isRu ? ru : en);
+
+  const user = auth.session?.user;
+  const createdAt = user?.created_at ? new Date(user.created_at).toLocaleDateString(isRu ? 'ru-RU' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
+  const lastSignIn = user?.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString(isRu ? 'ru-RU' : 'en-US') : '—';
+
+  const handleSignOut = async () => {
+    setBusy(true);
+    try {
+      await logEvent('logout');
+      await signOut();
+      pushToast(t('Вы вышли из аккаунта', 'You have been signed out'));
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка выхода', 'Sign out error'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setBusy(true);
+    try {
+      await deleteAccount();
+      pushToast(t('Аккаунт помечен на удаление', 'Account marked for deletion'));
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка удаления', 'Deletion error'));
+    } finally {
+      setBusy(false);
+      setConfirmDelete(false);
+    }
+  };
+
+  if (!user) {
+    return (
+      <div className="max-w-xl">
+        <h3 className="font-display text-[16px] font-semibold mb-4">
+          {t('Аккаунт', 'Account')}
+        </h3>
+        <p className="text-[13px] text-muted">
+          {t('Вы не авторизованы.', 'You are not signed in.')}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-xl space-y-6">
+      <h3 className="font-display text-[16px] font-semibold flex items-center gap-2">
+        <User size={16} />
+        {t('Аккаунт', 'Account')}
+      </h3>
+
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+        <div className="flex justify-between items-center">
+          <span className="text-[12px] text-muted uppercase tracking-wide">Email</span>
+          <span className="text-[13px] font-medium">{user.email}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[12px] text-muted uppercase tracking-wide">
+            {t('Зарегистрирован', 'Registered')}
+          </span>
+          <span className="text-[13px]">{createdAt}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[12px] text-muted uppercase tracking-wide">
+            {t('Последний вход', 'Last sign in')}
+          </span>
+          <span className="text-[13px]">{lastSignIn}</span>
+        </div>
+        {auth.gracePeriod && (
+          <div className="pt-2 border-t border-border-soft text-[12px] text-muted">
+            {t(
+              'Работает в оффлайн-режиме. Для продления сессии подключитесь к интернету раз в неделю.',
+              'Working offline. Reconnect to the internet weekly to extend your session.',
+            )}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <button
+          onClick={() => setShowPrivacy(true)}
+          className="flex items-center gap-2 text-[13px] text-accent hover:underline"
+        >
+          <Shield size={14} />
+          {t('Политика конфиденциальности', 'Privacy Policy')}
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-2 pt-4 border-t border-border-soft">
+        <button
+          onClick={handleSignOut}
+          disabled={busy}
+          className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 text-[13px] border border-border-soft rounded-md hover:bg-surface-alt disabled:opacity-50"
+        >
+          <LogOut size={14} />
+          {t('Выйти из аккаунта', 'Sign out')}
+        </button>
+
+        <button
+          onClick={() => setConfirmDelete(true)}
+          disabled={busy}
+          className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 text-[13px] text-red-600 border border-red-500/30 rounded-md hover:bg-red-500/10 disabled:opacity-50"
+        >
+          <Trash2 size={14} />
+          {t('Удалить аккаунт', 'Delete account')}
+        </button>
+      </div>
+
+      {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={t('Удалить аккаунт?', 'Delete account?')}
+        message={t(
+          'Аккаунт и вся телеметрия будут удалены безвозвратно. Локальные задачи останутся на устройстве.',
+          'Your account and all telemetry will be permanently deleted. Local tasks stay on your device.',
+        )}
+        confirmLabel={t('Удалить', 'Delete')}
+        cancelLabel={t('Отмена', 'Cancel')}
+        danger
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }
