@@ -5,6 +5,7 @@ import { KanbanCard } from './KanbanCard';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useDroppable } from '@dnd-kit/core';
+import { motion, AnimatePresence } from 'framer-motion';
 
 /**
  * KanbanColumn — вертикальная колонка канбан-доски (v0.9.0).
@@ -76,12 +77,21 @@ export function KanbanColumn({
           }
           style={{ scrollbarWidth: 'thin', minHeight: 80 }}
         >
-          {tasks.map((t, i) => (
-            <div key={t.id}>
-              {dropIndicator === i && <DropSlot />}
-              <SortableKanbanTask task={t} onOpenTask={onOpenTask} />
-            </div>
-          ))}
+          <AnimatePresence initial={false}>
+            {tasks.map((t, i) => (
+              <motion.div
+                key={t.id}
+                layout
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+              >
+                {dropIndicator === i && <DropSlot />}
+                <SortableKanbanTask task={t} onOpenTask={onOpenTask} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
           {/* Плейсхолдер в конце списка (или в пустой колонке — единственный индикатор) */}
           {dropIndicator !== null && dropIndicator !== undefined && dropIndicator >= tasks.length && <DropSlot />}
           {tasks.length === 0 && !isOver && dropIndicator == null && (

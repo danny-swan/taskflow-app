@@ -71,7 +71,7 @@ export function MetricChips() {
   ] as const;
 
   return (
-    <div className="flex items-center gap-1.5 shrink-0">
+    <div className="flex items-center gap-1.5 shrink-0" data-onboarding="metric-chips">
       {chips.map(({ key, icon: Icon, value, label, color }) => {
         const isActive = activeFilter === key;
         return (

@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.8',
+    date: '2026-07-03',
+    items: {
+      ru: [
+        'Onboarding — фиксы по фидбэку: приветственное и финальное окна теперь появляются в центре экрана и не перекрывают левое меню. Финальный шаг «Помощь» корректно подсвечивает пункт Помощь в боковом меню.',
+        'Добавлены новые шаги тура: подсвечены фильтры по тэгам (верхняя панель вкладки Задачи) и метрические чипы в шапке приложения (всего задач / в работе / на паузе / выполнено / внимание).',
+        'Анимации карточек: при смене статуса задачи (и в списке, и на канбане) карточки теперь плавно появляются/исчезают (fade + slide) и остальные карточки плавно пересчитывают позиции (framer-motion layout). На перетаскивание мышью не влияет — dnd по-прежнему отзывчив.',
+        'Автообновление: новый раздел Настройки → Обновления. Переключатель «Проверять автоматически» (включён по умолчанию) + кнопка «Проверить сейчас». При обнаружении обновления можно скачать и установить в один клик — приложение само перезапустится. Обновления криптографически подписаны (ed25519) — поддельные апдейты не пройдут.',
+      ],
+      en: [
+        'Onboarding fixes based on feedback: the welcome and final tour windows now appear centered on screen and no longer overlap the left menu. The final “Help” step correctly highlights the Help nav item in the sidebar.',
+        'New tour steps added: tag filters (top panel of the Tasks tab) and header metric chips (total / in-progress / paused / done / attention) are now highlighted with explanations.',
+        'Card animations: when a task changes status (both in list and kanban view), cards now smoothly appear/disappear (fade + slide) and remaining cards smoothly reflow their positions (framer-motion layout). Mouse drag-and-drop remains fully responsive.',
+        'Auto-update: new Settings → Updates section. Toggle “Check automatically” (on by default) + “Check now” button. When an update is available, download and install with one click — the app restarts itself. Updates are cryptographically signed (ed25519), so forged patches won’t pass verification.',
+      ],
+    },
+  },
+  {
     version: '0.9.7',
     date: '2026-07-03',
     items: {

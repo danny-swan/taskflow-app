@@ -27,8 +27,19 @@
       "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: https://asset.localhost; font-src 'self' data:; blob: 'self'"
     }
   },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "endpoints": [
+        "https://github.com/danny-swan/taskflow-app/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUxQkU1RjJGNERBRTZGNEQKUldSTmI2NU5MMSsrVWJ1RDBmNDN6YVhUdmJ0aW9ZbW52alRLbTZBeVo5NmtQYmtqUEZ1UU1nVTcK"
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis", "msi"],
     "icon": [
       "icons/32x32.png",

@@ -63,7 +63,10 @@ jobs:
           # Cargo.toml — patch version field
           (Get-Content src-tauri/Cargo.toml) -replace '^version = ".*"', "version = `"$tag`"" | Set-Content src-tauri/Cargo.toml
 
-      - name: Build Tauri app (NSIS + MSI)
+      - name: Build Tauri app (NSIS + MSI, signed for updater)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc
 
       - name: List build artifacts
@@ -76,6 +79,15 @@ jobs:
         with:
           name: TaskFlow-NSIS-Installer
           path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+
+      - name: Upload updater signatures
+        uses: actions/upload-artifact@v4
+        with:
+          name: TaskFlow-Updater-Sigs
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.sig
           if-no-files-found: warn
 
       - name: Upload MSI installer
@@ -92,14 +104,46 @@ jobs:
           path: src-tauri/target/x86_64-pc-windows-msvc/release/taskflow.exe
           if-no-files-found: warn
 
+      - name: Generate updater manifest (latest.json)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $nsisPath = Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1
+          $sigPath = Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis" -Filter "*-setup.exe.sig" | Select-Object -First 1
+          if (-not $nsisPath -or -not $sigPath) {
+            Write-Error "NSIS installer or signature not found — updater manifest cannot be generated"
+            exit 1
+          }
+          $sig = Get-Content $sigPath.FullName -Raw
+          $downloadUrl = "https://github.com/danny-swan/taskflow-app/releases/download/$tag/$($nsisPath.Name)"
+          $manifest = @{
+            version = $version
+            notes = "See release notes: https://github.com/danny-swan/taskflow-app/releases/tag/$tag"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $sig.Trim()
+                url = $downloadUrl
+              }
+            }
+          } | ConvertTo-Json -Depth 10
+          $manifest | Set-Content -Path "latest.json" -Encoding UTF8
+          Write-Host "=== latest.json ==="
+          Get-Content latest.json
+
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.sig
             src-tauri/target/x86_64-pc-windows-msvc/release/taskflow.exe
+            latest.json
           generate_release_notes: true
           draft: false
           prerelease: false

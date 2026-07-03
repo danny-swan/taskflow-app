@@ -277,6 +277,7 @@ export function TasksPage() {
           <div
             className="flex-1 min-w-0 overflow-x-auto"
             style={{ scrollbarWidth: 'thin' }}
+            data-onboarding="tag-filters"
           >
             <div className="flex items-center gap-1.5 flex-nowrap pr-1" style={{ WebkitOverflowScrolling: 'touch' }}>
               <Filter size={13} className="text-muted shrink-0" />
