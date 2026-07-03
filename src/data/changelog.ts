@@ -13,6 +13,26 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.21',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'Инфраструктура: добавлены E2E-тесты (Playwright + Chromium). Покрыты happy paths — смоук-тест старта приложения, создание задачи через модалку, навигация по сайдбару (Задачи → Календарь → Настройки → Задачи) и переключение темы через быстрое меню в сайдбаре. Тесты стартуют веб-версию через Vite dev-server и обходят auth-gate через dev-only флаг `?e2e=1` — в проде байпаса нет, tree-shaking его вырезает.',
+        'CI: в workflow `test.yml` добавлен job `e2e` (Ubuntu, Playwright ~30 секунд). В workflow `build.yml` сборка на тег теперь гейтится через `needs: [test, e2e]` — если сломан UI-flow, тег не соберётся, инсталляторы не выйдут в релиз.',
+        'Инфраструктура: Vitest понижен с 4.x до 3.x — версия 4 приволокла transitive vite@8, конфликтующий с нашим vite@5 (dev-сервер падал на sql.js). Prod-билд не был затронут, но dev-разработка была сломана.',
+        'Инфраструктура: убран `optimizeDeps.exclude: ["sql.js"]` из `vite.config.ts` — без него Vite корректно оптимизирует CJS-модуль sql.js в ESM. Ошибка `does not provide an export named "default"` в dev-сервере больше не воспроизводится.',
+        'Для кода видимых изменений нет — это чисто девелопмент-релиз: инфраструктура тестов теперь покрывает и unit (73 теста), и E2E (4 теста), любой сломанный UI-flow будет пойман до выпуска.',
+      ],
+      en: [
+        'Infrastructure: E2E tests added (Playwright + Chromium). Happy paths covered — app start smoke test, task creation via modal, sidebar navigation (Tasks → Calendar → Settings → Tasks) and theme switching via the quick menu in the sidebar. Tests start the web version via Vite dev server and bypass the auth-gate through a dev-only `?e2e=1` flag — no bypass exists in prod builds, tree-shaking strips it.',
+        'CI: an `e2e` job was added to `test.yml` (Ubuntu, Playwright ~30 seconds). The `build.yml` workflow now gates tag builds via `needs: [test, e2e]` — if any UI flow breaks, the tag will not build and installers will not ship.',
+        'Infrastructure: Vitest downgraded from 4.x to 3.x — v4 pulled in transitive vite@8, conflicting with our vite@5 (the dev server broke on sql.js). Prod builds were unaffected, but dev work was blocked.',
+        'Infrastructure: `optimizeDeps.exclude: ["sql.js"]` was removed from `vite.config.ts` — without it, Vite correctly pre-bundles the sql.js CJS module into ESM. The `does not provide an export named "default"` dev-server error is no longer reproducible.',
+        'No visible changes in the app — this is a pure development release: the test infrastructure now covers both unit (73 tests) and E2E (4 tests), any broken UI flow will be caught before shipping.',
+      ],
+    },
+  },
+  {
     version: '0.9.20',
     date: '2026-07-04',
     items: {

@@ -17,7 +17,6 @@ export default defineConfig({
     strictPort: true,
   },
   envPrefix: ['VITE_', 'TAURI_'],
-  optimizeDeps: { exclude: ['sql.js'] },
   build: {
     target: 'es2020',
     rollupOptions: {
