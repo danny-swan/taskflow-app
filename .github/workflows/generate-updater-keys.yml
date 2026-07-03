@@ -1,0 +1,68 @@
+name: Generate Tauri Updater Keys (one-time)
+
+# Одноразовый workflow для генерации пары ключей подписи auto-updater.
+# Запускается вручную. После получения ключей и переноса их в Secrets
+# этот файл можно удалить (или оставить как справочный).
+
+on:
+  workflow_dispatch:
+    inputs:
+      password:
+        description: 'Пароль для приватного ключа (можно оставить пустым)'
+        required: false
+        default: ''
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@^2
+
+      - name: Generate signing key pair
+        env:
+          KEY_PASSWORD: ${{ inputs.password }}
+        run: |
+          mkdir -p /tmp/tauri-keys
+          # tauri signer generate: -w путь, -p пароль (пустой = без пароля)
+          npx --yes @tauri-apps/cli signer generate \
+            -w /tmp/tauri-keys/taskflow.key \
+            -p "$KEY_PASSWORD"
+
+      - name: Print PUBLIC key (safe to share)
+        run: |
+          echo "=========================================="
+          echo "PUBLIC KEY (безопасно показывать, вставить в tauri.conf.json):"
+          echo "=========================================="
+          cat /tmp/tauri-keys/taskflow.key.pub
+          echo ""
+          echo "=========================================="
+
+      - name: Print PRIVATE key (SECRET — copy to GitHub Secrets)
+        run: |
+          echo "::add-mask::$(cat /tmp/tauri-keys/taskflow.key)"
+          echo "=========================================="
+          echo "PRIVATE KEY (СЕКРЕТ — скопируй в GitHub Secrets"
+          echo "как TAURI_SIGNING_PRIVATE_KEY):"
+          echo "=========================================="
+          echo ""
+          cat /tmp/tauri-keys/taskflow.key
+          echo ""
+          echo "=========================================="
+          echo "Пароль (если задан) → TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          echo "=========================================="
+
+      - name: Upload keys as artifact (7 days retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-updater-keys
+          path: /tmp/tauri-keys/
+          retention-days: 7
