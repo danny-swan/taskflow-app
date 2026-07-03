@@ -13,6 +13,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.17',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'Хотфикс онбординга: у части пользователей v0.9.16 приложение падало в белый экран при клике «Пройти тур заново». Логика позиционирования возвращена к стабильной v0.9.15, при этом плавные переходы между шагами и отсутствие вспышек в центре сохранены.',
+        'Дополнительно: онбординг обёрнут в защитный слой (React error boundary). Если в туре когда-нибудь снова возникнет ошибка, приложение больше не уходит в белый экран — тур автоматически помечается как пройденный, а Задачи/Календарь/Настройки продолжают работать.',
+      ],
+      en: [
+        'Onboarding hotfix: some users on v0.9.16 saw a white screen after clicking «Restart the tour». Positioning logic is rolled back to the stable v0.9.15 version, while the smooth step transitions and no-center-flashes stay in place.',
+        'Extra safety: the onboarding is now wrapped in a React error boundary. If the tour ever crashes again, the app no longer goes blank — the tour is marked as completed automatically and Tasks/Calendar/Settings keep working.',
+      ],
+    },
+  },
+  {
     version: '0.9.16',
     date: '2026-07-03',
     items: {

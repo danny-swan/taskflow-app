@@ -12,6 +12,7 @@ import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { ToastStack } from './components/Toast';
 import { Onboarding } from './components/Onboarding';
+import { OnboardingErrorBoundary } from './components/OnboardingErrorBoundary';
 import { AuthScreen } from './components/AuthScreen';
 import { PasswordResetModal } from './components/PasswordResetModal';
 import { useAuth, handleAuthCallback } from './lib/auth';
@@ -165,7 +166,9 @@ function App() {
           </Suspense>
         </main>
         <ToastStack />
-        <Onboarding />
+        <OnboardingErrorBoundary>
+          <Onboarding />
+        </OnboardingErrorBoundary>
         {showPasswordReset && (
           <PasswordResetModal onClose={() => setShowPasswordReset(false)} />
         )}
