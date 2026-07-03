@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  * Copyright (c) 2026 Daniil Lebedev (danny-swan)
  *
- * v0.9.9 — Модалка Политики конфиденциальности.
+ * v0.9.10 — Модалка Политики конфиденциальности.
+ * — Контакт: GitHub Issues (email пока не выделен)
+ * — Пояснение про хеш пароля (bcrypt, необратим)
  * Текст встроен inline (RU + EN) — независимость от сети и файлов.
  * Оригинал: PRIVACY.md в корне репо.
  */
@@ -46,6 +48,10 @@ export function PrivacyModal({ onClose }: Props) {
 
               <p><strong>Данные аккаунта:</strong> email, хеш пароля, дата регистрации и последнего входа.</p>
 
+              <p className="text-[12px] text-muted border-l-2 border-border-soft pl-3">
+                <strong>Что такое хеш пароля?</strong> Мы <strong>не храним ваш пароль</strong> — ни разработчик, ни Supabase его не видят. Сохраняется только «хеш» — односторонняя криптографическая свёртка (bcrypt), из которой восстановить пароль математически невозможно. При входе введённый вами пароль хешируется тем же алгоритмом и сравнивается со сохранённым значением.
+              </p>
+
               <p><strong>Телеметрия:</strong> тип события (регистрация, вход, старт приложения, создание/удаление задачи — <em>без содержимого</em>), версия приложения, операционная система, время события.</p>
 
               <p><strong>Что мы НЕ собираем:</strong> содержимое задач (названия, описания, теги, дедлайны) хранится <strong>только локально</strong> в SQLite на вашем устройстве и никогда не отправляется на сервер. Никакой рекламной аналитики, никакой передачи третьим лицам.</p>
@@ -55,7 +61,7 @@ export function PrivacyModal({ onClose }: Props) {
 
               <h3 className="font-semibold text-[14px] mt-3">Ваши права</h3>
               <ul className="list-disc pl-5 space-y-1">
-                <li>Получить копию данных — напишите на lebedevdo.one@gmail.com</li>
+                <li>Получить копию данных — откройте issue на <a href="https://github.com/danny-swan/taskflow-app/issues" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">GitHub</a> с меткой <code>data-request</code></li>
                 <li>Удалить аккаунт — Настройки → Аккаунт → «Удалить аккаунт». Все данные удаляются немедленно.</li>
                 <li>Отозвать согласие — удаление аккаунта эквивалентно отзыву</li>
               </ul>
@@ -75,6 +81,10 @@ export function PrivacyModal({ onClose }: Props) {
 
               <p><strong>Account data:</strong> email, password hash, registration and last login dates.</p>
 
+              <p className="text-[12px] text-muted border-l-2 border-border-soft pl-3">
+                <strong>What is a password hash?</strong> We <strong>do not store your password</strong> — neither the developer nor Supabase can see it. Only a «hash» is stored — a one-way cryptographic digest (bcrypt) from which the password cannot mathematically be recovered. On login, the password you enter is hashed with the same algorithm and compared to the stored value.
+              </p>
+
               <p><strong>Telemetry:</strong> event type (signup, login, app start, task created/deleted — <em>without content</em>), app version, operating system, event timestamp.</p>
 
               <p><strong>What we do NOT collect:</strong> task content (titles, descriptions, tags, deadlines) is stored <strong>only locally</strong> in SQLite on your device and never leaves it. No advertising analytics, no third-party sharing.</p>
@@ -84,7 +94,7 @@ export function PrivacyModal({ onClose }: Props) {
 
               <h3 className="font-semibold text-[14px] mt-3">Your rights</h3>
               <ul className="list-disc pl-5 space-y-1">
-                <li>Get a copy of your data — email lebedevdo.one@gmail.com</li>
+                <li>Get a copy of your data — open an issue on <a href="https://github.com/danny-swan/taskflow-app/issues" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">GitHub</a> with the <code>data-request</code> label</li>
                 <li>Delete account — Settings → Account → «Delete account». All data deleted immediately.</li>
                 <li>Withdraw consent — account deletion is equivalent</li>
               </ul>
