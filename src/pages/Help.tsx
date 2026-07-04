@@ -96,6 +96,21 @@ const sectionsRu: HelpSection[] = [
           </>
         ),
       },
+      {
+        q: 'Что такое Command Palette и как её вызвать? (v0.9.29)',
+        a: (
+          <>
+            <p><strong>Command Palette</strong> — глобальная палитра поиска и быстрых действий. Открывается горячей клавишей <strong>Ctrl+K</strong> (Cmd+K на macOS) из любого места приложения.</p>
+            <p className="mt-2">Внутри — три категории результатов:</p>
+            <ul className="mt-1 ml-4 list-disc space-y-1">
+              <li><strong>Навигация</strong> — переход на Задачи, Календарь, Дашборд, Статистику, Настройки, Помощь.</li>
+              <li><strong>Задачи</strong> — подстрочный поиск по названию (до 8 попаданий). Задачи в технических статусах (Удалено) не показываются.</li>
+              <li><strong>Действия</strong> — Новая задача, Переключить тему (свет/темно), Переключить вид (список/канбан), Экспорт в JSON.</li>
+            </ul>
+            <p className="mt-2"><strong>Стрелки ⇑/⇓</strong> переключают выделение, <strong>Enter</strong> — выполнить, <strong>Esc</strong> — закрыть. Клик по затемнённому фону тоже закрывает палитру.</p>
+          </>
+        ),
+      },
     ],
   },
   {
@@ -254,7 +269,17 @@ const sectionsRu: HelpSection[] = [
     items: [
       {
         q: 'Как переключить тему?',
-        a: 'Внизу левого сайдбара — кнопка с иконкой солнца/луны. Доступны 4 темы: Светлая, Тёмная, Акацуки, Деревня листа.',
+        a: 'Внизу левого сайдбара — кнопка с иконкой солнца/луны. С v0.9.29 доступны 5 тем: Светлая, Тёмная, Акацуки, Деревня листа и «Своя» (кастом-тема с пользовательскими цветами).',
+      },
+      {
+        q: 'Как сделать свою тему? (v0.9.29)',
+        a: (
+          <>
+            <p>В <strong>Настройки → Тема</strong> выберите пресет <strong>«Своя»</strong> — под сеткой пресетов появятся 3 color-picker’a: <strong>Акцент</strong>, <strong>Фон</strong>, <strong>Текст</strong>. Каждый цвет можно выбрать визуально или ввести hex код вручную (например, #5B7FB8).</p>
+            <p className="mt-2">Остальные цвета (границы, поверхности, hover) <strong>вычисляются автоматически</strong> через линейную интерполяцию RGB между фоном и текстом. Светлая/тёмная схема (color-scheme) переключается по яркости выбранного фона.</p>
+            <p className="mt-2">Цвета сохраняются <strong>локально</strong> в SQLite и не синхронизируются между машинами — каждая копия приложения может иметь свою тему. Кнопка <strong>«Сбросить к дефолтам»</strong> возвращает цвета светлой темы.</p>
+          </>
+        ),
       },
       {
         q: 'Как сменить язык?',
@@ -281,6 +306,8 @@ const sectionsRu: HelpSection[] = [
             <li><code>5</code> — Настройки</li>
             <li><code>6</code> — Помощь</li>
             <li><code>/</code> — фокус на поле поиска (на вкладке Задачи)</li>
+            <li><code>N</code> — новая задача (на вкладке Задачи)</li>
+            <li><code>Ctrl+K</code> / <code>Cmd+K</code> — Command Palette (глобальный поиск и действия, v0.9.29)</li>
             <li><code>Esc</code> — закрыть модальное окно / отменить редактирование / закрыть эмодзи-пикер</li>
             <li><code>Enter</code> в полях карточки — сохранить inline-правку</li>
             <li className="text-muted text-[12px] mt-1">Модификаторы Ctrl/Cmd/Alt блокируют навигацию, чтобы не конфликтовать с системными шорткатами. В полях ввода цифры тоже не тригерят переход.</li>
@@ -481,6 +508,21 @@ const sectionsEn: HelpSection[] = [
           </>
         ),
       },
+      {
+        q: 'What is the Command Palette and how do I open it? (v0.9.29)',
+        a: (
+          <>
+            <p>The <strong>Command Palette</strong> is a global search-and-actions palette. Open it with <strong>Ctrl+K</strong> (Cmd+K on macOS) from anywhere in the app.</p>
+            <p className="mt-2">Inside there are three categories of results:</p>
+            <ul className="mt-1 ml-4 list-disc space-y-1">
+              <li><strong>Navigation</strong> — jump to Tasks, Calendar, Dashboard, Stats, Settings, Help.</li>
+              <li><strong>Tasks</strong> — substring match by title (up to 8 hits). Tasks in technical statuses (Deleted) are not shown.</li>
+              <li><strong>Actions</strong> — New task, Toggle theme (light/dark), Toggle view (list/kanban), Export to JSON.</li>
+            </ul>
+            <p className="mt-2"><strong>Arrow keys ⇑/⇓</strong> move the selection, <strong>Enter</strong> — run, <strong>Esc</strong> — close. Clicking the darkened backdrop also closes the palette.</p>
+          </>
+        ),
+      },
     ],
   },
   {
@@ -639,7 +681,17 @@ const sectionsEn: HelpSection[] = [
     items: [
       {
         q: 'How do I switch theme?',
-        a: 'Bottom of the left sidebar — sun/moon icon. Four themes: Light, Dark, Akatsuki, Hidden Leaf.',
+        a: 'Bottom of the left sidebar — sun/moon icon. Since v0.9.29, five themes are available: Light, Dark, Akatsuki, Hidden Leaf and «Custom» (a custom theme with user-defined colors).',
+      },
+      {
+        q: 'How do I make a custom theme? (v0.9.29)',
+        a: (
+          <>
+            <p>In <strong>Settings → Theme</strong> pick the <strong>«Custom»</strong> preset — three color pickers appear below the preset grid: <strong>Accent</strong>, <strong>Background</strong>, <strong>Text</strong>. Each color can be picked visually or entered as a hex code (e.g. #5B7FB8).</p>
+            <p className="mt-2">All other colors (borders, surfaces, hover) are <strong>derived automatically</strong> via linear RGB interpolation between background and text. The light/dark color-scheme is toggled by the luminance of the chosen background.</p>
+            <p className="mt-2">Colors are stored <strong>locally</strong> in SQLite and are not synced across machines — each copy of the app can have its own theme. The <strong>«Reset to defaults»</strong> button restores the light-theme colors.</p>
+          </>
+        ),
       },
       {
         q: 'How do I change language?',
@@ -666,6 +718,8 @@ const sectionsEn: HelpSection[] = [
             <li><code>5</code> — Settings</li>
             <li><code>6</code> — Help</li>
             <li><code>/</code> — focus the search box (on the Tasks tab)</li>
+            <li><code>N</code> — new task (on the Tasks tab)</li>
+            <li><code>Ctrl+K</code> / <code>Cmd+K</code> — Command Palette (global search and actions, v0.9.29)</li>
             <li><code>Esc</code> — close modal / cancel edit / close emoji picker</li>
             <li><code>Enter</code> in card fields — save the inline edit</li>
             <li className="text-muted text-[12px] mt-1">Ctrl/Cmd/Alt modifiers disable navigation to avoid clashing with system shortcuts. Digits in input fields also don’t trigger a tab switch.</li>
