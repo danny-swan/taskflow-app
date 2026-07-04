@@ -10,8 +10,9 @@
  * requires re-login. Email/Password + Google OAuth.
  * Обязательный чекбокс согласия с Политикой конфиденциальности при регистрации.
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Sparkles, Mail, Lock, AlertCircle, Loader2, CheckCircle2, Eye, EyeOff } from 'lucide-react';
+import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
 import {
   signInWithPassword,
   signUpWithPassword,
@@ -23,6 +24,12 @@ import {
 import { logEvent } from '../lib/telemetry';
 import { useStore } from '../store/useStore';
 import { PrivacyModal } from './PrivacyModal';
+
+// v0.9.23: если VITE_TURNSTILE_SITE_KEY не задан (dev-машина без .env.local),
+// captcha-виджет не рендерится, и submit работает как раньше.
+// При добавлении ключа — виджет выдаёт токен, который валидируется
+// Supabase Attack Protection (серверная часть) через Turnstile Secret Key.
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined;
 
 type Mode = 'signin' | 'signup' | 'forgot';
 
@@ -46,6 +53,13 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v0.9.23: Turnstile-токен. Живёт ~5 минут, одноразовый. После каждой
+  // попытки signIn/signUp виджет сбрасывается (turnstileRef.current?.reset).
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const turnstileRef = useRef<TurnstileInstance | null>(null);
+  // captcha включена только если есть site key И мы не в forgot-ветке
+  // (reset-password в Supabase использует отдельный rate limit, капча там не нужна).
+  const captchaEnabled = Boolean(TURNSTILE_SITE_KEY);
   // v0.9.14: success-баннер — используется для «Письмо отправлено»
   // после forgot password и после signup с verify email.
   const [notice, setNotice] = useState<string | null>(null);
@@ -93,10 +107,19 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
       return;
     }
 
+    // v0.9.23: если captcha включена, без токена не отправляем запрос.
+    if (captchaEnabled && !captchaToken) {
+      setError(t('Подтвердите, что вы не робот', 'Please confirm you are not a robot'));
+      return;
+    }
+
     setLoading(true);
     try {
+      // captchaToken может быть undefined — это ok, Supabase его игнорирует,
+      // когда captcha в Attack Protection выключена.
+      const token = captchaToken ?? undefined;
       if (mode === 'signup') {
-        await signUpWithPassword(email, password);
+        await signUpWithPassword(email, password, token);
         await logEvent('signup');
         persistEmailIfNeeded();
         // v0.9.14: если в Supabase включена верификация email, сессии ещё нет —
@@ -106,13 +129,19 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
           'Account created. Check your inbox and confirm your email via the link to sign in.',
         ));
       } else {
-        await signInWithPassword(email, password);
+        await signInWithPassword(email, password, token);
         await logEvent('login');
         persistEmailIfNeeded();
       }
       // После успеха useAuth автоматически обновит состояние (если сессия есть)
     } catch (err: any) {
       setError(err?.message ?? t('Ошибка авторизации', 'Authentication error'));
+      // v0.9.23: токен Turnstile одноразовый — после любой попытки сбрасываем
+      // виджет, чтобы пользователь получил свежий challenge для следующей попытки.
+      if (captchaEnabled) {
+        turnstileRef.current?.reset();
+        setCaptchaToken(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -273,6 +302,25 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
               </label>
             )}
 
+            {/* v0.9.23: Turnstile captcha — только в signin/signup и только
+                если site key задан (в dev без .env.local виджет не показываем). */}
+            {captchaEnabled && mode !== 'forgot' && (
+              <div className="flex justify-center">
+                <Turnstile
+                  ref={turnstileRef}
+                  siteKey={TURNSTILE_SITE_KEY!}
+                  onSuccess={token => setCaptchaToken(token)}
+                  onExpire={() => setCaptchaToken(null)}
+                  onError={() => setCaptchaToken(null)}
+                  options={{
+                    theme: 'auto',
+                    size: 'flexible',
+                    language: isRu ? 'ru' : 'en',
+                  }}
+                />
+              </div>
+            )}
+
             {error && (
               <div className="flex items-start gap-2 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-md text-[12px] text-red-600">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
@@ -290,7 +338,9 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
 
             <button
               type="submit"
-              disabled={loading}
+              // v0.9.23: submit блокируется пока нет captcha-токена
+              // (кроме forgot-ветки — там виджет не показываем).
+              disabled={loading || (captchaEnabled && mode !== 'forgot' && !captchaToken)}
               className="w-full flex items-center justify-center gap-2 py-2.5 text-[13px] font-medium text-white rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ background: 'var(--accent)' }}
             >
