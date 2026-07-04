@@ -13,6 +13,28 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.27',
+    date: '2026-07-05',
+    items: {
+      ru: [
+        'Настройки: секция «Считать просрочку» переименована в «Логика дедлайнов» — название точнее отражает, что настройка влияет не только на счётчик просрочки, но и на всю логику вычисления дней до/после дедлайна.',
+        'Настройки: пояснение «Праздники не учитываются» заменено на «В режиме «Рабочие дни» выходные (Сб-Вс) не учитываются» — термин «праздники» вводил в заблуждение (табеля праздников в приложении нет, отбрасываются только Сб-Вс).',
+        'Настройки: рядом с ползунком «Размер текста» появились кнопки − и + — теперь менять шрифт на 1px можно одним кликом, без перетаскивания ползунка. Кнопки дисейблятся на границах диапазона (12–18px).',
+        'Раздел Помощь: три FAQ переехали в раздел «📋 Основы», где им логичнее быть: «Что за чипы в топбаре вкладки Задачи?» и «Как читать подсветку дедлайна?» — из Дашборда; «Как работает Отменить в уведомлениях?» — из Диагностики. Ответы на эти вопросы нужны в начале знакомства с приложением, а не в продвинутых разделах.',
+        'Раздел Помощь: убраны две внутренние детали, бесполезные конечному пользователю: упоминание файла src/lib/password.ts в FAQ парольной политики и указание пути к Sentry-тогглу в FAQ телеметрии (тоггл уже описан в предыдущем параграфе того же ответа).',
+        'Лендинг: баннер с версией в герое теперь обновляется автоматически через GitHub Releases API — было захардкожено «v0.9.22 — стабильный релиз» и не синхронизировалось с реальной версией (в GitHub уже была v0.9.26, на лендинге всё ещё v0.9.22). Fallback-версия в HTML тоже бампнута до v0.9.26.',
+      ],
+      en: [
+        'Settings: the "Overdue counting" section is renamed to "Deadline logic" — the label better reflects that the setting affects not only the overdue counter but the entire days-to/past-deadline calculation.',
+        'Settings: "Holidays are not respected" hint is replaced with "In Business days mode the weekend (Sat-Sun) is not counted" — the word "holidays" was misleading (there’s no holiday calendar in the app, only Sat/Sun are skipped).',
+        'Settings: the "Text size" slider now has − and + buttons next to it — adjust the font by 1px with a single click without dragging the slider. The buttons disable at the range boundaries (12–18px).',
+        'Help section: three FAQs moved to "📋 Basics" where they belong: "What are the chips in the Tasks topbar?" and "How is the deadline coloured?" — from Dashboard; "How does Undo in toasts work?" — from Diagnostics. Users need these answers early, not tucked into advanced sections.',
+        'Help section: dropped two internal detail lines useless to end users: the mention of the src/lib/password.ts file in the password-policy FAQ and the redundant path to the Sentry toggle in the telemetry FAQ (the toggle is already described in the previous paragraph of the same answer).',
+        'Landing page: the version banner in the hero is now updated automatically via the GitHub Releases API — previously hardcoded as "v0.9.22 — stable release" and out of sync with the real version (GitHub already had v0.9.26 while the landing still said v0.9.22). The fallback version in HTML is also bumped to v0.9.26.',
+      ],
+    },
+  },
+  {
     version: '0.9.26',
     date: '2026-07-04',
     items: {
