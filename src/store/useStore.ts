@@ -8,7 +8,7 @@ import { todayISO } from '../lib/utils';
 import { pickQuote, quoteSetFor } from '../lib/quotes';
 import { logger } from '../lib/logger';
 
-export type ThemeName = 'light' | 'dark' | 'akatsuki' | 'konoha';
+export type ThemeName = 'light' | 'dark' | 'akatsuki' | 'konoha' | 'custom';
 
 export interface Status {
   id: number;
@@ -85,6 +85,11 @@ interface State {
   autocleanupMinAgeDays: number;         // возрастной фильтр (дефолт 7)
   autocleanupLastRun: string | null;     // ISO-дата (YYYY-MM-DD) последнего cleanup, или null
 
+  // v0.9.29: кастом-тема — три базовых цвета как #RRGGBB
+  customThemeAccent: string;
+  customThemeBg: string;
+  customThemeText: string;
+
   // Derived helpers
   getDeletedStatusId(): number | undefined;
   visibleStatuses(): Status[];                 // for Tasks screen (no technical, no hidden)
@@ -107,8 +112,12 @@ interface State {
   setAutocleanupEnabled(v: boolean): void;
   setAutocleanupDay(d: number): void;
   setAutocleanupMinAgeDays(n: number): void;
+
   runAutoCleanup(opts?: { manual?: boolean }): number; // возвращает количество архивированных задач
   checkAndRunAutoCleanupOnStartup(): number; // catch-up логика; возвращает кол-во архивированных (0 если не надо)
+
+  // v0.9.29: кастом-тема
+  setCustomThemeColor(kind: 'accent' | 'bg' | 'text', hex: string): void;
 
   addTask(p: Partial<Task>): number;
   updateTask(id: number, p: Partial<Task>): void;
@@ -172,6 +181,11 @@ export const useStore = create<State>((set, get) => ({
   autocleanupDay: 0,
   autocleanupMinAgeDays: 7,
   autocleanupLastRun: null,
+
+  // v0.9.29: кастом-тема — дефолты совпадают со светлой темой для плавного перехода
+  customThemeAccent: '#5B7FB8',
+  customThemeBg: '#F7F6F2',
+  customThemeText: '#28251D',
 
   getDeletedStatusId() {
     return get().statuses.find(s => s.is_technical === 1 && s.name === 'Удалено')?.id;
@@ -240,6 +254,10 @@ export const useStore = create<State>((set, get) => ({
       autocleanupDay: map.autocleanup_day !== undefined ? parseInt(map.autocleanup_day, 10) : 0,
       autocleanupMinAgeDays: map.autocleanup_min_age_days !== undefined ? parseInt(map.autocleanup_min_age_days, 10) : 7,
       autocleanupLastRun: map.autocleanup_last_run || null,
+      // v0.9.29: кастом-тема — читаем из БД, fallback на дефолты
+      customThemeAccent: (map.custom_theme_accent && /^#[0-9A-Fa-f]{6}$/.test(map.custom_theme_accent)) ? map.custom_theme_accent : '#5B7FB8',
+      customThemeBg: (map.custom_theme_bg && /^#[0-9A-Fa-f]{6}$/.test(map.custom_theme_bg)) ? map.custom_theme_bg : '#F7F6F2',
+      customThemeText: (map.custom_theme_text && /^#[0-9A-Fa-f]{6}$/.test(map.custom_theme_text)) ? map.custom_theme_text : '#28251D',
       quote,
       columnWidths,
       recentEmojis,
@@ -304,6 +322,21 @@ export const useStore = create<State>((set, get) => ({
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['theme', t]);
     const q = pickQuote(quoteSetFor(t), get().language);
     set({ theme: t, quote: q });
+  },
+
+  // v0.9.29: кастом-тема — обновление одного из трёх базовых цветов
+  setCustomThemeColor(kind, hex) {
+    // Нормализация: должен быть #RRGGBB. Если краткий формат #RGB — разворачиваем.
+    let v = hex.trim();
+    if (/^#[0-9A-Fa-f]{3}$/.test(v)) {
+      v = '#' + v.slice(1).split('').map(c => c + c).join('');
+    }
+    if (!/^#[0-9A-Fa-f]{6}$/.test(v)) return; // молча игнорируем невалидные вводы
+    const key = kind === 'accent' ? 'custom_theme_accent' : kind === 'bg' ? 'custom_theme_bg' : 'custom_theme_text';
+    db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', [key, v]);
+    if (kind === 'accent') set({ customThemeAccent: v });
+    else if (kind === 'bg') set({ customThemeBg: v });
+    else set({ customThemeText: v });
   },
   setStatsEnabled(v) {
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['stats_enabled', v ? '1' : '0']);
