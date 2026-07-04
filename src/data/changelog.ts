@@ -13,6 +13,54 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.25',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'Модалка «Смена пароля»: исправлены 3 бага. (1) При вводе символа в поле «Новый пароль» фокус прыгал обратно на «Текущий пароль» — компонент PasswordField был определён внутри тела модалки, и React пересоздавал функцию на каждом setState, из-за чего input-ы размонтировались; PasswordField вынесен наружу. (2) Placeholder показывал «минимум 6 символов», хотя политика Supabase уже 8 + Aa1 — используем shared валидацию из src/lib/password.ts. (3) При верном текущем пароле выдавалась ошибка «Неверный пароль»: reauth через глобальный supabase-клиент выпускал новую сессию и переписывал токены; заменили на эфемерный клиент (persistSession: false), который проверяет пароль, не трогая текущую сессию.',
+        'Раздел Помощь: полный аудит с v0.9.0. Добавлены разделы «Облако и аккаунт» (регистрация, verify email, забыл пароль, keep-alive), «Безопасность и приватность» (политика паролей, Sentry с opt-out, PolyForm лицензия, Privacy Policy) и «Обновления» (auto-updater, где взять последнюю версию). В «О приложении» добавлена ссылка на сайт yourtaskflow.app первой строкой; ссылка на GitHub переведена в раздел «Для разработчиков» мелким текстом.',
+        'Инфраструктура: валидация пароля вынесена в общий src/lib/password.ts (DRY), используется одновременно AuthScreen и PasswordResetModal. Больше не будет ситуации, когда правила разошлись между регистрацией и сменой пароля.',
+      ],
+      en: [
+        'Change-password modal: 3 bugs fixed. (1) Typing into «New password» kicked focus back to «Current password» — PasswordField was declared inside the modal body, so React recreated the function on every setState and remounted the inputs; PasswordField is now hoisted outside. (2) Placeholder still said «at least 6 characters», though Supabase policy is 8 + Aa1 — we now use shared validation from src/lib/password.ts. (3) Correct current password was rejected as wrong: reauth through the global supabase client issued a new session and overwrote tokens; replaced with an ephemeral client (persistSession: false) that verifies the password without touching the active session.',
+        'Help section: full audit from v0.9.0. New sections «Cloud & account» (signup, verify email, forgot password, keep-alive), «Security & privacy» (password policy, Sentry with opt-out, PolyForm license, Privacy Policy) and «Updates» (auto-updater, where to grab the latest build). About block now shows yourtaskflow.app as the primary link; the GitHub link moved to a smaller «For developers» line.',
+        'Infrastructure: password validation extracted into shared src/lib/password.ts (DRY), used by both AuthScreen and PasswordResetModal. No more scenarios where the rules drift apart between signup and change-password.',
+      ],
+    },
+  },
+  {
+    version: '0.9.24',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'Hotfix регистрации: CSP-политика блокировала фреймы challenges.cloudflare.com, из-за чего Turnstile-виджет не грузился, кнопка «Создать аккаунт» оставалась disabled без объяснения. Разрешили challenges.cloudflare.com в frame-src, и добавили видимое сообщение об ошибке, если onError сработает.',
+        'Политика паролей: клиентская валидация обновлена под настройки Supabase — минимум 8 символов, обязательные строчная буква, заглавная буква и цифра. Placeholder в поле «Пароль» на экране регистрации теперь показывает актуальные правила.',
+      ],
+      en: [
+        'Signup hotfix: CSP blocked challenges.cloudflare.com frames, so the Turnstile widget silently failed to load and the «Create account» button stayed disabled with no explanation. We allowed challenges.cloudflare.com in frame-src and added a visible error message if onError fires.',
+        'Password policy: client-side validation is now aligned with Supabase settings — minimum 8 characters, lowercase, uppercase and digit required. The password placeholder on the signup screen now reflects the updated rules.',
+      ],
+    },
+  },
+  {
+    version: '0.9.23',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'Sentry: интеграция для сбора необработанных ошибок и вылетов. Ошибки помогают быстрее чинить баги, PII не собираются (email, содержимое задач). Можно отключить одной кнопкой в Настройки → Приватность.',
+        'Cloudflare Turnstile: CAPTCHA-виджет на экране регистрации защищает от массового автоматического создания аккаунтов. Виджет — invisible/managed режим, реальные пользователи капчу не решают вручную.',
+        'Supabase security: включены Rate Limiting (защита от bruteforce), Attack Protection (блок подозрительных IP) и Security Email Notifications (уведомления о новых входах).',
+        'Privacy Policy: доступна на сайте yourtaskflow.app/privacy.html и внутри приложения — Настройки → Приватность → «Политика конфиденциальности».',
+      ],
+      en: [
+        'Sentry: integration for capturing unhandled errors and crashes. Errors help us fix bugs faster; no PII collected (no email, no task contents). You can disable telemetry with one toggle in Settings → Privacy.',
+        'Cloudflare Turnstile: CAPTCHA widget on the signup screen prevents mass automated account creation. Uses invisible/managed mode — real users don’t solve puzzles manually.',
+        'Supabase security: Rate Limiting (bruteforce protection), Attack Protection (suspicious-IP blocking) and Security Email Notifications (new sign-in alerts) are enabled.',
+        'Privacy Policy: available on yourtaskflow.app/privacy.html and inside the app — Settings → Privacy → «Privacy Policy».',
+      ],
+    },
+  },
+  {
     version: '0.9.22',
     date: '2026-07-04',
     items: {
