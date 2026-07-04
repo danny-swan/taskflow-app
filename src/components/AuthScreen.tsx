@@ -56,6 +56,9 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
   // v0.9.23: Turnstile-токен. Живёт ~5 минут, одноразовый. После каждой
   // попытки signIn/signUp виджет сбрасывается (turnstileRef.current?.reset).
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  // v0.9.24: если виджет не смог загрузиться (CSP, сеть, wrong site key) —
+  // показываем понятную ошибку вместо молчаливого disabled-submit.
+  const [captchaFailed, setCaptchaFailed] = useState(false);
   const turnstileRef = useRef<TurnstileInstance | null>(null);
   // captcha включена только если есть site key И мы не в forgot-ветке
   // (reset-password в Supabase использует отдельный rate limit, капча там не нужна).
@@ -65,6 +68,30 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
   const [notice, setNotice] = useState<string | null>(null);
 
   const t = (ru: string, en: string) => (isRu ? ru : en);
+
+  // v0.9.24: правила пароля из Supabase Auth Policies —
+  // Minimum length 8, Password requirements: Lowercase, uppercase letters and digits.
+  // Держим клиентскую проверку синхронной с сервером, чтобы юзер видел
+  // понятную ошибку до отправки запроса.
+  function validatePasswordStrength(pwd: string, ru: boolean): string | null {
+    if (pwd.length < 8) {
+      return ru ? 'Пароль должен быть не короче 8 символов' : 'Password must be at least 8 characters';
+    }
+    if (!/[a-z]/.test(pwd)) {
+      return ru
+        ? 'Пароль должен содержать хотя бы одну строчную букву (a-z)'
+        : 'Password must contain at least one lowercase letter (a-z)';
+    }
+    if (!/[A-Z]/.test(pwd)) {
+      return ru
+        ? 'Пароль должен содержать хотя бы одну заглавную букву (A-Z)'
+        : 'Password must contain at least one uppercase letter (A-Z)';
+    }
+    if (!/\d/.test(pwd)) {
+      return ru ? 'Пароль должен содержать хотя бы одну цифру' : 'Password must contain at least one digit';
+    }
+    return null;
+  }
 
   // v0.9.14: применяем «rememberMe» к email перед любым входом/регистрацией.
   const persistEmailIfNeeded = () => {
@@ -102,9 +129,16 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
       setError(t('Примите Политику конфиденциальности', 'Please accept the Privacy Policy'));
       return;
     }
-    if (password.length < 6) {
-      setError(t('Пароль должен быть не короче 6 символов', 'Password must be at least 6 characters'));
-      return;
+    // v0.9.24: правила должны совпадать с Supabase Password Requirements
+    // (Minimum length 8, Lowercase + Uppercase + Digits). Валидируем только
+    // при signup — при signin юзер может ввести любой пароль (например,
+    // старый), пусть Supabase сам расскажет что не так.
+    if (mode === 'signup') {
+      const passErr = validatePasswordStrength(password, isRu);
+      if (passErr) {
+        setError(passErr);
+        return;
+      }
     }
 
     // v0.9.23: если captcha включена, без токена не отправляем запрос.
@@ -138,7 +172,7 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
       setError(err?.message ?? t('Ошибка авторизации', 'Authentication error'));
       // v0.9.23: токен Turnstile одноразовый — после любой попытки сбрасываем
       // виджет, чтобы пользователь получил свежий challenge для следующей попытки.
-      if (captchaEnabled) {
+      if (captchaEnabled && !captchaFailed) {
         turnstileRef.current?.reset();
         setCaptchaToken(null);
       }
@@ -231,7 +265,11 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
                     autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    placeholder={mode === 'signup' ? t('минимум 6 символов', 'at least 6 characters') : '••••••••'}
+                    placeholder={
+                      mode === 'signup'
+                        ? t('минимум 8: A-Z, a-z, цифра', 'min 8: A-Z, a-z, digit')
+                        : '••••••••'
+                    }
                     className="w-full pl-9 pr-9 py-2 text-[13px] bg-surface-alt border border-border-soft rounded-md focus:outline-none focus:border-accent"
                   />
                   <button
@@ -309,15 +347,37 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
                 <Turnstile
                   ref={turnstileRef}
                   siteKey={TURNSTILE_SITE_KEY!}
-                  onSuccess={token => setCaptchaToken(token)}
+                  onSuccess={token => {
+                    setCaptchaToken(token);
+                    setCaptchaFailed(false);
+                  }}
                   onExpire={() => setCaptchaToken(null)}
-                  onError={() => setCaptchaToken(null)}
+                  onError={() => {
+                    // v0.9.24: самая частая причина — CSP блокирует challenges.cloudflare.com,
+                    // либо domain не whitelisted в Turnstile Dashboard, либо нет сети.
+                    setCaptchaToken(null);
+                    setCaptchaFailed(true);
+                  }}
                   options={{
                     theme: 'auto',
                     size: 'flexible',
                     language: isRu ? 'ru' : 'en',
                   }}
                 />
+              </div>
+            )}
+
+            {/* v0.9.24: видимый fallback — если Turnstile не загрузился,
+                пользователь должен понимать почему submit неактивен. */}
+            {captchaFailed && (
+              <div className="flex items-start gap-2 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-md text-[12px] text-red-600">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                <span>
+                  {t(
+                    'Не удалось загрузить проверку «я не робот». Проверьте интернет-соединение и перезапустите приложение.',
+                    'Failed to load the “I’m not a robot” check. Check your internet connection and restart the app.',
+                  )}
+                </span>
               </div>
             )}
 
