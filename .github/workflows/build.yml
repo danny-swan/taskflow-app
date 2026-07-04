@@ -126,6 +126,18 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # v0.9.23: Sentry — клиентский DSN вшивается в bundle (публичный),
+          # AUTH_TOKEN + ORG + PROJECT используются sentry-vite-plugin’ом
+          # чтобы создать release в Sentry и залить source maps.
+          # Если секреты не заданы (fork PR без доступа к secrets),
+          # плагин в vite.config.ts сам себя отключает.
+          VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          # v0.9.23: Turnstile site key — публичный, вшивается в bundle.
+          # Секретный Secret Key лежит только в Supabase Attack Protection.
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc
 
       - name: List build artifacts

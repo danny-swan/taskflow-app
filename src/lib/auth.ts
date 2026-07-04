@@ -162,9 +162,24 @@ export function useAuth() {
   };
 }
 
-/** Логин по email/password. */
-export async function signInWithPassword(email: string, password: string) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+/**
+ * Логин по email/password.
+ *
+ * v0.9.23 — опциональный `captchaToken` передаётся в Supabase, когда
+ * в Attack Protection включён Turnstile. Если captcha отключена в Supabase,
+ * токен просто игнорируется — поэтому параметр сделан optional,
+ * чтобы старые пути (Google OAuth, deep link recovery) не ломались.
+ */
+export async function signInWithPassword(
+  email: string,
+  password: string,
+  captchaToken?: string,
+) {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+    options: captchaToken ? { captchaToken } : undefined,
+  });
   if (error) throw error;
   setLastOnline();
   return data;
@@ -203,9 +218,21 @@ export async function updateEmail(newEmail: string) {
   return data;
 }
 
-/** Регистрация по email/password. */
-export async function signUpWithPassword(email: string, password: string) {
-  const { data, error } = await supabase.auth.signUp({ email, password });
+/**
+ * Регистрация по email/password.
+ *
+ * v0.9.23 — опциональный `captchaToken` для Turnstile (см. signInWithPassword).
+ */
+export async function signUpWithPassword(
+  email: string,
+  password: string,
+  captchaToken?: string,
+) {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: captchaToken ? { captchaToken } : undefined,
+  });
   if (error) throw error;
   setLastOnline();
   return data;
