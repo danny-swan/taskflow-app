@@ -37,6 +37,7 @@ function App() {
   const autoUpdate = useStore(s => s.autoUpdateEnabled);
   const pushToast = useStore(s => s.pushToast);
   const lang = useStore(s => s.language);
+  const checkAndRunAutoCleanupOnStartup = useStore(s => s.checkAndRunAutoCleanupOnStartup);
   const navigate = useNavigate();
 
   // v0.9.9: auth guard
@@ -91,6 +92,51 @@ function App() {
     console.info('%cTaskFlow%c © 2026 Daniil Lebedev · PolyForm NC 1.0.0',
       'font-weight:bold', 'color:#888');
   }, [init]);
+
+  // v0.9.28: catch-up автоочистки выполненных задач после инициализации БД.
+  // Если сегодня прошёл выбранный день недели и last_run старее — тихо архивируем.
+  // Показываем toast с Undo (5 сек), если что-то реально было архивировано.
+  useEffect(() => {
+    if (!ready) return;
+    try {
+      const archived = checkAndRunAutoCleanupOnStartup();
+      if (archived > 0) {
+        // Snapshot — id всех задач, которые только что перевели в «Удалено».
+        // Простое отменение: снять archived=1 + вернуть в «Выполнено».
+        // Найдём id «Выполнено» через statuses (behavior=archive, is_technical=0).
+        const s = useStore.getState();
+        const doneStatus = s.statuses.find(st => st.behavior === 'archive' && st.is_technical !== 1);
+        // id архивированных задач — те, что сейчас archived=1 и обновлены в этой секунде.
+        // Простая эвристика: берём последние N задач в статусе «Удалено» по updated_at.
+        const deletedId = s.getDeletedStatusId();
+        const recentlyArchived = deletedId !== undefined
+          ? s.tasks
+              .filter(t => t.status_id === deletedId && t.archived === 1)
+              .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
+              .slice(0, archived)
+              .map(t => t.id)
+          : [];
+        const msg = lang === 'ru'
+          ? `Автоочистка: ${archived} ${archived === 1 ? 'задача архивирована' : archived < 5 ? 'задачи архивированы' : 'задач архивировано'}`
+          : `Auto-cleanup: ${archived} task${archived === 1 ? '' : 's'} archived`;
+        pushToast(msg, {
+          label: lang === 'ru' ? 'Отменить' : 'Undo',
+          onClick: () => {
+            if (!doneStatus) return;
+            const st = useStore.getState();
+            // updateTask автоматически кладёт archived=0 при переводе в non-technical статус (см. useStore стр. ~508).
+            for (const id of recentlyArchived) {
+              st.updateTask(id, { status_id: doneStatus.id });
+            }
+            st.pushToast(lang === 'ru' ? 'Восстановлено' : 'Restored');
+          },
+        });
+      }
+    } catch (e) {
+      console.warn('[autocleanup] startup check failed:', e);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   // v0.9.9: телеметрия старта приложения (один раз на логин)
   useEffect(() => {
