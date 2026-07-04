@@ -15,15 +15,25 @@
  *                     сессией без ввода старого. Используется из App.tsx при
  *                     type=recovery deep-link.
  *   - mode="change" — обычная смена пароля из Settings. ТРЕБУЕТ ввода текущего
- *                     пароля (reauthenticate через signInWithPassword). Если
- *                     старый пароль не совпадает — updatePassword не вызывается,
- *                     пользователь видит понятную ошибку.
- *   + иконка «глаз» для всех password-полей: клик переключает type между
- *     password и text.
+ *                     пароля.
+ *   + иконка «глаз» для всех password-полей.
+ *
+ * v0.9.25 — Три бага исправлены:
+ *   1. Focus jump: PasswordField был определён внутри тела компонента, и
+ *      React пересоздавал функцию на каждом setState — это выглядело как
+ *      «новый компонент», старые input-ы размонтировались и autoFocus
+ *      возвращался на первое поле. Вынесли PasswordField за пределы модалки.
+ *   2. Placeholder «минимум 6 символов» — рассинхрон с политикой Supabase
+ *      (8 + Lowercase/Uppercase/Digit). Используем shared validatePasswordStrength
+ *      и passwordHint из src/lib/password.ts.
+ *   3. «Неверный текущий пароль» при верном пароле: reauth через глобальный
+ *      supabase-клиент выпускал новую сессию и перезаписывал токены. Заменили
+ *      на verifyCurrentPassword — эфемерный клиент без persistSession.
  */
 import { useState } from 'react';
 import { Lock, AlertCircle, Loader2, KeyRound, Eye, EyeOff } from 'lucide-react';
-import { updatePassword, signInWithPassword } from '../lib/auth';
+import { updatePassword } from '../lib/auth';
+import { validatePasswordStrength, passwordHint, verifyCurrentPassword } from '../lib/password';
 import { useStore } from '../store/useStore';
 
 interface Props {
@@ -34,88 +44,22 @@ interface Props {
   userEmail?: string;
 }
 
-export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props) {
-  const lang = useStore(s => s.language);
-  const pushToast = useStore(s => s.pushToast);
-  const isRu = lang === 'ru';
-  const t = (ru: string, en: string) => (isRu ? ru : en);
-
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // v0.9.15: показ пароля по клику на «глаз». Каждое поле — отдельное состояние.
-  const [showCurrent, setShowCurrent] = useState(false);
-  const [showNew, setShowNew] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-
-  const isChange = mode === 'change';
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    if (isChange && !currentPassword) {
-      setError(t('Введите текущий пароль', 'Enter your current password'));
-      return;
-    }
-    if (password.length < 6) {
-      setError(t('Пароль должен быть не короче 6 символов', 'Password must be at least 6 characters'));
-      return;
-    }
-    if (password !== confirm) {
-      setError(t('Пароли не совпадают', 'Passwords do not match'));
-      return;
-    }
-    if (isChange && currentPassword === password) {
-      setError(t('Новый пароль совпадает с текущим', 'New password matches the current one'));
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // v0.9.15: для mode='change' сначала reauthenticate — проверяем, что
-      // пользователь помнит текущий пароль. Если нет — ошибка, и обычный
-      // flow «Забыли пароль?» на экране входа.
-      if (isChange) {
-        if (!userEmail) {
-          throw new Error(t('Не удалось определить email пользователя', 'Could not determine user email'));
-        }
-        try {
-          await signInWithPassword(userEmail, currentPassword);
-        } catch {
-          setError(t(
-            'Неверный текущий пароль. Если забыли — выйдите и используйте «Забыли пароль?»',
-            'Current password is incorrect. If you forgot it, sign out and use «Forgot password?»',
-          ));
-          setLoading(false);
-          return;
-        }
-      }
-      await updatePassword(password);
-      pushToast(t('Пароль обновлён', 'Password updated'));
-      onClose();
-    } catch (err: any) {
-      setError(err?.message ?? t('Ошибка смены пароля', 'Password change failed'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // v0.9.15: переиспользуемый password-input с иконкой «глаз».
-  const PasswordField = ({
-    label, value, onChange, show, onToggleShow, autoComplete, autoFocus, placeholder,
-  }: {
-    label: string;
-    value: string;
-    onChange: (v: string) => void;
-    show: boolean;
-    onToggleShow: () => void;
-    autoComplete: string;
-    autoFocus?: boolean;
-    placeholder?: string;
-  }) => (
+// v0.9.25: PasswordField ВНЕ тела PasswordResetModal — иначе React пересоздаёт
+// функцию на каждом setState и размонтирует input-ы, теряя autoFocus и каретку.
+function PasswordField({
+  label, value, onChange, show, onToggleShow, autoComplete, autoFocus, placeholder, ruLang,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  show: boolean;
+  onToggleShow: () => void;
+  autoComplete: string;
+  autoFocus?: boolean;
+  placeholder?: string;
+  ruLang: boolean;
+}) {
+  return (
     <div>
       <label className="text-[11px] font-medium text-muted uppercase tracking-wide">{label}</label>
       <div className="relative mt-1">
@@ -134,7 +78,11 @@ export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props
           type="button"
           onClick={onToggleShow}
           tabIndex={-1}
-          aria-label={show ? t('Скрыть пароль', 'Hide password') : t('Показать пароль', 'Show password')}
+          aria-label={
+            show
+              ? (ruLang ? 'Скрыть пароль' : 'Hide password')
+              : (ruLang ? 'Показать пароль' : 'Show password')
+          }
           className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-muted hover:text-text hover:bg-surface"
         >
           {show ? <EyeOff size={14} /> : <Eye size={14} />}
@@ -142,6 +90,76 @@ export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props
       </div>
     </div>
   );
+}
+
+export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props) {
+  const lang = useStore(s => s.language);
+  const pushToast = useStore(s => s.pushToast);
+  const isRu = lang === 'ru';
+  const t = (ru: string, en: string) => (isRu ? ru : en);
+
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const isChange = mode === 'change';
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (isChange && !currentPassword) {
+      setError(t('Введите текущий пароль', 'Enter your current password'));
+      return;
+    }
+    // v0.9.25: полная проверка правил Supabase — 8 + Aa + digit.
+    const strengthError = validatePasswordStrength(password, isRu);
+    if (strengthError) {
+      setError(strengthError);
+      return;
+    }
+    if (password !== confirm) {
+      setError(t('Пароли не совпадают', 'Passwords do not match'));
+      return;
+    }
+    if (isChange && currentPassword === password) {
+      setError(t('Новый пароль совпадает с текущим', 'New password matches the current one'));
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // v0.9.25: verify через ephemeral-клиент, чтобы не перезаписать
+      // текущую сессию глобального supabase (это ломало refresh и приводило
+      // к ложной ошибке «Неверный текущий пароль»).
+      if (isChange) {
+        if (!userEmail) {
+          throw new Error(t('Не удалось определить email пользователя', 'Could not determine user email'));
+        }
+        const ok = await verifyCurrentPassword(userEmail, currentPassword);
+        if (!ok) {
+          setError(t(
+            'Неверный текущий пароль. Если забыли — выйдите и используйте «Забыли пароль?»',
+            'Current password is incorrect. If you forgot it, sign out and use «Forgot password?»',
+          ));
+          setLoading(false);
+          return;
+        }
+      }
+      await updatePassword(password);
+      pushToast(t('Пароль обновлён', 'Password updated'));
+      onClose();
+    } catch (err: any) {
+      setError(err?.message ?? t('Ошибка смены пароля', 'Password change failed'));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[110] bg-black/50 flex items-center justify-center p-4">
@@ -176,6 +194,7 @@ export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props
               autoComplete="current-password"
               autoFocus
               placeholder="••••••••"
+              ruLang={isRu}
             />
           )}
 
@@ -187,7 +206,8 @@ export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props
             onToggleShow={() => setShowNew(s => !s)}
             autoComplete="new-password"
             autoFocus={!isChange}
-            placeholder={t('минимум 6 символов', 'at least 6 characters')}
+            placeholder={passwordHint(isRu)}
+            ruLang={isRu}
           />
 
           <PasswordField
@@ -197,6 +217,7 @@ export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props
             show={showConfirm}
             onToggleShow={() => setShowConfirm(s => !s)}
             autoComplete="new-password"
+            ruLang={isRu}
           />
 
           {error && (
