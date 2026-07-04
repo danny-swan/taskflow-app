@@ -21,6 +21,7 @@ import {
   getRememberedEmail,
   setRememberedEmail,
 } from '../lib/auth';
+import { validatePasswordStrength } from '../lib/password';
 import { logEvent } from '../lib/telemetry';
 import { useStore } from '../store/useStore';
 import { PrivacyModal } from './PrivacyModal';
@@ -71,27 +72,8 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
 
   // v0.9.24: правила пароля из Supabase Auth Policies —
   // Minimum length 8, Password requirements: Lowercase, uppercase letters and digits.
-  // Держим клиентскую проверку синхронной с сервером, чтобы юзер видел
-  // понятную ошибку до отправки запроса.
-  function validatePasswordStrength(pwd: string, ru: boolean): string | null {
-    if (pwd.length < 8) {
-      return ru ? 'Пароль должен быть не короче 8 символов' : 'Password must be at least 8 characters';
-    }
-    if (!/[a-z]/.test(pwd)) {
-      return ru
-        ? 'Пароль должен содержать хотя бы одну строчную букву (a-z)'
-        : 'Password must contain at least one lowercase letter (a-z)';
-    }
-    if (!/[A-Z]/.test(pwd)) {
-      return ru
-        ? 'Пароль должен содержать хотя бы одну заглавную букву (A-Z)'
-        : 'Password must contain at least one uppercase letter (A-Z)';
-    }
-    if (!/\d/.test(pwd)) {
-      return ru ? 'Пароль должен содержать хотя бы одну цифру' : 'Password must contain at least one digit';
-    }
-    return null;
-  }
+  // v0.9.25: DRY — реализация вынесена в src/lib/password.ts и переиспользуется
+  // в PasswordResetModal.
 
   // v0.9.14: применяем «rememberMe» к email перед любым входом/регистрацией.
   const persistEmailIfNeeded = () => {
