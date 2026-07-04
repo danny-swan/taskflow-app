@@ -90,11 +90,27 @@ function GeneralSection() {
       </Row>
 
       <Row label={tr(lang, 'font_size') + ` · ${fontSize}px`}>
-        <input
-          type="range" min={12} max={18} value={fontSize}
-          onChange={(e) => setFontSize(parseInt(e.target.value, 10))}
-          className="w-full"
-        />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setFontSize(Math.max(12, fontSize - 1))}
+            disabled={fontSize <= 12}
+            aria-label={lang === 'ru' ? 'Уменьшить шрифт' : 'Decrease font size'}
+            className="w-8 h-8 flex items-center justify-center rounded border border-border-soft text-[16px] font-semibold hover:bg-surface-alt disabled:opacity-40 disabled:cursor-not-allowed"
+          >−</button>
+          <input
+            type="range" min={12} max={18} value={fontSize}
+            onChange={(e) => setFontSize(parseInt(e.target.value, 10))}
+            className="flex-1"
+          />
+          <button
+            type="button"
+            onClick={() => setFontSize(Math.min(18, fontSize + 1))}
+            disabled={fontSize >= 18}
+            aria-label={lang === 'ru' ? 'Увеличить шрифт' : 'Increase font size'}
+            className="w-8 h-8 flex items-center justify-center rounded border border-border-soft text-[16px] font-semibold hover:bg-surface-alt disabled:opacity-40 disabled:cursor-not-allowed"
+          >+</button>
+        </div>
       </Row>
 
       <Row label={tr(lang, 'default_tab')}>
@@ -112,7 +128,7 @@ function GeneralSection() {
       </Row>
 
       {/* v0.9.2 (№1): режим подсчёта просрочки и остатка дней на карточках задач */}
-      <Row label={lang === 'ru' ? 'Считать просрочку' : 'Overdue counting'}>
+      <Row label={lang === 'ru' ? 'Логика дедлайнов' : 'Deadline logic'}>
         <div className="flex flex-col gap-1">
           <div className="flex gap-2">
             {(['calendar', 'business'] as const).map(m => (
@@ -130,8 +146,8 @@ function GeneralSection() {
           </div>
           <div className="text-[11px] text-muted">
             {lang === 'ru'
-              ? 'Влияет на «Просрочено N дн.» и «Дней осталось N» на карточках, а также на чип «Внимание». Праздники не учитываются — только Пн–Пт.'
-              : 'Affects «Overdue N d» and «N days left» on task cards, plus the «Attention» chip. Holidays are not tracked — Mon–Fri only.'}
+              ? 'Влияет на «Просрочено N дн.» и «Дней осталось N» на карточках, а также на чип «Внимание». В режиме «Рабочие дни» выходные (Сб-Вс) не учитываются.'
+              : 'Affects «Overdue N d» and «N days left» on task cards, plus the «Attention» chip. In «Business days» mode weekends (Sat-Sun) are skipped.'}
           </div>
         </div>
       </Row>
