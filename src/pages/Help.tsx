@@ -262,14 +262,17 @@ const sectionsRu: HelpSection[] = [
         q: 'Список горячих клавиш',
         a: (
           <ul className="space-y-1 list-disc pl-4">
+            {/* v0.9.26: синхронизировано с src/App.tsx → KeyboardShortcuts. */}
             <li><code>1</code> — Задачи</li>
-            <li><code>2</code> — Дашборд</li>
-            <li><code>3</code> — Статистика</li>
-            <li><code>4</code> — Настройки</li>
-            <li><code>5</code> — Помощь</li>
+            <li><code>2</code> — Календарь</li>
+            <li><code>3</code> — Дашборд</li>
+            <li><code>4</code> — Статистика</li>
+            <li><code>5</code> — Настройки</li>
+            <li><code>6</code> — Помощь</li>
             <li><code>/</code> — фокус на поле поиска (на вкладке Задачи)</li>
             <li><code>Esc</code> — закрыть модальное окно / отменить редактирование / закрыть эмодзи-пикер</li>
             <li><code>Enter</code> в полях карточки — сохранить inline-правку</li>
+            <li className="text-muted text-[12px] mt-1">Модификаторы Ctrl/Cmd/Alt блокируют навигацию, чтобы не конфликтовать с системными шорткатами. В полях ввода цифры тоже не тригерят переход.</li>
           </ul>
         ),
       },
@@ -278,15 +281,15 @@ const sectionsRu: HelpSection[] = [
   // v0.9.25: три новые секции под то, что появилось в v0.9.0–v0.9.24:
   // Облако и аккаунт (Supabase), Безопасность и приватность, Обновления.
   {
-    title: '☁ Облако и аккаунт',
+    title: '👤 Аккаунт и email',
     items: [
       {
-        q: 'Как работает облачная синхронизация?',
+        q: 'Где хранятся мои задачи?',
         a: (
           <>
-            <p>С v0.9.0 TaskFlow умеет синхронизировать ваши задачи через Supabase (Postgres + Row Level Security). Каждый пользователь видит только свои данные — RLS-политики на стороне базы гарантируют, что SELECT/INSERT/UPDATE вернёт только строки с вашим user_id.</p>
-            <p className="mt-2">Синхронизация двусторонняя: локальная SQLite-база → Supabase (upsert по updated_at) и обратно. Конфликты разрешаются по last-write-wins.</p>
-            <p className="mt-2"><strong>Offline-грациа</strong>: если сети нет, приложение работает без входа в течение 7 дней (grace period) — все изменения накапливаются в SQLite и уйдут в облако, как только сеть вернётся.</p>
+            <p>Все задачи, комментарии, тэги, настройки и шаблоны лежат в локальной SQLite-базе (<code>data.db</code>) рядом с приложением. В облако задачи пока не синхронизируются — это в роадмэпе.</p>
+            <p className="mt-2">Аккаунт нужен только для авторизации (email + пароль) через Supabase — чтобы можно было восстановить пароль и в будущем подключить cloud sync.</p>
+            <p className="mt-2"><strong>Offline-грейс</strong>: если сети нет, приложение работает без повторного входа в течение 7 дней — все данные лежат локально.</p>
           </>
         ),
       },
@@ -310,7 +313,7 @@ const sectionsRu: HelpSection[] = [
       },
       {
         q: 'Как сменить пароль из приложения?',
-        a: 'Настройки → Аккаунт → «Сменить пароль». Модалка попросит текущий пароль (для проверки) и дважды новый. С v0.9.25 верификация текущего пароля идёт через эфемерный клиент — ваша активная сессия не трогается, следовательно после смены вы не вылетаете из приложения.',
+        a: 'Настройки → Аккаунт → «Сменить пароль». С v0.9.26 модалка спрашивает только новый пароль и подтверждение — поле «Текущий пароль» убрали, потому что вы и так авторизованы, а Supabase меняет пароль под активной сессией. Если пароль забыли — выйдите и воспользуйтесь «Забыли пароль?».',
       },
       {
         q: 'Почему первый запрос к базе бывает медленным?',
@@ -352,10 +355,6 @@ const sectionsRu: HelpSection[] = [
             <p className="mt-2">Лицензия: <strong>PolyForm Noncommercial 1.0.0</strong> — код открыт, можно изучать и использовать в личных целях и образовании, коммерческое использование требует отдельной договорённости с автором.</p>
           </>
         ),
-      },
-      {
-        q: 'Rate limiting и защита от bruteforce?',
-        a: 'С v0.9.23 на стороне Supabase включены Rate Limiting (ограничение частоты sign-in/sign-up/otp-запросов по IP), Attack Protection (автоматический блок подозрительных IP) и Security Email Notifications — вы получаете email при входе с нового устройства.',
       },
     ],
   },
@@ -639,31 +638,33 @@ const sectionsEn: HelpSection[] = [
         q: 'Shortcut list',
         a: (
           <ul className="space-y-1 list-disc pl-4">
+            {/* v0.9.26: in sync with src/App.tsx → KeyboardShortcuts. */}
             <li><code>1</code> — Tasks</li>
-            <li><code>2</code> — Dashboard</li>
-            <li><code>3</code> — Statistics</li>
-            <li><code>4</code> — Settings</li>
-            <li><code>5</code> — Help</li>
+            <li><code>2</code> — Calendar</li>
+            <li><code>3</code> — Dashboard</li>
+            <li><code>4</code> — Statistics</li>
+            <li><code>5</code> — Settings</li>
+            <li><code>6</code> — Help</li>
             <li><code>/</code> — focus the search box (on the Tasks tab)</li>
             <li><code>Esc</code> — close modal / cancel edit / close emoji picker</li>
             <li><code>Enter</code> in card fields — save the inline edit</li>
+            <li className="text-muted text-[12px] mt-1">Ctrl/Cmd/Alt modifiers disable navigation to avoid clashing with system shortcuts. Digits in input fields also don’t trigger a tab switch.</li>
           </ul>
         ),
       },
     ],
   },
-  // v0.9.25: three new sections mirroring the RU version —
-  // Cloud & account (Supabase), Security & privacy, Updates.
+  // v0.9.26: renamed section, removed outdated "cloud sync" FAQ
+  // (cloud sync is on the roadmap, not shipped), added "Where are my tasks stored?".
   {
-    title: '☁ Cloud & account',
+    title: '👤 Account & email',
     items: [
       {
-        q: 'How does cloud sync work?',
+        q: 'Where are my tasks stored?',
         a: (
           <>
-            <p>Since v0.9.0 TaskFlow can sync your tasks via Supabase (Postgres + Row Level Security). Each user only sees their own data — RLS policies on the database side guarantee that SELECT/INSERT/UPDATE will only return rows with your user_id.</p>
-            <p className="mt-2">Sync is bidirectional: local SQLite → Supabase (upsert by updated_at) and back. Conflicts are resolved via last-write-wins.</p>
-            <p className="mt-2"><strong>Offline grace</strong>: if there is no network, the app works without login for 7 days (grace period) — all changes are stored in SQLite and pushed to the cloud once connectivity returns.</p>
+            <p>All tasks live in a local SQLite database on your machine — everything works fully offline, no network required. The database file lives in the TaskFlow app data folder (Windows: <code>%APPDATA%\\TaskFlow\\</code>).</p>
+            <p className="mt-2">The Supabase account is used <strong>only</strong> for authentication (sign-in, password recovery, email confirmation) and for future features. Task content is not uploaded to the cloud — cross-device sync is on the roadmap.</p>
           </>
         ),
       },
@@ -687,7 +688,12 @@ const sectionsEn: HelpSection[] = [
       },
       {
         q: 'How do I change the password from inside the app?',
-        a: 'Settings → Account → "Change password". The modal asks for your current password (for verification) and the new one twice. Since v0.9.25 the current-password check goes through an ephemeral client — your active session is not touched, so you don\'t get signed out after the change.',
+        a: (
+          <>
+            <p>Settings → Account → "Change password". Since v0.9.26 the modal asks for the new password twice — the current-password field has been removed. The change happens under your active session; Supabase does not require re-authentication for a routine password update.</p>
+            <p className="mt-2">If someone got physical access to your unlocked machine and you're worried about that — sign out first and go through "Forgot password?" instead. Industry standard (Google, GitHub) only asks for the current password for critical ops (2FA, email change), not for routine password rotation.</p>
+          </>
+        ),
       },
       {
         q: 'Why is the first request to the database sometimes slow?',
@@ -729,10 +735,6 @@ const sectionsEn: HelpSection[] = [
             <p className="mt-2">License: <strong>PolyForm Noncommercial 1.0.0</strong> — source is open, you can study and use it for personal and educational purposes; commercial use requires a separate agreement with the author.</p>
           </>
         ),
-      },
-      {
-        q: 'Rate limiting and bruteforce protection?',
-        a: 'Since v0.9.23 the Supabase side has Rate Limiting enabled (throttles sign-in/sign-up/otp requests per IP), Attack Protection (automatic block of suspicious IPs) and Security Email Notifications — you get an email when a new device signs in.',
       },
     ],
   },
