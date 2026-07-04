@@ -275,6 +275,113 @@ const sectionsRu: HelpSection[] = [
       },
     ],
   },
+  // v0.9.25: три новые секции под то, что появилось в v0.9.0–v0.9.24:
+  // Облако и аккаунт (Supabase), Безопасность и приватность, Обновления.
+  {
+    title: '☁ Облако и аккаунт',
+    items: [
+      {
+        q: 'Как работает облачная синхронизация?',
+        a: (
+          <>
+            <p>С v0.9.0 TaskFlow умеет синхронизировать ваши задачи через Supabase (Postgres + Row Level Security). Каждый пользователь видит только свои данные — RLS-политики на стороне базы гарантируют, что SELECT/INSERT/UPDATE вернёт только строки с вашим user_id.</p>
+            <p className="mt-2">Синхронизация двусторонняя: локальная SQLite-база → Supabase (upsert по updated_at) и обратно. Конфликты разрешаются по last-write-wins.</p>
+            <p className="mt-2"><strong>Offline-грациа</strong>: если сети нет, приложение работает без входа в течение 7 дней (grace period) — все изменения накапливаются в SQLite и уйдут в облако, как только сеть вернётся.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как зарегистрироваться?',
+        a: (
+          <>
+            <p>На экране входа переключитесь на вкладку «Регистрация», введите email и пароль (мин. 8 символов, обязательные A-Z, a-z, цифра). С v0.9.23 на экране регистрации включен Cloudflare Turnstile — защита от массового автоматического создания аккаунтов (invisible/managed, не надо ничего решать вручную в большинстве случаев).</p>
+            <p className="mt-2">На ваш email придёт письмо с подтверждением — кликните по ссылке (deep-link вернёт вас в приложение через схему <code>taskflow://</code>). Пока email не подтверждён, войти не получится.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Забыл пароль — что делать?',
+        a: (
+          <>
+            <p>На экране входа кликните «Забыли пароль?», введите email — письмо с recovery-ссылкой придёт в течение минуты (отправитель: no-reply@yourtaskflow.app через Resend). Клик по ссылке в письме откроет модалку «Новый пароль» в приложении.</p>
+            <p className="mt-2">Recovery-ссылка действует 1 час. Если письмо не пришло — проверьте Спам/Промоакции.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как сменить пароль из приложения?',
+        a: 'Настройки → Аккаунт → «Сменить пароль». Модалка попросит текущий пароль (для проверки) и дважды новый. С v0.9.25 верификация текущего пароля идёт через эфемерный клиент — ваша активная сессия не трогается, следовательно после смены вы не вылетаете из приложения.',
+      },
+      {
+        q: 'Почему первый запрос к базе бывает медленным?',
+        a: (
+          <>
+            <p>Supabase free-tier приостанавливает проект после 7 дней без активности — первые запросы после возобновления занимают 10-30 секунд. С v0.9.22 включен keep-alive: приложение при каждом старте дёргает базу fire-and-forget-запросом, плюс GitHub Actions пингает её раз в 3 дня. В 90% случаев база не успевает уснуть.</p>
+            <p className="mt-2">Если всё-таки видите задержку на первом входе — это пробуждение, последующие запросы пойдут мгновенно.</p>
+          </>
+        ),
+      },
+    ],
+  },
+  {
+    title: '🔒 Безопасность и приватность',
+    items: [
+      {
+        q: 'Какие требования к паролю?',
+        a: (
+          <>
+            <p>С v0.9.24 политика синхронизирована с Supabase Auth: минимум 8 символов, обязательно хотя бы одна строчная буква (a-z), заглавная (A-Z) и цифра. Спецсимволы не обязательны, но рекомендуются.</p>
+            <p className="mt-2">Клиентская валидация живёт в <code>src/lib/password.ts</code> и используется одновременно на экране регистрации и в модалке смены пароля (v0.9.25).</p>
+          </>
+        ),
+      },
+      {
+        q: 'Какая телеметрия собирается?',
+        a: (
+          <>
+            <p>С v0.9.23 включен Sentry — собирает <strong>только</strong> необработанные ошибки, вылеты и stack-трейсы. PII не собираются: email, содержимое задач, тэги, комментарии — всё это никуда не уходит. Ошибки помогают быстрее чинить баги до релиза.</p>
+            <p className="mt-2"><strong>Opt-out</strong>: Настройки → Приватность → тоггл «Отправлять ошибки в Sentry». Отключается мгновенно, перезапуск не нужен.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Политика конфиденциальности и лицензия?',
+        a: (
+          <>
+            <p>Privacy Policy — Настройки → Приватность → «Политика конфиденциальности», или онлайн на <a href="https://yourtaskflow.app/privacy.html" target="_blank" rel="noopener noreferrer" className="text-accent underline">yourtaskflow.app/privacy.html</a>.</p>
+            <p className="mt-2">Лицензия: <strong>PolyForm Noncommercial 1.0.0</strong> — код открыт, можно изучать и использовать в личных целях и образовании, коммерческое использование требует отдельной договорённости с автором.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Rate limiting и защита от bruteforce?',
+        a: 'С v0.9.23 на стороне Supabase включены Rate Limiting (ограничение частоты sign-in/sign-up/otp-запросов по IP), Attack Protection (автоматический блок подозрительных IP) и Security Email Notifications — вы получаете email при входе с нового устройства.',
+      },
+    ],
+  },
+  {
+    title: '🔄 Обновления',
+    items: [
+      {
+        q: 'Как обновлять TaskFlow?',
+        a: (
+          <>
+            <p>TaskFlow в desktop-версии поддерживает auto-updater на базе Tauri Updater: приложение периодически читает <code>latest.json</code> из GitHub Releases и показывает плитку «Доступно обновление», когда серверная версия выше вашей.</p>
+            <p className="mt-2">Клик по плитке → «Скачать и установить». Обновление подписано Ed25519 (private-key в CI, public-key в клиенте), неподписанные бинари будут отвергнуты.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Где скачать последнюю версию вручную?',
+        a: (
+          <>
+            <p>Основной канал: <a href="https://yourtaskflow.app" target="_blank" rel="noopener noreferrer" className="text-accent underline">yourtaskflow.app</a> — на лендинге кнопка скачивания ведёт на свежий билд.</p>
+            <p className="mt-2">Все версии (NSIS установщик, MSI для en-US/ru-RU, portable exe): <a href="https://github.com/danny-swan/taskflow-app/releases" target="_blank" rel="noopener noreferrer" className="text-accent underline">github.com/danny-swan/taskflow-app/releases</a>. Каждый релиз собирается GitHub Actions на windows-latest и гатится прогоном unit + E2E-тестов.</p>
+          </>
+        ),
+      },
+    ],
+  },
   // v0.9.0: секции «Что нового в 0.8.13/0.8.14» убраны — вся история версий
   // живёт в Настройки → О приложении (экран changelog), а в Help остаётся
   // блок WhatsNewSection, который берёт последний релиз из CHANGELOG[0].
@@ -545,6 +652,113 @@ const sectionsEn: HelpSection[] = [
       },
     ],
   },
+  // v0.9.25: three new sections mirroring the RU version —
+  // Cloud & account (Supabase), Security & privacy, Updates.
+  {
+    title: '☁ Cloud & account',
+    items: [
+      {
+        q: 'How does cloud sync work?',
+        a: (
+          <>
+            <p>Since v0.9.0 TaskFlow can sync your tasks via Supabase (Postgres + Row Level Security). Each user only sees their own data — RLS policies on the database side guarantee that SELECT/INSERT/UPDATE will only return rows with your user_id.</p>
+            <p className="mt-2">Sync is bidirectional: local SQLite → Supabase (upsert by updated_at) and back. Conflicts are resolved via last-write-wins.</p>
+            <p className="mt-2"><strong>Offline grace</strong>: if there is no network, the app works without login for 7 days (grace period) — all changes are stored in SQLite and pushed to the cloud once connectivity returns.</p>
+          </>
+        ),
+      },
+      {
+        q: 'How do I sign up?',
+        a: (
+          <>
+            <p>On the auth screen switch to the "Sign up" tab, enter an email and a password (min. 8 characters, must include A-Z, a-z and a digit). Since v0.9.23 the signup screen is protected by Cloudflare Turnstile — defence against mass automated account creation (invisible/managed, no puzzles for legitimate users in most cases).</p>
+            <p className="mt-2">A confirmation email will land in your inbox — click the link (the deep link brings you back to the app via the <code>taskflow://</code> scheme). Sign-in is blocked until the email is confirmed.</p>
+          </>
+        ),
+      },
+      {
+        q: 'I forgot my password — what now?',
+        a: (
+          <>
+            <p>On the auth screen click "Forgot password?", enter your email — a recovery email arrives within a minute (sender: no-reply@yourtaskflow.app via Resend). Clicking the link in the email opens the "New password" modal in the app.</p>
+            <p className="mt-2">The recovery link is valid for 1 hour. If the email doesn't arrive — check Spam/Promotions.</p>
+          </>
+        ),
+      },
+      {
+        q: 'How do I change the password from inside the app?',
+        a: 'Settings → Account → "Change password". The modal asks for your current password (for verification) and the new one twice. Since v0.9.25 the current-password check goes through an ephemeral client — your active session is not touched, so you don\'t get signed out after the change.',
+      },
+      {
+        q: 'Why is the first request to the database sometimes slow?',
+        a: (
+          <>
+            <p>Free-tier Supabase pauses a project after 7 days of inactivity — the first requests after wake-up take 10-30 seconds. Since v0.9.22 keep-alive is enabled: on every start the app fires a fire-and-forget request against the database, plus GitHub Actions pings it every 3 days. In 90% of cases the database never gets a chance to sleep.</p>
+            <p className="mt-2">If you still see a delay on the first sign-in, that's the wake-up — subsequent requests fire instantly.</p>
+          </>
+        ),
+      },
+    ],
+  },
+  {
+    title: '🔒 Security & privacy',
+    items: [
+      {
+        q: 'What are the password requirements?',
+        a: (
+          <>
+            <p>Since v0.9.24 the policy is aligned with Supabase Auth: minimum 8 characters, must include at least one lowercase letter (a-z), one uppercase (A-Z) and one digit. Special characters are not required but recommended.</p>
+            <p className="mt-2">Client-side validation lives in <code>src/lib/password.ts</code> and is shared between the signup screen and the change-password modal (v0.9.25).</p>
+          </>
+        ),
+      },
+      {
+        q: 'What telemetry is collected?',
+        a: (
+          <>
+            <p>Since v0.9.23 Sentry is enabled — it collects <strong>only</strong> unhandled errors, crashes and stack traces. No PII: email, task content, tags, comments — none of this leaves the device. Errors help us fix bugs faster before release.</p>
+            <p className="mt-2"><strong>Opt-out</strong>: Settings → Privacy → the "Send errors to Sentry" toggle. Disables instantly, no restart needed.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Privacy policy and license?',
+        a: (
+          <>
+            <p>Privacy Policy — Settings → Privacy → "Privacy policy", or online at <a href="https://yourtaskflow.app/privacy.html" target="_blank" rel="noopener noreferrer" className="text-accent underline">yourtaskflow.app/privacy.html</a>.</p>
+            <p className="mt-2">License: <strong>PolyForm Noncommercial 1.0.0</strong> — source is open, you can study and use it for personal and educational purposes; commercial use requires a separate agreement with the author.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Rate limiting and bruteforce protection?',
+        a: 'Since v0.9.23 the Supabase side has Rate Limiting enabled (throttles sign-in/sign-up/otp requests per IP), Attack Protection (automatic block of suspicious IPs) and Security Email Notifications — you get an email when a new device signs in.',
+      },
+    ],
+  },
+  {
+    title: '🔄 Updates',
+    items: [
+      {
+        q: 'How do I update TaskFlow?',
+        a: (
+          <>
+            <p>The desktop version of TaskFlow supports auto-update via Tauri Updater: the app periodically reads <code>latest.json</code> from GitHub Releases and shows an "Update available" tile when the server version is higher than yours.</p>
+            <p className="mt-2">Click the tile → "Download and install". The update is signed with Ed25519 (private key in CI, public key in the client); unsigned binaries are rejected.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Where do I download the latest build manually?',
+        a: (
+          <>
+            <p>Primary channel: <a href="https://yourtaskflow.app" target="_blank" rel="noopener noreferrer" className="text-accent underline">yourtaskflow.app</a> — the landing page's download button links to the latest build.</p>
+            <p className="mt-2">All versions (NSIS installer, MSI for en-US/ru-RU, portable exe): <a href="https://github.com/danny-swan/taskflow-app/releases" target="_blank" rel="noopener noreferrer" className="text-accent underline">github.com/danny-swan/taskflow-app/releases</a>. Each release is built by GitHub Actions on windows-latest and gated by unit + E2E test runs.</p>
+          </>
+        ),
+      },
+    ],
+  },
   // v0.9.0: "What's New in 0.8.13/0.8.14" sections removed — release history
   // now lives in Settings → About (changelog screen). Help keeps the
   // WhatsNewSection block, which renders the latest CHANGELOG[0] entry.
@@ -581,18 +795,39 @@ function AboutSection({ lang }: { lang: 'ru' | 'en' }) {
       </div>
       <div className="bg-surface border border-border-soft rounded-lg p-4 text-[13px] text-muted leading-relaxed">
         <p><strong>TaskFlow v{latest.version}</strong> — {lang === 'ru' ? 'менеджер задач с поддержкой Tauri (desktop) и браузерного режима.' : 'task manager with Tauri (desktop) and browser mode support.'}</p>
-        <p className="mt-1.5">
-          {lang === 'ru' ? 'Исходный код и релизы:' : 'Source code and releases:'}{' '}
+        {/* v0.9.25: сайт — основная ссылка для конечных пользователей. */}
+        <p className="mt-2 text-[14px]">
+          {lang === 'ru' ? 'Сайт:' : 'Website:'}{' '}
           <a
-            href="https://github.com/danny-swan/taskflow-app"
+            href="https://yourtaskflow.app"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent underline"
+            className="text-accent underline font-medium"
           >
-            github.com/danny-swan/taskflow-app
+            yourtaskflow.app
           </a>
         </p>
-        <p className="mt-2 text-[10.5px] opacity-60">
+        <p className="mt-1 text-[12px] opacity-70">
+          {lang === 'ru' ? 'Лендинг, скачивание последней версии, Privacy Policy и Terms.' : 'Landing page, latest build download, Privacy Policy and Terms.'}
+        </p>
+        {/* v0.9.25: GitHub вынесен в отдельный «Для разработчиков»-блок мелким текстом. */}
+        <div className="mt-3 pt-2 border-t border-border-soft/60">
+          <p className="text-[11px] uppercase tracking-wider opacity-60 mb-1">
+            {lang === 'ru' ? 'Для разработчиков' : 'For developers'}
+          </p>
+          <p className="text-[11.5px] opacity-75">
+            {lang === 'ru' ? 'Исходный код:' : 'Source code:'}{' '}
+            <a
+              href="https://github.com/danny-swan/taskflow-app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent underline"
+            >
+              github.com/danny-swan/taskflow-app
+            </a>
+          </p>
+        </div>
+        <p className="mt-3 text-[10.5px] opacity-60">
           © 2026 Daniil Lebedev (danny-swan) · PolyForm Noncommercial License 1.0.0
         </p>
       </div>
