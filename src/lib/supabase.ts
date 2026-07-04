@@ -60,3 +60,30 @@ export async function isSupabaseReachable(timeoutMs = 5000): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * v0.9.22: «keep-alive» ping для Supabase.
+ *
+ * Проблема: free-tier Supabase приостанавливает проект после 7 дней неактивности,
+ * после чего первые запросы от пользователей будут медленными (10-30с).
+ *
+ * Решение:
+ * 1. GitHub Actions workflow `.github/workflows/supabase-ping.yml` тыкает базу каждые 3 дня.
+ * 2. Каждый запуск TaskFlow дополнительно дёргает базу (если есть сеть) — эта функция.
+ *
+ * Запрос — лёгкий SELECT 1 через REST (без авторизации, RLS вернёт [] — этого достаточно).
+ * Ошибки глотаем — чисто fire-and-forget, не блокируем UI.
+ */
+export function pingSupabaseKeepAlive(): void {
+  // Скипаем в SSR/тестах (нет fetch или нет window).
+  if (typeof fetch === 'undefined') return;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  fetch(`${url}/rest/v1/tasks?select=id&limit=1`, {
+    method: 'GET',
+    signal: controller.signal,
+    headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+  })
+    .catch(() => { /* offline — не важно */ })
+    .finally(() => clearTimeout(timeoutId));
+}

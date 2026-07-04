@@ -13,6 +13,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.22',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'Инфраструктура: E2E-тестов стало больше — было 4, стало 13. Новые сценарии покрывают редактирование заголовка задачи через большую модалку, удаление задачи с overlay-подтверждением, отмену удаления, экспорт данных в JSON (с проверкой содержимого backup), импорт JSON-бэкапа (replace-режим), переключение между списочным и канбан-режимом, бейджи «Просрочено» и «Сегодня» на карточках задач и появление задачи с дедлайном на странице «Календарь». В e2e-режиме онбординг теперь не рендерится вообще — раньше его spotlight-overlay перехватывал клики Playwright и делал тесты флаки.',
+        'Supabase keep-alive: TaskFlow при каждом старте fire-and-forget-запросом (SELECT limit 1) прогревает подключение к базе. Плюс добавлен GitHub Actions workflow `supabase-ping.yml` — раз в 3 дня по расписанию делает лёгкий REST-запрос к базе. Free-tier Supabase приостанавливает проект после 7 дней без активности (первые запросы после пробуждения — 10-30 секунд), а после 90 дней проект удаляется. Теперь этого не случится.',
+        'Общий счёт тестов: 73 unit-тестов (Vitest) + 13 E2E-тестов (Playwright). Каждый PR прогоняет всё за ~1 минуту, сборка инсталляторов на тег гейтится через `needs: [test, e2e]` — если тесты падают, релиз не собирается.',
+        'Для кода видимых изменений нет — это девелопмент-релиз, но плитку обновлений в приложении Вы всё равно увидите: подтверждение того, что автообновление работает.',
+      ],
+      en: [
+        'Infrastructure: the E2E test count grew from 4 to 13. New scenarios cover editing a task title via the large modal, deleting a task with the overlay confirmation, cancelling a deletion, JSON data export (with backup contents validation), JSON backup import (replace mode), toggling between list and kanban view, «Overdue» and «Today» badges on task cards, and a task with a deadline appearing on the Calendar page. In e2e mode the onboarding component is no longer rendered at all — previously its spotlight overlay intercepted Playwright clicks and made tests flaky.',
+        'Supabase keep-alive: on every start TaskFlow fires a fire-and-forget request (SELECT limit 1) that warms up the connection to the database. Plus a new GitHub Actions workflow `supabase-ping.yml` runs a light REST request against the base every 3 days on schedule. Free-tier Supabase pauses a project after 7 days of inactivity (the first requests after wake-up take 10-30 seconds), and after 90 days the project is deleted outright. This should no longer happen.',
+        'Test counts overall: 73 unit tests (Vitest) + 13 E2E tests (Playwright). Every PR runs everything in ~1 minute, the installers build on tag is gated by `needs: [test, e2e]` — if tests fail, no release is built.',
+        'No user-visible code changes — this is a development release, but you will still see the updates tile in the app: confirmation that auto-update works.',
+      ],
+    },
+  },
+  {
     version: '0.9.21',
     date: '2026-07-04',
     items: {
