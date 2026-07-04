@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
 import { useAuth, signOut, deleteAccount, updateEmail } from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
@@ -461,13 +461,26 @@ function ThemeSection() {
   const lang = useStore(s => s.language);
   const theme = useStore(s => s.theme);
   const setTheme = useStore(s => s.setTheme);
+  // v0.9.29: кастом-тема
+  const customAccent = useStore(s => s.customThemeAccent);
+  const customBg = useStore(s => s.customThemeBg);
+  const customText = useStore(s => s.customThemeText);
+  const setCustomThemeColor = useStore(s => s.setCustomThemeColor);
 
   const themes: { key: ThemeName; label: string; icon: any; preview: { bg: string; surface: string; accent: string; text: string } }[] = [
     { key: 'light', label: tr(lang, 'theme_light'), icon: Sun, preview: { bg: '#F7F6F2', surface: '#FBFBF9', accent: '#5B7FB8', text: '#28251D' } },
     { key: 'dark', label: tr(lang, 'theme_dark'), icon: Moon, preview: { bg: '#171614', surface: '#1C1B19', accent: '#7FA0D4', text: '#CDCCCA' } },
     { key: 'akatsuki', label: tr(lang, 'theme_akatsuki'), icon: Sparkles, preview: { bg: '#0D0B0F', surface: '#15121A', accent: '#A0212B', text: '#E8E2EE' } },
     { key: 'konoha', label: tr(lang, 'theme_konoha'), icon: Leaf, preview: { bg: '#F4EDD8', surface: '#FAF5E3', accent: '#5B8C3E', text: '#2D2818' } },
+    // v0.9.29: 5-й пресет — кастомная тема с текущими выбранными цветами в preview
+    { key: 'custom', label: tr(lang, 'theme_custom'), icon: Palette, preview: { bg: customBg, surface: customBg, accent: customAccent, text: customText } },
   ];
+
+  const resetCustom = () => {
+    setCustomThemeColor('accent', '#5B7FB8');
+    setCustomThemeColor('bg', '#F7F6F2');
+    setCustomThemeColor('text', '#28251D');
+  };
 
   return (
     <div className="max-w-3xl">
@@ -503,7 +516,66 @@ function ThemeSection() {
           );
         })}
       </div>
+
+      {/* v0.9.29: 3 color-picker — видимы только при активной custom-теме */}
+      {theme === 'custom' && (
+        <div className="mt-5 rounded-xl border border-border-soft bg-surface p-4">
+          <p className="text-[12px] text-muted mb-3">{tr(lang, 'theme_custom_hint')}</p>
+          <div className="grid grid-cols-3 gap-3">
+            <ColorPickerField
+              label={tr(lang, 'theme_custom_accent')}
+              value={customAccent}
+              onChange={hex => setCustomThemeColor('accent', hex)}
+            />
+            <ColorPickerField
+              label={tr(lang, 'theme_custom_bg')}
+              value={customBg}
+              onChange={hex => setCustomThemeColor('bg', hex)}
+            />
+            <ColorPickerField
+              label={tr(lang, 'theme_custom_text')}
+              value={customText}
+              onChange={hex => setCustomThemeColor('text', hex)}
+            />
+          </div>
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={resetCustom}
+              className="text-[12px] text-muted hover:text-text transition-colors"
+            >
+              {tr(lang, 'theme_custom_reset')}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// v0.9.29: отдельный color-picker с native <input type="color"> + hex-текстовым полем
+function ColorPickerField({ label, value, onChange }: { label: string; value: string; onChange: (hex: string) => void }) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="text-[11px] text-muted uppercase tracking-wide">{label}</span>
+      <div className="flex items-center gap-2">
+        <input
+          type="color"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          className="w-10 h-10 rounded-lg border border-border-soft cursor-pointer bg-transparent"
+          aria-label={label}
+        />
+        <input
+          type="text"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          className="flex-1 h-10 px-2.5 text-[13px] rounded-lg border border-border-soft bg-bg text-text focus:outline-none focus:border-accent font-mono uppercase"
+          maxLength={7}
+          spellCheck={false}
+        />
+      </div>
+    </label>
   );
 }
 
