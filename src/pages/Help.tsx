@@ -73,6 +73,18 @@ const sectionsRu: HelpSection[] = [
           </>
         ),
       },
+      {
+        q: 'Что за чипы в топбаре вкладки «Задачи»?',
+        a: 'Всего (синий), В работе (зелёный), Внимание (оранжевый — дедлайн в ближайшие 3 дня), Просрочено (красный). Клик по чипу фильтрует доску по соответствующим задачам.',
+      },
+      {
+        q: 'Как читать подсветку дедлайна?',
+        a: 'Синий «сегодня», оранжевый жирный — 1–3 дня до дедлайна, серый — 4+ дней, красный жирный — просрочено. Жёлтый промежуточный цвет убран в v0.8.7 для большей контрастности.',
+      },
+      {
+        q: 'Как работает «Отменить» в уведомлениях?',
+        a: 'С v0.8.12 при удалении или завершении задачи (кнопкой ✓ или drag-and-drop в «Выполнено») в правом верхнем углу пару секунд висит тост с кнопкой «Отменить». Статус (и finish_date) восстанавливаются ровно в тот вид, в котором были до действия.',
+      },
     ],
   },
   {
@@ -98,14 +110,6 @@ const sectionsRu: HelpSection[] = [
             <p className="mt-1.5">Метрики в шапке и графики «По статусу» / «По тэгам» показывают текущее состояние всех задач и не зависят от периода.</p>
           </>
         ),
-      },
-      {
-        q: 'Что за чипы в топбаре вкладки «Задачи»?',
-        a: 'Всего (синий), В работе (зелёный), Внимание (оранжевый — дедлайн в ближайшие 3 дня), Просрочено (красный). Клик по чипу фильтрует доску по соответствующим задачам.',
-      },
-      {
-        q: 'Как читать подсветку дедлайна?',
-        a: 'Синий «сегодня», оранжевый жирный — 1–3 дня до дедлайна, серый — 4+ дней, красный жирный — просрочено. Жёлтый промежуточный цвет убран в v0.8.7 для большей контрастности.',
       },
     ],
   },
@@ -219,10 +223,6 @@ const sectionsRu: HelpSection[] = [
         ),
       },
       {
-        q: 'Как работает «Отменить» в уведомлениях?',
-        a: 'С v0.8.12 при удалении или завершении задачи (кнопкой ✓ или drag-and-drop в «Выполнено») в правом верхнем углу пару секунд висит тост с кнопкой «Отменить». Статус (и finish_date) восстанавливаются ровно в тот вид, в котором были до действия.',
-      },
-      {
         q: 'Как перезапустить приветственный тур?',
         a: (
           <>
@@ -334,7 +334,6 @@ const sectionsRu: HelpSection[] = [
         a: (
           <>
             <p>С v0.9.24 политика синхронизирована с Supabase Auth: минимум 8 символов, обязательно хотя бы одна строчная буква (a-z), заглавная (A-Z) и цифра. Спецсимволы не обязательны, но рекомендуются.</p>
-            <p className="mt-2">Клиентская валидация живёт в <code>src/lib/password.ts</code> и используется одновременно на экране регистрации и в модалке смены пароля (v0.9.25).</p>
           </>
         ),
       },
@@ -343,7 +342,6 @@ const sectionsRu: HelpSection[] = [
         a: (
           <>
             <p>С v0.9.23 включен Sentry — собирает <strong>только</strong> необработанные ошибки, вылеты и stack-трейсы. PII не собираются: email, содержимое задач, тэги, комментарии — всё это никуда не уходит. Ошибки помогают быстрее чинить баги до релиза.</p>
-            <p className="mt-2"><strong>Opt-out</strong>: Настройки → Приватность → тоггл «Отправлять ошибки в Sentry». Отключается мгновенно, перезапуск не нужен.</p>
           </>
         ),
       },
@@ -449,6 +447,18 @@ const sectionsEn: HelpSection[] = [
           </>
         ),
       },
+      {
+        q: 'What are the chips in the Tasks topbar?',
+        a: 'Total (blue), In progress (green), Attention (orange — deadline within 3 days), Overdue (red). Clicking a chip filters the board.',
+      },
+      {
+        q: 'How is the deadline coloured?',
+        a: 'Blue for "today", bold orange for 1–3 days left, muted grey for 4+ days, bold red for overdue. The intermediate yellow tier was removed in v0.8.7 for higher contrast.',
+      },
+      {
+        q: 'How does "Undo" in toasts work?',
+        a: 'Since v0.8.12, when you delete or complete a task (via the ✓ button or by dragging into "Done"), a toast appears in the top-right corner with an "Undo" button for a few seconds. Status (and finish_date) is restored to exactly what it was before the action.',
+      },
     ],
   },
   {
@@ -474,14 +484,6 @@ const sectionsEn: HelpSection[] = [
             <p className="mt-1.5">The top-bar metrics and "By status" / "By tag" charts always show the current state of all tasks regardless of period.</p>
           </>
         ),
-      },
-      {
-        q: 'What are the chips in the Tasks topbar?',
-        a: 'Total (blue), In progress (green), Attention (orange — deadline within 3 days), Overdue (red). Clicking a chip filters the board.',
-      },
-      {
-        q: 'How is the deadline coloured?',
-        a: 'Blue for "today", bold orange for 1–3 days left, muted grey for 4+ days, bold red for overdue. The intermediate yellow tier was removed in v0.8.7 for higher contrast.',
       },
     ],
   },
@@ -593,10 +595,6 @@ const sectionsEn: HelpSection[] = [
             <p className="mt-2">The current number is visible under <strong>Settings → Storage → Diagnostics</strong>. If the schema rolled back (e.g. you restored a backup from a newer app version) — you'll see a warning in the log.</p>
           </>
         ),
-      },
-      {
-        q: 'How does "Undo" in toasts work?',
-        a: 'Since v0.8.12, when you delete or complete a task (via the ✓ button or by dragging into "Done"), a toast appears in the top-right corner with an "Undo" button for a few seconds. Status (and finish_date) is restored to exactly what it was before the action.',
       },
       {
         q: 'How do I re-run the welcome tour?',
@@ -714,7 +712,6 @@ const sectionsEn: HelpSection[] = [
         a: (
           <>
             <p>Since v0.9.24 the policy is aligned with Supabase Auth: minimum 8 characters, must include at least one lowercase letter (a-z), one uppercase (A-Z) and one digit. Special characters are not required but recommended.</p>
-            <p className="mt-2">Client-side validation lives in <code>src/lib/password.ts</code> and is shared between the signup screen and the change-password modal (v0.9.25).</p>
           </>
         ),
       },
@@ -723,7 +720,6 @@ const sectionsEn: HelpSection[] = [
         a: (
           <>
             <p>Since v0.9.23 Sentry is enabled — it collects <strong>only</strong> unhandled errors, crashes and stack traces. No PII: email, task content, tags, comments — none of this leaves the device. Errors help us fix bugs faster before release.</p>
-            <p className="mt-2"><strong>Opt-out</strong>: Settings → Privacy → the "Send errors to Sentry" toggle. Disables instantly, no restart needed.</p>
           </>
         ),
       },
