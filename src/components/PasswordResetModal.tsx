@@ -14,33 +14,43 @@
  *   - mode="reset"  (default) — recovery flow, пароль меняется под recovery-
  *                     сессией без ввода старого. Используется из App.tsx при
  *                     type=recovery deep-link.
- *   - mode="change" — обычная смена пароля из Settings. ТРЕБУЕТ ввода текущего
- *                     пароля.
+ *   - mode="change" — обычная смена пароля из Settings.
  *   + иконка «глаз» для всех password-полей.
  *
- * v0.9.25 — Три бага исправлены:
- *   1. Focus jump: PasswordField был определён внутри тела компонента, и
- *      React пересоздавал функцию на каждом setState — это выглядело как
- *      «новый компонент», старые input-ы размонтировались и autoFocus
- *      возвращался на первое поле. Вынесли PasswordField за пределы модалки.
- *   2. Placeholder «минимум 6 символов» — рассинхрон с политикой Supabase
- *      (8 + Lowercase/Uppercase/Digit). Используем shared validatePasswordStrength
- *      и passwordHint из src/lib/password.ts.
- *   3. «Неверный текущий пароль» при верном пароле: reauth через глобальный
- *      supabase-клиент выпускал новую сессию и перезаписывал токены. Заменили
- *      на verifyCurrentPassword — эфемерный клиент без persistSession.
+ * v0.9.25 — попытка исправить 3 бага: hoisted PasswordField, shared validation,
+ *   ephemeral verify. Первые два сработали, а ephemeral verify — нет: после
+ *   активации Turnstile Secret Key в Supabase Attack Protection любой
+ *   signInWithPassword требует captchaToken, которого в модалке нет.
+ *   Поэтому проверка всегда возвращала false → «Неверный текущий пароль».
+ *
+ * v0.9.26 — Убрали ввод текущего пароля и всю reauth-логику.
+ *
+ *   Логика: пользователь и так авторизован (модалка открывается только из
+ *   Settings), Supabase выпускает updatePassword под активной сессией.
+ *   Дополнительная защита (Reauthentication AAL / Secure Password Change)
+ *   при желании включается в дашборде Supabase — клиент подхватит её без
+ *   изменений в коде.
+ *
+ *   Плюсы: (а) нет виджета Turnstile в модалке, (б) нет ephemeral client,
+ *   (в) один input меньше, (г) поведение согласуется с большинством
+ *   современных приложений (Google/GitHub требуют текущий пароль только
+ *   для критичных операций вроде 2FA / смены email).
+ *
+ *   mode='change' и mode='reset' теперь ведут себя одинаково — оба просто
+ *   спрашивают новый пароль + подтверждение. Пропс сохранён для обратной
+ *   совместимости с App.tsx (recovery deep-link).
  */
 import { useState } from 'react';
 import { Lock, AlertCircle, Loader2, KeyRound, Eye, EyeOff } from 'lucide-react';
 import { updatePassword } from '../lib/auth';
-import { validatePasswordStrength, passwordHint, verifyCurrentPassword } from '../lib/password';
+import { validatePasswordStrength, passwordHint } from '../lib/password';
 import { useStore } from '../store/useStore';
 
 interface Props {
   onClose: () => void;
-  /** default 'reset'. 'change' требует ввода текущего пароля. */
+  /** default 'reset'. v0.9.26: поведение одинаковое для обоих режимов, флаг оставлен для API-совместимости. */
   mode?: 'reset' | 'change';
-  /** для mode='change' — email текущего пользователя (для reauthenticate). */
+  /** v0.9.26: больше не используется — оставлен для совместимости с существующими вызовами. */
   userEmail?: string;
 }
 
@@ -92,18 +102,17 @@ function PasswordField({
   );
 }
 
-export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function PasswordResetModal({ onClose, mode = 'reset', userEmail: _userEmail }: Props) {
   const lang = useStore(s => s.language);
   const pushToast = useStore(s => s.pushToast);
   const isRu = lang === 'ru';
   const t = (ru: string, en: string) => (isRu ? ru : en);
 
-  const [currentPassword, setCurrentPassword] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCurrent, setShowCurrent] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
@@ -113,10 +122,6 @@ export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props
     e.preventDefault();
     setError(null);
 
-    if (isChange && !currentPassword) {
-      setError(t('Введите текущий пароль', 'Enter your current password'));
-      return;
-    }
     // v0.9.25: полная проверка правил Supabase — 8 + Aa + digit.
     const strengthError = validatePasswordStrength(password, isRu);
     if (strengthError) {
@@ -127,30 +132,12 @@ export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props
       setError(t('Пароли не совпадают', 'Passwords do not match'));
       return;
     }
-    if (isChange && currentPassword === password) {
-      setError(t('Новый пароль совпадает с текущим', 'New password matches the current one'));
-      return;
-    }
 
     setLoading(true);
     try {
-      // v0.9.25: verify через ephemeral-клиент, чтобы не перезаписать
-      // текущую сессию глобального supabase (это ломало refresh и приводило
-      // к ложной ошибке «Неверный текущий пароль»).
-      if (isChange) {
-        if (!userEmail) {
-          throw new Error(t('Не удалось определить email пользователя', 'Could not determine user email'));
-        }
-        const ok = await verifyCurrentPassword(userEmail, currentPassword);
-        if (!ok) {
-          setError(t(
-            'Неверный текущий пароль. Если забыли — выйдите и используйте «Забыли пароль?»',
-            'Current password is incorrect. If you forgot it, sign out and use «Forgot password?»',
-          ));
-          setLoading(false);
-          return;
-        }
-      }
+      // v0.9.26: updatePassword под активной сессией. Дополнительная защита
+      // (Reauthentication AAL) при необходимости включается на стороне
+      // Supabase — клиент подхватит её без изменений.
       await updatePassword(password);
       pushToast(t('Пароль обновлён', 'Password updated'));
       onClose();
@@ -177,27 +164,13 @@ export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props
             </div>
             <div className="text-[12px] text-muted">
               {isChange
-                ? t('Введите текущий и новый пароль', 'Enter your current and new password')
+                ? t('Введите новый пароль', 'Enter a new password')
                 : t('Придумайте пароль для входа', 'Set a new password for sign-in')}
             </div>
           </div>
         </div>
 
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-3">
-          {isChange && (
-            <PasswordField
-              label={t('Текущий пароль', 'Current password')}
-              value={currentPassword}
-              onChange={setCurrentPassword}
-              show={showCurrent}
-              onToggleShow={() => setShowCurrent(s => !s)}
-              autoComplete="current-password"
-              autoFocus
-              placeholder="••••••••"
-              ruLang={isRu}
-            />
-          )}
-
           <PasswordField
             label={t('Новый пароль', 'New password')}
             value={password}
@@ -205,7 +178,7 @@ export function PasswordResetModal({ onClose, mode = 'reset', userEmail }: Props
             show={showNew}
             onToggleShow={() => setShowNew(s => !s)}
             autoComplete="new-password"
-            autoFocus={!isChange}
+            autoFocus
             placeholder={passwordHint(isRu)}
             ruLang={isRu}
           />
