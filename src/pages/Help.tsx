@@ -85,6 +85,17 @@ const sectionsRu: HelpSection[] = [
         q: 'Как работает «Отменить» в уведомлениях?',
         a: 'С v0.8.12 при удалении или завершении задачи (кнопкой ✓ или drag-and-drop в «Выполнено») в правом верхнем углу пару секунд висит тост с кнопкой «Отменить». Статус (и finish_date) восстанавливаются ровно в тот вид, в котором были до действия.',
       },
+      {
+        q: 'Как работает автоочистка выполненных задач? (v0.9.28)',
+        a: (
+          <>
+            <p>Автоочистка автоматически переносит выполненные задачи в «Удалено», чтобы секция «Выполнено» на доске не разрасталась бесконечно. <strong>Задачи не удаляются</strong> — они остаются в <strong>Статистике → Удалённые</strong>, откуда их можно восстановить.</p>
+            <p className="mt-2">Настраивается в <strong>Настройки → Общие → Автоочистка выполненных</strong>: включить/выключить, выбрать день недели (по умолчанию — воскресенье) и возраст (по умолчанию — 7 дней).</p>
+            <p className="mt-2"><strong>Catch-up:</strong> если вы не открывали приложение в выбранный день — автоочистка сработает при следующем запуске. При автоматическом запуске появится тост с количеством архивированных задач и кнопкой «Отменить».</p>
+            <p className="mt-2">Кнопка <strong>«Почистить сейчас»</strong> запускает очистку вручную в любой момент. Для новых баз (без задач) автоочистка включена по умолчанию; для старых — выключена (включайте вручную).</p>
+          </>
+        ),
+      },
     ],
   },
   {
@@ -458,6 +469,17 @@ const sectionsEn: HelpSection[] = [
       {
         q: 'How does "Undo" in toasts work?',
         a: 'Since v0.8.12, when you delete or complete a task (via the ✓ button or by dragging into "Done"), a toast appears in the top-right corner with an "Undo" button for a few seconds. Status (and finish_date) is restored to exactly what it was before the action.',
+      },
+      {
+        q: 'How does auto-cleanup of completed tasks work? (v0.9.28)',
+        a: (
+          <>
+            <p>Auto-cleanup automatically moves completed tasks into «Deleted» so the «Done» section on the board doesn't grow endlessly. <strong>Tasks are not deleted</strong> — they remain in <strong>Statistics → Deleted</strong>, from where you can restore them.</p>
+            <p className="mt-2">Configured in <strong>Settings → General → Auto-cleanup completed</strong>: enable/disable, pick day of week (default — Sunday) and age (default — 7 days).</p>
+            <p className="mt-2"><strong>Catch-up:</strong> if you didn't open the app on the selected day, auto-cleanup will run on next startup. On automatic run, a toast appears with the number of archived tasks and an «Undo» button.</p>
+            <p className="mt-2">The <strong>«Clean up now»</strong> button triggers cleanup manually at any moment. For new databases (with no tasks) auto-cleanup is enabled by default; for existing ones — disabled (enable manually).</p>
+          </>
+        ),
       },
     ],
   },

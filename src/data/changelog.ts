@@ -13,6 +13,30 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.28',
+    date: '2026-07-05',
+    items: {
+      ru: [
+        'Новая фича — автоочистка выполненных задач. Секция «Выполнено» на доске больше не разрастается бесконечно: в выбранный день недели (по умолчанию — воскресенье) при запуске приложения все выполненные задачи старше N дней (по умолчанию — 7) тихо переносятся в «Удалено». Задачи остаются в Статистике → Удалённые, откуда их можно восстановить.',
+        'Настройки → Общие: новый блок «Автоочистка выполненных» с четырьмя контролами: (1) чекбокс вкл/выкл, (2) выбор дня недели, (3) возрастной фильтр в днях, (4) кнопка «Почистить сейчас» с confirm-диалогом для ручного запуска в любой момент.',
+        'Автозапуск умеет в catch-up: если вы не открывали приложение в выбранный день недели (воскресенье — типичный выходной), автоочистка сработает при ближайшем следующем запуске. Алгоритм: трекаем last_run; если от него прошло ≥7 дней или в интервале (last_run, today] был целевой день — запускаем сейчас.',
+        'Тост с Undo: при автоматическом срабатывании появляется уведомление «Автоочистка: N задач архивировано» с кнопкой «Отменить» (6 сек). Клик возвращает все архивированные задачи обратно в «Выполнено».',
+        'Стратегия опт-ин/опт-аут: для новых баз (без задач на момент первого запуска) автоочистка включена по умолчанию; для старых выключена (чтобы миграция не вынесла задачи незамеченными). Зафиксированное значение сохраняется при первом видении ключа, чтобы поведение было стабильным между запусками.',
+        'Архитектурно: «выполненная» задача = статус с behavior=archive И is_technical=0 (то есть «Выполнено», но не техническое «Удалено»). Кандидаты отбираются по finish_date (fallback — updated_at) старше пороговой даты. Soft-delete ставит archived=1 + status_id=deleted — тот же эффект, что клик по 🗑 на карточке.',
+        'Помощь: в секции «📋 Основы» добавлен FAQ «Как работает автоочистка выполненных задач?» — с объяснением catch-up логики, opt-in/opt-out стратегии и как восстановить задачи через Статистику.',
+      ],
+      en: [
+        'New feature — auto-cleanup of completed tasks. The «Done» section on the board no longer grows endlessly: on the selected day of week (default — Sunday) at app startup, all completed tasks older than N days (default — 7) are silently moved to «Deleted». Tasks remain in Statistics → Deleted where they can be restored.',
+        'Settings → General: new «Auto-cleanup completed» block with four controls: (1) enable/disable checkbox, (2) day-of-week picker, (3) age filter in days, (4) «Clean up now» button with confirm dialog for manual runs anytime.',
+        'Auto-run does catch-up: if you didn\'t open the app on the selected day (Sunday is a typical weekend), auto-cleanup runs on the next startup. Algorithm: we track last_run; if ≥7 days have passed since it, or the target day fell inside (last_run, today], we run now.',
+        'Toast with Undo: on auto-run the app shows «Auto-cleanup: N tasks archived» with an «Undo» button (6 sec). Click restores all archived tasks back to «Done».',
+        'Opt-in/opt-out strategy: for new databases (no tasks on first launch) auto-cleanup is enabled by default; for existing ones — disabled (so migration doesn\'t sweep tasks unnoticed). The fixed value is persisted on first sight of the key so behaviour stays stable across launches.',
+        'Architecture: a «completed» task = a status with behavior=archive AND is_technical=0 (i.e. «Done», not the technical «Deleted»). Candidates are picked by finish_date (fallback — updated_at) older than the threshold. Soft-delete sets archived=1 + status_id=deleted — same effect as clicking 🗑 on the card.',
+        'Help: added an FAQ «How does auto-cleanup of completed tasks work?» in «📋 Basics» — explaining catch-up logic, opt-in/opt-out strategy and how to restore tasks via Statistics.',
+      ],
+    },
+  },
+  {
     version: '0.9.27',
     date: '2026-07-05',
     items: {

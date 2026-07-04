@@ -72,6 +72,33 @@ function GeneralSection() {
   const setDefaultTab = useStore(s => s.setDefaultTab);
   const overdueMode = useStore(s => s.overdueMode);         // v0.9.2 (№1)
   const setOverdueMode = useStore(s => s.setOverdueMode);   // v0.9.2 (№1)
+  // v0.9.28: автоочистка выполненных задач
+  const autocleanupEnabled = useStore(s => s.autocleanupEnabled);
+  const autocleanupDay = useStore(s => s.autocleanupDay);
+  const autocleanupMinAgeDays = useStore(s => s.autocleanupMinAgeDays);
+  const setAutocleanupEnabled = useStore(s => s.setAutocleanupEnabled);
+  const setAutocleanupDay = useStore(s => s.setAutocleanupDay);
+  const setAutocleanupMinAgeDays = useStore(s => s.setAutocleanupMinAgeDays);
+  const runAutoCleanup = useStore(s => s.runAutoCleanup);
+  const pushToast = useStore(s => s.pushToast);
+  const [cleanNowConfirm, setCleanNowConfirm] = useState(false);
+
+  const dayNames = lang === 'ru'
+    ? ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
+    : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const handleCleanNow = () => {
+    const archived = runAutoCleanup({ manual: true });
+    if (archived === 0) {
+      pushToast(lang === 'ru' ? 'Нечего чистить' : 'Nothing to clean up');
+      return;
+    }
+    const msg = lang === 'ru'
+      ? `Архивировано ${archived} ${archived === 1 ? 'задача' : archived < 5 ? 'задачи' : 'задач'}`
+      : `Archived ${archived} task${archived === 1 ? '' : 's'}`;
+    // Простой toast без Undo — пользователь только что сознательно нажал кнопку в confirm.
+    pushToast(msg);
+  };
 
   return (
     <div className="max-w-xl space-y-6">
@@ -151,6 +178,85 @@ function GeneralSection() {
           </div>
         </div>
       </Row>
+
+      {/* v0.9.28: автоочистка выполненных задач */}
+      <div className="pt-4 border-t border-border-soft">
+        <h4 className="font-display text-[14px] font-semibold mb-3">
+          {lang === 'ru' ? 'Автоочистка выполненных' : 'Auto-cleanup completed'}
+        </h4>
+
+        <Row label={lang === 'ru' ? 'Включить' : 'Enable'}>
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autocleanupEnabled}
+              onChange={(e) => setAutocleanupEnabled(e.target.checked)}
+              className="w-4 h-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-[13px] text-muted">
+              {lang === 'ru'
+                ? 'Автоматически переносить старые выполненные в «Удалено»'
+                : 'Move old completed tasks to «Deleted» automatically'}
+            </span>
+          </label>
+        </Row>
+
+        <Row label={lang === 'ru' ? 'День недели' : 'Day of week'}>
+          <select
+            value={autocleanupDay}
+            onChange={(e) => setAutocleanupDay(parseInt(e.target.value, 10))}
+            disabled={!autocleanupEnabled}
+            className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] disabled:opacity-50"
+          >
+            {dayNames.map((n, i) => (
+              <option key={i} value={i}>{n}</option>
+            ))}
+          </select>
+        </Row>
+
+        <Row label={lang === 'ru' ? 'Старше, дней' : 'Older than, days'}>
+          <input
+            type="number"
+            min={1}
+            max={365}
+            value={autocleanupMinAgeDays}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              if (!isNaN(v)) setAutocleanupMinAgeDays(v);
+            }}
+            disabled={!autocleanupEnabled}
+            className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] w-24 disabled:opacity-50"
+          />
+        </Row>
+
+        <Row label={lang === 'ru' ? 'Сейчас' : 'Now'}>
+          <button
+            type="button"
+            onClick={() => setCleanNowConfirm(true)}
+            className="px-3 py-1 text-[13px] border border-border-soft rounded hover:bg-surface-alt"
+          >
+            {lang === 'ru' ? 'Почистить сейчас' : 'Clean up now'}
+          </button>
+        </Row>
+
+        <div className="text-[11px] text-muted mt-2 leading-relaxed">
+          {lang === 'ru'
+            ? 'В выбранный день недели при запуске приложения все выполненные задачи старше указанного возраста будут тихо перенесены в «Удалено» (они останутся в Статистике). Если вы пропустили этот день — автоочистка сработает при следующем запуске (catch-up).'
+            : 'On the selected day of week when the app starts, all completed tasks older than the set age are silently moved to «Deleted» (they remain in Stats). If you missed that day, auto-cleanup will run on next startup (catch-up).'}
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={cleanNowConfirm}
+        title={lang === 'ru' ? 'Почистить сейчас?' : 'Clean up now?'}
+        message={lang === 'ru'
+          ? `Все выполненные задачи старше ${autocleanupMinAgeDays} дн. будут перенесены в «Удалено». Их можно восстановить в Статистике.`
+          : `All completed tasks older than ${autocleanupMinAgeDays} d will be moved to «Deleted». They can be restored from Stats.`}
+        confirmLabel={lang === 'ru' ? 'Почистить' : 'Clean up'}
+        cancelLabel={tr(lang, 'cancel')}
+        onConfirm={() => { handleCleanNow(); setCleanNowConfirm(false); }}
+        onCancel={() => setCleanNowConfirm(false)}
+      />
     </div>
   );
 }
