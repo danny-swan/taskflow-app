@@ -92,7 +92,13 @@ export function TasksPage() {
       if (e.key.toLowerCase() === 'n') setNewTaskOpen(true);
     };
     window.addEventListener('keydown', fn);
-    return () => window.removeEventListener('keydown', fn);
+    // v0.9.29: внешнее событие для Command Palette — открыть модалку новой задачи.
+    const openNewTask = () => setNewTaskOpen(true);
+    window.addEventListener('taskflow:new-task', openNewTask);
+    return () => {
+      window.removeEventListener('keydown', fn);
+      window.removeEventListener('taskflow:new-task', openNewTask);
+    };
   }, [navigate]);
 
   // v0.8.13: клик вне split-меню шаблонов закрывает его.

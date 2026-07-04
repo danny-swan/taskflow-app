@@ -13,6 +13,30 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.29',
+    date: '2026-07-05',
+    items: {
+      ru: [
+        'Новая фича — Кастом-тема. В Настройки → Тема появился 5-й пресет «Своя» с тремя color-picker: Акцент, Фон, Текст. Остальные токены (surface, border, muted, faint, accent-hover, accent-soft) вычисляются автоматически через линейную интерполяцию RGB — не надо выбирать 12 цветов вручную.',
+        'Кастом-тема: color-scheme (light/dark) переключается автоматически по luminance выбранного фона — если фон тёмный (яркость < 0.5), браузерные native-элементы (скроллбары, form controls) тоже переводятся в тёмный режим. accent-hover вычисляется инверсно: в светлой теме — темнее акцента на 12%, в тёмной — светлее на 12%.',
+        'Кастом-тема: 3 базовых цвета сохраняются в ЛОКАЛЬНУЮ SQLite (ключи custom_theme_accent, custom_theme_bg, custom_theme_text) — не синхронизируются в облако, каждая машина может иметь свою тему. Кнопка «Сбросить к дефолтам» возвращает цвета светлой темы (#5B7FB8 / #F7F6F2 / #28251D).',
+        'Новая фича — Command Palette. Горячая клавиша Ctrl+K (Cmd+K на macOS) открывает глобальную палитру с поиском по трём категориям: (1) Навигация — Переход на Задачи/Календарь/Дашборд/Статистику/Настройки/Помощь, (2) Задачи — substring-матч по title среди видимых задач (до 8 попаданий), (3) Действия — Новая задача, Переключить тему (свет/темно), Переключить вид (список/канбан), Экспорт в JSON.',
+        'Command Palette: полная клавиатурная навигация. ⇑/⇓ перемещают выделение между группами, Enter выполняет выбранное действие и закрывает палитру, Esc закрывает без действия. Клик по backdrop также закрывает. Активный элемент прокручивается в видимую зону автоматически.',
+        'Command Palette → «Новая задача»: навигирует на /tasks и через кастомное window-событие taskflow:new-task открывает модалку новой задачи — то же самое что горячая клавиша N на самой вкладке Задач. Задачи в технических статусах (Удалено) не показываются в результатах.',
+        'Помощь: в секции «Основы» добавлен FAQ «Что такое Command Palette и как её вызвать?», в секции «Интерфейс» — FAQ «Как сделать свою тему?» с объяснением логики деривации цветов.',
+      ],
+      en: [
+        'New feature — Custom theme. Settings → Theme now offers a 5th preset «Custom» with three color pickers: Accent, Background, Text. All other tokens (surface, border, muted, faint, accent-hover, accent-soft) are derived automatically via linear RGB interpolation — no need to pick 12 colors by hand.',
+        'Custom theme: color-scheme (light/dark) is toggled automatically by the luminance of the chosen background — if the background is dark (luminance < 0.5), the native browser widgets (scrollbars, form controls) switch to dark mode too. accent-hover is inverted: on a light theme it darkens the accent by 12%, on a dark theme it lightens it by 12%.',
+        'Custom theme: the 3 base colors are stored in LOCAL SQLite (keys custom_theme_accent, custom_theme_bg, custom_theme_text) — they are not synced to cloud, each machine can have its own theme. The «Reset to defaults» button restores the light-theme colors (#5B7FB8 / #F7F6F2 / #28251D).',
+        'New feature — Command Palette. The Ctrl+K (Cmd+K on macOS) hotkey opens a global palette with search across three categories: (1) Navigation — jump to Tasks/Calendar/Dashboard/Stats/Settings/Help, (2) Tasks — substring match by title among visible tasks (up to 8 hits), (3) Actions — New task, Toggle theme (light/dark), Toggle view (list/kanban), Export to JSON.',
+        'Command Palette: full keyboard navigation. ⇑/⇓ move the highlight across groups, Enter runs the selected action and closes the palette, Esc closes without action. Clicking the backdrop also closes. The active item auto-scrolls into view.',
+        'Command Palette → «New task»: navigates to /tasks and dispatches a custom taskflow:new-task window event to open the new-task modal — same as the N hotkey on the Tasks page itself. Tasks in technical statuses (Deleted) are not shown in results.',
+        'Help: a new FAQ «What is the Command Palette and how do I open it?» was added to «Basics», and «How do I make a custom theme?» to «Interface» — with an explanation of the color derivation logic.',
+      ],
+    },
+  },
+  {
     version: '0.9.28',
     date: '2026-07-05',
     items: {
