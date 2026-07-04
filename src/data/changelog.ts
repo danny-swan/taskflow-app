@@ -13,6 +13,26 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.26',
+    date: '2026-07-04',
+    items: {
+      ru: [
+        'Модалка «Смена пароля»: убрано поле «Текущий пароль» и вся reauth-логика. Причина: в v0.9.23 включён Cloudflare Turnstile Secret Key в Supabase Attack Protection, из-за чего любой signInWithPassword (в т.ч. в эфемерном клиенте v0.9.25) стал требовать captchaToken, которого в модалке нет — пользователь получал ошибку «captcha protection: request disallowed (no captcha_token found)». Теперь модалка спрашивает только новый пароль дважды, а updatePassword выполняется под активной сессией. Это стандарт индустрии: Google/GitHub требуют текущий пароль только для критичных операций (2FA, смена email), не для рутинной смены пароля.',
+        'Раздел Помощь: горячие клавиши синхронизированы с реальными роутами приложения — было 1=Задачи, 2=Дашборд, 3=Статистика, 4=Настройки, 5=Помощь (без Календаря!), стало 1=Задачи, 2=Календарь, 3=Дашборд, 4=Статистика, 5=Настройки, 6=Помощь. Исправлено в RU и EN.',
+        'Раздел Помощь: удалён устаревший FAQ «Как работает облачная синхронизация?» — фича не поставлена (задачи хранятся в локальной SQLite, cloud sync в роадмэпе), формулировка вводила в заблуждение. Секция «☁ Облако и аккаунт» переименована в «👤 Аккаунт и email» и получила новый FAQ «Где хранятся мои задачи?» с честным объяснением.',
+        'Раздел Помощь: удалён FAQ «Rate limiting и защита от bruteforce» — детали про Supabase Attack Protection пользователю не полезны, только техническая нагрузка.',
+        'Раздел Помощь: FAQ смены пароля обновлён под v0.9.26 (только новый пароль + подтверждение), объяснение почему не требуется текущий пароль.',
+      ],
+      en: [
+        'Change-password modal: the "Current password" field and the entire reauth logic are gone. Root cause: v0.9.23 enabled Cloudflare Turnstile Secret Key in Supabase Attack Protection, so any signInWithPassword (including the ephemeral client from v0.9.25) now requires a captchaToken that the modal cannot supply — users saw "captcha protection: request disallowed (no captcha_token found)". The modal now only asks for the new password twice, and updatePassword runs under the active session. This matches industry standard: Google/GitHub only require the current password for critical ops (2FA, email change), not for routine password rotation.',
+        'Help section: hotkeys resynced with actual app routes — was 1=Tasks, 2=Dashboard, 3=Stats, 4=Settings, 5=Help (Calendar missing!), now 1=Tasks, 2=Calendar, 3=Dashboard, 4=Stats, 5=Settings, 6=Help. Fixed in both RU and EN.',
+        'Help section: dropped the outdated "How does cloud sync work?" FAQ — the feature is not shipped (tasks live in local SQLite, cloud sync is on the roadmap), the wording was misleading. "☁ Cloud & account" section renamed to "👤 Account & email" with a new "Where are my tasks stored?" FAQ that tells the truth.',
+        'Help section: dropped the "Rate limiting and bruteforce protection" FAQ — the Supabase Attack Protection internals aren\'t useful to users, only technical noise.',
+        'Help section: password-change FAQ updated for v0.9.26 (new password + confirmation only), with an explanation of why the current password is no longer required.',
+      ],
+    },
+  },
+  {
     version: '0.9.25',
     date: '2026-07-04',
     items: {
