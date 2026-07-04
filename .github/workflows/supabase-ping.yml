@@ -1,0 +1,51 @@
+# Supabase keep-alive ping
+#
+# Проблема: free-tier Supabase-проекты приостанавливаются после 7 дней
+# без активности. После пробуждения первые запросы медленные (10-30с),
+# а если пауза дольше 90 дней — проект удаляется.
+#
+# Решение: раз в 3 дня «тыкаем» проект лёгким SELECT-запросом через REST.
+# Плюс каждый запуск TaskFlow дополнительно дёргает базу
+# (см. src/lib/supabase.ts → pingSupabaseKeepAlive).
+#
+# v0.9.22
+name: Supabase keep-alive
+
+on:
+  schedule:
+    # Каждые 3 дня в 06:00 UTC.
+    # cron: minute hour day-of-month month day-of-week
+    - cron: '0 6 */3 * *'
+  # Возможность запустить руками из UI Actions
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping Supabase REST
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: SELECT 1 from tasks
+        env:
+          SUPABASE_URL: https://sejpmzrmtgcvevukggkx.supabase.co
+          # anon key публичен (обёрнут RLS) — тот же, что в src/lib/supabase.ts
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -e
+          KEY="${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNlanBtenJtdGdjdmV2dWtnZ2t4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ4Mzk3MzYsImV4cCI6MjA2MDQxNTczNn0.k46LNfKjkzhWJRQx2p2X3zk4rrN0DRDlkfKvGihmnwc}"
+          echo "Pinging ${SUPABASE_URL}/rest/v1/tasks..."
+          # -f: fail on HTTP >= 400; -s: silent; -S: show errors; --max-time 30
+          # RLS без auth вернёт 200 с пустым массивом — этого достаточно, чтобы Supabase считал проект «активным».
+          HTTP_CODE=$(curl -s -o /tmp/body.txt -w "%{http_code}" \
+            --max-time 30 \
+            -H "apikey: ${KEY}" \
+            -H "Authorization: Bearer ${KEY}" \
+            "${SUPABASE_URL}/rest/v1/tasks?select=id&limit=1")
+          echo "HTTP ${HTTP_CODE}"
+          cat /tmp/body.txt || true
+          echo ""
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Supabase вернул ${HTTP_CODE}"
+            exit 1
+          fi
+          echo "OK, база отвечает."

@@ -17,6 +17,7 @@ import { AuthScreen } from './components/AuthScreen';
 import { PasswordResetModal } from './components/PasswordResetModal';
 import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
+import { pingSupabaseKeepAlive } from './lib/supabase';
 import { TasksPage } from './pages/Tasks';
 // v0.8.6: AddTaskPage больше не подключается — заменена на NewTaskModal
 // v0.8.12 (п. 24 code splitting): второстепенные вкладки грузим лениво —
@@ -43,6 +44,13 @@ function App() {
 
   // v0.9.14: флаг открытой модалки смены пароля (после recovery deep-link)
   const [showPasswordReset, setShowPasswordReset] = useState(false);
+
+  // v0.9.22: при старте приложения дёргаем Supabase (keep-alive),
+  // чтобы в free-tier база не вставала на паузу после 7 дней неактивности.
+  // fire-and-forget, ошибки глотаются внутри функции.
+  useEffect(() => {
+    pingSupabaseKeepAlive();
+  }, []);
 
   // v0.9.11: слушаем deep link taskflow://auth/callback из Rust.
   // v0.9.14: если это recovery-link — открываем экран ввода нового пароля
@@ -175,9 +183,13 @@ function App() {
           </Suspense>
         </main>
         <ToastStack />
-        <OnboardingErrorBoundary>
-          <Onboarding />
-        </OnboardingErrorBoundary>
+        {/* v0.9.22: в e2e-режиме онбординг отключён — spotlight-overlay
+            перехватывает клики Playwright и делает тесты флаки. */}
+        {!e2eBypass && (
+          <OnboardingErrorBoundary>
+            <Onboarding />
+          </OnboardingErrorBoundary>
+        )}
         {showPasswordReset && (
           <PasswordResetModal onClose={() => setShowPasswordReset(false)} />
         )}
