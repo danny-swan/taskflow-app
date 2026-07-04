@@ -15,6 +15,7 @@ import { Onboarding } from './components/Onboarding';
 import { OnboardingErrorBoundary } from './components/OnboardingErrorBoundary';
 import { AuthScreen } from './components/AuthScreen';
 import { PasswordResetModal } from './components/PasswordResetModal';
+import { CommandPalette } from './components/CommandPalette';
 import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { pingSupabaseKeepAlive } from './lib/supabase';
@@ -45,6 +46,19 @@ function App() {
 
   // v0.9.14: флаг открытой модалки смены пароля (после recovery deep-link)
   const [showPasswordReset, setShowPasswordReset] = useState(false);
+
+  // v0.9.29: глобальный Command Palette (Ctrl+K / Cmd+K)
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const fn = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen(o => !o);
+      }
+    };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, []);
 
   // v0.9.22: при старте приложения дёргаем Supabase (keep-alive),
   // чтобы в free-tier база не вставала на паузу после 7 дней неактивности.
@@ -239,6 +253,8 @@ function App() {
         {showPasswordReset && (
           <PasswordResetModal onClose={() => setShowPasswordReset(false)} />
         )}
+        {/* v0.9.29: Command Palette */}
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       </div>
     </ThemeProvider>
   );
