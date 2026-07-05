@@ -4,6 +4,7 @@ import { tr } from '../lib/i18n';
 import { ChevronDown } from 'lucide-react';
 import { CHANGELOG } from '../data/changelog';
 import { resetOnboarding } from '../components/Onboarding';
+import { SupportBlock } from '../components/SupportBlock';
 
 interface HelpSection {
   title: string;
@@ -917,45 +918,58 @@ export function HelpPage() {
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
-      <div className="max-w-2xl">
-        <h2 className="font-display text-[18px] font-semibold mb-1">{tr(lang, 'help_title')}</h2>
-        <div className="text-[12px] text-muted mb-5">TaskFlow v{latest.version}</div>
-        <div className="space-y-6">
-          {sections.map((section) => (
-            <div key={section.title}>
-              <div className="text-[12px] text-muted uppercase tracking-wider mb-2 font-medium">{section.title}</div>
-              <div className="space-y-2">
-                {section.items.map((item, i) => {
-                  const key = `${section.title}-${i}`;
-                  const open = openKey === key;
-                  return (
-                    <div key={key} className="bg-surface border border-border-soft rounded-lg overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => setOpenKey(open ? null : key)}
-                        aria-expanded={open}
-                        className="w-full text-left list-none px-4 py-3 flex items-start gap-3 select-none hover:bg-surface-alt/40"
-                      >
-                        <span className="text-[13.5px] font-medium flex-1">{item.q}</span>
-                        <ChevronDown
-                          size={15}
-                          className={'text-muted transition-transform shrink-0 mt-0.5 ' + (open ? 'rotate-180' : '')}
-                        />
-                      </button>
-                      {open && (
-                        <div className="px-4 pb-3.5 text-[13px] text-muted leading-relaxed">
-                          {typeof item.a === 'string' ? <p>{item.a}</p> : item.a}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+      {/* v0.9.31: 2-колоночный layout — контент + sticky SupportBlock справа.
+          На узких экранах схлопывается в одну колонку. */}
+      <div className="grid gap-8 xl:grid-cols-[minmax(0,42rem)_320px] items-start">
+        <div className="min-w-0">
+          <h2 className="font-display text-[18px] font-semibold mb-1">{tr(lang, 'help_title')}</h2>
+          <div className="text-[12px] text-muted mb-5">TaskFlow v{latest.version}</div>
+          <div className="space-y-6">
+            {sections.map((section) => (
+              <div key={section.title}>
+                <div className="text-[12px] text-muted uppercase tracking-wider mb-2 font-medium">{section.title}</div>
+                <div className="space-y-2">
+                  {section.items.map((item, i) => {
+                    const key = `${section.title}-${i}`;
+                    const open = openKey === key;
+                    return (
+                      <div key={key} className="bg-surface border border-border-soft rounded-lg overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setOpenKey(open ? null : key)}
+                          aria-expanded={open}
+                          className="w-full text-left list-none px-4 py-3 flex items-start gap-3 select-none hover:bg-surface-alt/40"
+                        >
+                          <span className="text-[13.5px] font-medium flex-1">{item.q}</span>
+                          <ChevronDown
+                            size={15}
+                            className={'text-muted transition-transform shrink-0 mt-0.5 ' + (open ? 'rotate-180' : '')}
+                          />
+                        </button>
+                        {open && (
+                          <div className="px-4 pb-3.5 text-[13px] text-muted leading-relaxed">
+                            {typeof item.a === 'string' ? <p>{item.a}</p> : item.a}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
 
-          <WhatsNewSection lang={lang} />
-          <AboutSection lang={lang} />
+            <WhatsNewSection lang={lang} />
+            <AboutSection lang={lang} />
+
+            {/* v0.9.31: на xl+ SupportBlock в sticky aside справа, на меньших внизу основной колонки. */}
+            <div className="xl:hidden">
+              <SupportBlock />
+            </div>
+          </div>
+        </div>
+
+        <div className="hidden xl:block sticky top-4 self-start">
+          <SupportBlock />
         </div>
       </div>
     </div>
