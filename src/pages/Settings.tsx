@@ -74,12 +74,15 @@ function GeneralSection() {
   const setOverdueMode = useStore(s => s.setOverdueMode);   // v0.9.2 (№1)
   // v0.9.28: автоочистка выполненных задач
   const autocleanupEnabled = useStore(s => s.autocleanupEnabled);
+  const autocleanupMode = useStore(s => s.autocleanupMode);
   const autocleanupDay = useStore(s => s.autocleanupDay);
   const autocleanupMinAgeDays = useStore(s => s.autocleanupMinAgeDays);
   const setAutocleanupEnabled = useStore(s => s.setAutocleanupEnabled);
+  const setAutocleanupMode = useStore(s => s.setAutocleanupMode);
   const setAutocleanupDay = useStore(s => s.setAutocleanupDay);
   const setAutocleanupMinAgeDays = useStore(s => s.setAutocleanupMinAgeDays);
   const runAutoCleanup = useStore(s => s.runAutoCleanup);
+  const updateTask = useStore(s => s.updateTask);
   const pushToast = useStore(s => s.pushToast);
   const [cleanNowConfirm, setCleanNowConfirm] = useState(false);
 
@@ -87,17 +90,24 @@ function GeneralSection() {
     ? ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
     : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+  // v0.9.30: кнопка «Почистить сейчас» — ignoreAge=true, всегда все выполненные. Плюс Undo (10 с).
   const handleCleanNow = () => {
-    const archived = runAutoCleanup({ manual: true });
-    if (archived === 0) {
+    const result = runAutoCleanup({ manual: true, ignoreAge: true });
+    if (result.count === 0) {
       pushToast(lang === 'ru' ? 'Нечего чистить' : 'Nothing to clean up');
       return;
     }
     const msg = lang === 'ru'
-      ? `Архивировано ${archived} ${archived === 1 ? 'задача' : archived < 5 ? 'задачи' : 'задач'}`
-      : `Archived ${archived} task${archived === 1 ? '' : 's'}`;
-    // Простой toast без Undo — пользователь только что сознательно нажал кнопку в confirm.
-    pushToast(msg);
+      ? `Архивировано ${result.count} ${result.count === 1 ? 'задача' : result.count < 5 ? 'задачи' : 'задач'}`
+      : `Archived ${result.count} task${result.count === 1 ? '' : 's'}`;
+    const ids = [...result.ids];
+    pushToast(msg, {
+      label: lang === 'ru' ? 'Отменить' : 'Undo',
+      onClick: () => {
+        for (const id of ids) updateTask(id, { archived: 0 });
+        pushToast(lang === 'ru' ? 'Восстановлено' : 'Restored');
+      },
+    });
   };
 
   return (
@@ -179,7 +189,7 @@ function GeneralSection() {
         </div>
       </Row>
 
-      {/* v0.9.28: автоочистка выполненных задач */}
+      {/* v0.9.30: автоочистка выполненных задач — два режима (weekday/age) */}
       <div className="pt-4 border-t border-border-soft">
         <h4 className="font-display text-[14px] font-semibold mb-3">
           {lang === 'ru' ? 'Автоочистка выполненных' : 'Auto-cleanup completed'}
@@ -195,39 +205,79 @@ function GeneralSection() {
             />
             <span className="text-[13px] text-muted">
               {lang === 'ru'
-                ? 'Автоматически переносить старые выполненные в «Удалено»'
-                : 'Move old completed tasks to «Deleted» automatically'}
+                ? 'Автоматически архивировать выполненные задачи при запуске'
+                : 'Auto-archive completed tasks on startup'}
             </span>
           </label>
         </Row>
 
-        <Row label={lang === 'ru' ? 'День недели' : 'Day of week'}>
-          <select
-            value={autocleanupDay}
-            onChange={(e) => setAutocleanupDay(parseInt(e.target.value, 10))}
-            disabled={!autocleanupEnabled}
-            className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] disabled:opacity-50"
-          >
-            {dayNames.map((n, i) => (
-              <option key={i} value={i}>{n}</option>
-            ))}
-          </select>
+        {/* v0.9.30: выбор режима */}
+        <Row label={tr(lang, 'autoclean_mode_label')}>
+          <div className="flex flex-col gap-1.5">
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="autoclean_mode"
+                value="weekday"
+                checked={autocleanupMode === 'weekday'}
+                onChange={() => setAutocleanupMode('weekday')}
+                disabled={!autocleanupEnabled}
+                className="accent-[var(--color-accent)]"
+              />
+              <span className="text-[13px]">{tr(lang, 'autoclean_mode_weekday')}</span>
+            </label>
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="autoclean_mode"
+                value="age"
+                checked={autocleanupMode === 'age'}
+                onChange={() => setAutocleanupMode('age')}
+                disabled={!autocleanupEnabled}
+                className="accent-[var(--color-accent)]"
+              />
+              <span className="text-[13px]">{tr(lang, 'autoclean_mode_age')}</span>
+            </label>
+          </div>
         </Row>
 
-        <Row label={lang === 'ru' ? 'Старше, дней' : 'Older than, days'}>
-          <input
-            type="number"
-            min={1}
-            max={365}
-            value={autocleanupMinAgeDays}
-            onChange={(e) => {
-              const v = parseInt(e.target.value, 10);
-              if (!isNaN(v)) setAutocleanupMinAgeDays(v);
-            }}
-            disabled={!autocleanupEnabled}
-            className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] w-24 disabled:opacity-50"
-          />
-        </Row>
+        {autocleanupMode === 'weekday' && (
+          <Row label={lang === 'ru' ? 'День недели' : 'Day of week'}>
+            <select
+              value={autocleanupDay}
+              onChange={(e) => setAutocleanupDay(parseInt(e.target.value, 10))}
+              disabled={!autocleanupEnabled}
+              className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] disabled:opacity-50"
+            >
+              {dayNames.map((n, i) => (
+                <option key={i} value={i}>{n}</option>
+              ))}
+            </select>
+          </Row>
+        )}
+
+        {autocleanupMode === 'age' && (
+          <Row label={lang === 'ru' ? 'Старше, дней' : 'Older than, days'}>
+            <input
+              type="number"
+              min={1}
+              max={365}
+              value={autocleanupMinAgeDays}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!isNaN(v)) setAutocleanupMinAgeDays(v);
+              }}
+              disabled={!autocleanupEnabled}
+              className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] w-24 disabled:opacity-50"
+            />
+          </Row>
+        )}
+
+        <div className="text-[11px] text-muted mt-1 mb-3 leading-relaxed">
+          {autocleanupMode === 'weekday'
+            ? tr(lang, 'autoclean_mode_weekday_hint')
+            : tr(lang, 'autoclean_mode_age_hint')}
+        </div>
 
         <Row label={lang === 'ru' ? 'Сейчас' : 'Now'}>
           <button
@@ -240,9 +290,7 @@ function GeneralSection() {
         </Row>
 
         <div className="text-[11px] text-muted mt-2 leading-relaxed">
-          {lang === 'ru'
-            ? 'В выбранный день недели при запуске приложения все выполненные задачи старше указанного возраста будут тихо перенесены в «Удалено» (они останутся в Статистике). Если вы пропустили этот день — автоочистка сработает при следующем запуске (catch-up).'
-            : 'On the selected day of week when the app starts, all completed tasks older than the set age are silently moved to «Deleted» (they remain in Stats). If you missed that day, auto-cleanup will run on next startup (catch-up).'}
+          {tr(lang, 'autoclean_now_hint')}
         </div>
       </div>
 
@@ -250,8 +298,8 @@ function GeneralSection() {
         open={cleanNowConfirm}
         title={lang === 'ru' ? 'Почистить сейчас?' : 'Clean up now?'}
         message={lang === 'ru'
-          ? `Все выполненные задачи старше ${autocleanupMinAgeDays} дн. будут перенесены в «Удалено». Их можно восстановить в Статистике.`
-          : `All completed tasks older than ${autocleanupMinAgeDays} d will be moved to «Deleted». They can be restored from Stats.`}
+          ? 'Все выполненные задачи будут перенесены в архив — без учёта возраста и дня недели. Они останутся в Статистике со статусом «Выполнено», будет 10 секунд на Undo.'
+          : 'All completed tasks will be moved to archive — regardless of age and weekday. They remain in Stats with «Done» status, and you have 10 seconds to Undo.'}
         confirmLabel={lang === 'ru' ? 'Почистить' : 'Clean up'}
         cancelLabel={tr(lang, 'cancel')}
         onConfirm={() => { handleCleanNow(); setCleanNowConfirm(false); }}
@@ -517,11 +565,11 @@ function ThemeSection() {
         })}
       </div>
 
-      {/* v0.9.29: 3 color-picker — видимы только при активной custom-теме */}
+      {/* v0.9.30: 3 color-picker — мобильный 1 кол., широкий sm+ = 3. Свободный ColorPickerField без вылетов. */}
       {theme === 'custom' && (
         <div className="mt-5 rounded-xl border border-border-soft bg-surface p-4">
           <p className="text-[12px] text-muted mb-3">{tr(lang, 'theme_custom_hint')}</p>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <ColorPickerField
               label={tr(lang, 'theme_custom_accent')}
               value={customAccent}
@@ -553,24 +601,32 @@ function ThemeSection() {
   );
 }
 
-// v0.9.29: отдельный color-picker с native <input type="color"> + hex-текстовым полем
+// v0.9.30: color-picker — квадратный swatch (видимый образец цвета) + скрытый native picker внутри.
+// Плюс hex-текстовое поле. Стабильно выглядит в Tauri WebView2 без вылетов.
 function ColorPickerField({ label, value, onChange }: { label: string; value: string; onChange: (hex: string) => void }) {
+  const safeValue = /^#[0-9A-Fa-f]{6}$/.test(value) ? value : '#000000';
   return (
-    <label className="flex flex-col gap-1.5">
+    <label className="flex flex-col gap-1.5 min-w-0">
       <span className="text-[11px] text-muted uppercase tracking-wide">{label}</span>
-      <div className="flex items-center gap-2">
-        <input
-          type="color"
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          className="w-10 h-10 rounded-lg border border-border-soft cursor-pointer bg-transparent"
-          aria-label={label}
-        />
+      <div className="flex items-center gap-2 min-w-0">
+        <span
+          className="relative inline-block w-9 h-9 flex-shrink-0 rounded-md border border-border-soft overflow-hidden cursor-pointer"
+          style={{ backgroundColor: safeValue }}
+          title={label}
+        >
+          <input
+            type="color"
+            value={safeValue}
+            onChange={e => onChange(e.target.value)}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            aria-label={label}
+          />
+        </span>
         <input
           type="text"
           value={value}
           onChange={e => onChange(e.target.value)}
-          className="flex-1 h-10 px-2.5 text-[13px] rounded-lg border border-border-soft bg-bg text-text focus:outline-none focus:border-accent font-mono uppercase"
+          className="flex-1 min-w-0 h-9 px-2 text-[12px] rounded-md border border-border-soft bg-bg text-text focus:outline-none focus:border-accent font-mono uppercase"
           maxLength={7}
           spellCheck={false}
         />
