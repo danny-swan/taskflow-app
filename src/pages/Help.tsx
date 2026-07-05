@@ -918,7 +918,7 @@ export function HelpPage() {
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
-      {/* v0.9.32: fluid 2-колоночный layout — aside ширины clamp(280px, 22vw, 360px)
+      {/* v0.9.33: fluid 2-колоночный layout — aside ширины clamp(340px, 28vw, 440px)
           подстраивается под ширину окна; контент занимает оставшееся место.
           Переход на sticky-aside — с lg (1024px). */}
       <div className="help-layout grid gap-8 items-start">
@@ -978,7 +978,7 @@ export function HelpPage() {
         .help-layout { grid-template-columns: minmax(0, 1fr); }
         .help-support-aside { display: none; }
         @media (min-width: 1024px) {
-          .help-layout { grid-template-columns: minmax(0, 1fr) clamp(280px, 22vw, 360px); }
+          .help-layout { grid-template-columns: minmax(0, 1fr) clamp(340px, 28vw, 440px); }
           .help-support-inline { display: none; }
           .help-support-aside { display: block; }
         }
