@@ -162,6 +162,26 @@ const dict = {
     // Дни недели (короткие, начиная с Пн)
     dow_mon: 'Пн', dow_tue: 'Вт', dow_wed: 'Ср', dow_thu: 'Чт',
     dow_fri: 'Пт', dow_sat: 'Сб', dow_sun: 'Вс',
+    // v0.9.31 — часовой пояс
+    tz_section: 'Дата и время',
+    tz_label: 'Часовой пояс',
+    tz_auto: 'Автоопределение (локальный)',
+    tz_hint: 'Используется для определения «сегодня» в Статистике и для дат выполнения задач. Если вы в положительном часовом поясе (MSK, JST…) и выполняете задачу ночью — это важно, иначе дата может сместиться на день назад.',
+    // v0.9.31 — блок поддержки
+    support_title: 'Поддержать разработчика',
+    support_intro_1: 'TaskFlow я делаю один и в свободное время — без рекламы и без сбора данных. Если приложение и его функционал вам понравились, и вы хотите, чтобы оно продолжало развиваться, — буду благодарен, если поддержите меня напрямую. Всё идёт на новые фичи, шлифовку интерфейса и время на поддержку.',
+    support_intro_2: 'Кофе для разработчика — топливо для новых коммитов ☕ Так что если TaskFlow сэкономил вам хоть один пропущенный дедлайн — можно считать, что чашка эспрессо уже заслужена 🙂',
+    support_intro_3: 'Буду признателен любой сумме, а ещё больше — тому, что вы пользуетесь. Спасибо ❤',
+    support_method_cloudtips: 'CloudTips (Россия, карты РФ)',
+    support_method_usdt_trc: 'USDT TRC-20 (Tron)',
+    support_method_ton: 'TON (Toncoin)',
+    support_method_usdt_erc: 'USDT ERC-20 (Ethereum)',
+    support_open_link: 'Открыть ссылку',
+    support_copy_address: 'Копировать адрес',
+    support_copied: 'Скопировано',
+    support_show_qr: 'Показать QR',
+    support_hide_qr: 'Скрыть QR',
+    support_disclaimer: '⚠ Если захотите перевести криптой, то не забывайте: перевод строго в указанной валюте, в указанной сети, на соответствующий адрес. Отправка USDT TRC-20 на ERC-20-адрес (или наоборот), TON на Ethereum-адрес и т.п. — приведёт к БЕЗВОЗВРАТНОЙ потере средств. Всегда сверяйте сеть перед отправкой. Спасибо и хорошего Вам дня!',
   },
   en: {
     brand_sub: 'Task manager',
@@ -324,6 +344,26 @@ const dict = {
     // Days of week (short, starting from Mon)
     dow_mon: 'Mon', dow_tue: 'Tue', dow_wed: 'Wed', dow_thu: 'Thu',
     dow_fri: 'Fri', dow_sat: 'Sat', dow_sun: 'Sun',
+    // v0.9.31 — timezone
+    tz_section: 'Date & time',
+    tz_label: 'Timezone',
+    tz_auto: 'Auto (local)',
+    tz_hint: 'Used to determine “today” in Stats and task completion dates. Matters if you are in a positive UTC offset (MSK, JST…) and complete a task at night — otherwise the date may shift a day backward.',
+    // v0.9.31 — support block
+    support_title: 'Support the developer',
+    support_intro_1: 'I build TaskFlow alone, in my spare time — no ads, no data collection. If the app and its features have grown on you and you’d like to see it keep evolving, I’d be grateful if you could support me directly. It all goes toward new features, UI polish, and time to keep the project alive.',
+    support_intro_2: 'A developer’s coffee — fuel for new commits ☕ So if TaskFlow has saved you even one missed deadline, an espresso is probably already earned 🙂',
+    support_intro_3: 'I’ll be grateful for any amount — and even more grateful that you’re using it. Thank you ❤',
+    support_method_cloudtips: 'CloudTips (Russia, RU cards)',
+    support_method_usdt_trc: 'USDT TRC-20 (Tron)',
+    support_method_ton: 'TON (Toncoin)',
+    support_method_usdt_erc: 'USDT ERC-20 (Ethereum)',
+    support_open_link: 'Open link',
+    support_copy_address: 'Copy address',
+    support_copied: 'Copied',
+    support_show_qr: 'Show QR',
+    support_hide_qr: 'Hide QR',
+    support_disclaimer: '⚠ If you’d like to send crypto — please send only the specified currency on the specified network to the matching address. Sending USDT TRC-20 to an ERC-20 address (or vice versa), TON to an Ethereum address, etc. — will result in PERMANENT loss of funds. Always double-check the network before sending. Thanks, and have a great day!',
   },
 } as const;
 

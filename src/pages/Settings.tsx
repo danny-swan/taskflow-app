@@ -9,7 +9,7 @@ import { PrivacyModal } from '../components/PrivacyModal';
 import { PasswordResetModal } from '../components/PasswordResetModal';
 import { usePrompt } from '../components/PromptDialog';
 import pkg from '../../package.json';
-import { downloadFile } from '../lib/utils';
+import { downloadFile, todayISO } from '../lib/utils';
 import { resetDatabase, isTauri, buildBackup, applyBackup, getSchemaVersion, type BackupPayload } from '../lib/db';
 import { logger } from '../lib/logger';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -163,6 +163,9 @@ function GeneralSection() {
           <option value="stats">{tr(lang, 'nav_stats')}</option>
         </select>
       </Row>
+
+      {/* v0.9.31: часовой пояс — используется везде, где вычисляется todayISO() */}
+      <TimezoneRow lang={lang} />
 
       {/* v0.9.2 (№1): режим подсчёта просрочки и остатка дней на карточках задач */}
       <Row label={lang === 'ru' ? 'Логика дедлайнов' : 'Deadline logic'}>
@@ -687,7 +690,7 @@ function IOSection() {
   const doExport = () => {
     if (!exportFormat) return;
     const payload = buildBackup(exportInc);
-    const stamp = new Date().toISOString().slice(0, 10);
+    const stamp = todayISO(useStore.getState().timezone);
     if (exportFormat === 'json') {
       downloadFile(`taskflow-${stamp}.json`, JSON.stringify(payload, null, 2), 'application/json');
     } else if (exportFormat === 'csv') {
@@ -740,7 +743,7 @@ function IOSection() {
   const handleDownloadTemplate = () => {
     const ws = XLSX.utils.aoa_to_sheet([
       ['title', 'description', 'status', 'tags', 'due_date', 'created_at'],
-      ['Пример задачи', 'Описание задачи', 'В работе', 'dev', new Date().toISOString().slice(0, 10), new Date().toISOString().slice(0, 10)],
+      ['Пример задачи', 'Описание задачи', 'В работе', 'dev', todayISO(useStore.getState().timezone), todayISO(useStore.getState().timezone)],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Tasks');
@@ -1562,6 +1565,80 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex items-center justify-between gap-4 py-2 border-b border-border-soft">
       <div className="text-[13px] text-muted">{label}</div>
       <div>{children}</div>
+    </div>
+  );
+}
+
+// v0.9.31: TimezoneRow — селектор часового пояса.
+// 'auto' — локальный (по getFullYear/Month/Date), любое другое валидное
+// IANA-значение — через Intl.DateTimeFormat(tz).
+// Кураторский список популярных таймзон, чтобы не вываливать 400+ пунктов.
+const TZ_OPTIONS: { value: string; label: string }[] = [
+  { value: 'UTC', label: 'UTC' },
+  { value: 'Europe/Moscow', label: 'Europe/Moscow (MSK, UTC+3)' },
+  { value: 'Europe/Kaliningrad', label: 'Europe/Kaliningrad (UTC+2)' },
+  { value: 'Europe/Samara', label: 'Europe/Samara (UTC+4)' },
+  { value: 'Asia/Yekaterinburg', label: 'Asia/Yekaterinburg (UTC+5)' },
+  { value: 'Asia/Omsk', label: 'Asia/Omsk (UTC+6)' },
+  { value: 'Asia/Krasnoyarsk', label: 'Asia/Krasnoyarsk (UTC+7)' },
+  { value: 'Asia/Irkutsk', label: 'Asia/Irkutsk (UTC+8)' },
+  { value: 'Asia/Yakutsk', label: 'Asia/Yakutsk (UTC+9)' },
+  { value: 'Asia/Vladivostok', label: 'Asia/Vladivostok (UTC+10)' },
+  { value: 'Europe/London', label: 'Europe/London (GMT/BST)' },
+  { value: 'Europe/Berlin', label: 'Europe/Berlin (CET)' },
+  { value: 'Europe/Paris', label: 'Europe/Paris (CET)' },
+  { value: 'Europe/Kyiv', label: 'Europe/Kyiv (EET)' },
+  { value: 'Europe/Istanbul', label: 'Europe/Istanbul (UTC+3)' },
+  { value: 'Asia/Dubai', label: 'Asia/Dubai (UTC+4)' },
+  { value: 'Asia/Almaty', label: 'Asia/Almaty (UTC+5)' },
+  { value: 'Asia/Tashkent', label: 'Asia/Tashkent (UTC+5)' },
+  { value: 'Asia/Bangkok', label: 'Asia/Bangkok (UTC+7)' },
+  { value: 'Asia/Shanghai', label: 'Asia/Shanghai (UTC+8)' },
+  { value: 'Asia/Tokyo', label: 'Asia/Tokyo (UTC+9)' },
+  { value: 'Australia/Sydney', label: 'Australia/Sydney (UTC+10/11)' },
+  { value: 'America/New_York', label: 'America/New_York (ET)' },
+  { value: 'America/Chicago', label: 'America/Chicago (CT)' },
+  { value: 'America/Denver', label: 'America/Denver (MT)' },
+  { value: 'America/Los_Angeles', label: 'America/Los_Angeles (PT)' },
+  { value: 'America/Sao_Paulo', label: 'America/Sao_Paulo (BRT)' },
+];
+
+function TimezoneRow({ lang }: { lang: 'ru' | 'en' }) {
+  const timezone = useStore(s => s.timezone);
+  const setTimezone = useStore(s => s.setTimezone);
+
+  // Авто-определённая системная TZ — для отображения в подсказке к варианту 'auto'.
+  let detectedTz = '';
+  try {
+    detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch { /* ignore */ }
+
+  // Если сохранённое значение не в списке — добавим его в начало (чтобы select корректно отображал).
+  const inList = timezone === 'auto' || TZ_OPTIONS.some(o => o.value === timezone);
+
+  return (
+    <div className="py-2 border-b border-border-soft">
+      <div className="flex items-center justify-between gap-4">
+        <div className="text-[13px] text-muted">{tr(lang, 'tz_label')}</div>
+        <select
+          value={timezone}
+          onChange={(e) => setTimezone(e.target.value)}
+          className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] max-w-[280px]"
+        >
+          <option value="auto">
+            {tr(lang, 'tz_auto')}{detectedTz ? ` — ${detectedTz}` : ''}
+          </option>
+          {!inList && (
+            <option value={timezone}>{timezone}</option>
+          )}
+          {TZ_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      </div>
+      <div className="text-[11px] text-muted mt-1.5 leading-relaxed max-w-[560px]">
+        {tr(lang, 'tz_hint')}
+      </div>
     </div>
   );
 }
