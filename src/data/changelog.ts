@@ -13,6 +13,26 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.31',
+    date: '2026-07-05',
+    items: {
+      ru: [
+        'Статистика — важный фикс даты выполнения. Раньше в положительных часовых поясах (MSK, JST…) задача, выполненная ночью (например в 02:25 MSK 05.07), сохранялась с датой 04.07 — потому что today = new Date().toISOString().slice(0,10) возвращал UTC-дату (23:25 UTC 04.07). Переписали все места (11 точек — store, Tasks, Settings, MetricChips, seed в db.ts) на новую todayISO(tz?) в src/lib/utils.ts. Теперь дата берётся по локальному дню пользователя, а если задан IANA TZ (через новый селектор в Настройках) — по этому поясу.',
+        'Настройки → Общие: новый селектор «Часовой пояс» (27 популярных IANA таймзон плюс UTC). По умолчанию — auto (локальный TZ системы, определяется через Intl); можно насильно выбрать UTC / Europe/Moscow / Asia/Tokyo / America/New_York и т.п. — полезно если вы в одном часовом поясе, а команда/отчётность по другому. Значение сохраняется в локальной SQLite (settings.timezone), валидируется через try/catch на Intl.DateTimeFormat — мусор в ключе откатит к auto без краша.',
+        'Помощь — новый блок «Поддержать разработчика». Правая сторона вкладки Помощь теперь не пустая — там sticky-aside с четырьмя способами поддержать проект: CloudTips (Россия, карты РФ), USDT TRC-20, TON, USDT ERC-20. Каждый крипто-вариант разворачивается в карточку с адресом (моношрифт, select-all), кнопкой Копировать и QR-кодом 128×128 (SVG, генерируется локально через qrcode.react, без внешних запросов, работает offline). На узких экранах (<1280px) aside схлопывается вниз основной колонки.',
+        'Поддержка — важный дисклеймер про сети крипты: перевод только в указанной валюте, в указанной сети, на соответствующий адрес. Отправка USDT TRC-20 на ERC-20-адрес (или наоборот), TON на Ethereum-адрес — безвозвратная потеря средств. Дисклеймер стоит сразу под всеми способами в приложении и на лэндинге.',
+        'Зависимости: добавлен qrcode.react (~5 KB gzipped, генерация QR локально). Без сетевых запросов — важно для offline-менталитета приложения и для privacy.',
+      ],
+      en: [
+        'Statistics — important fix for the completion date. Previously, in positive UTC offsets (MSK, JST…), a task completed at night (e.g. 02:25 MSK on Jul 5) was saved with the date Jul 4 — because today = new Date().toISOString().slice(0,10) returned the UTC date (23:25 UTC Jul 4). Rewrote all call sites (11 — store, Tasks, Settings, MetricChips, seed in db.ts) to the new todayISO(tz?) in src/lib/utils.ts. The date is now taken from the user’s local day, and if an IANA TZ is chosen (via the new selector in Settings) — from that timezone.',
+        'Settings → General: new «Timezone» selector (27 popular IANA timezones plus UTC). Default is auto (system local TZ, detected via Intl); you can force UTC / Europe/Moscow / Asia/Tokyo / America/New_York etc. — useful if you are in one timezone but reporting/team lives in another. The value is stored in local SQLite (settings.timezone) and validated via try/catch on Intl.DateTimeFormat — garbage in the key falls back to auto without crashing.',
+        'Help — new «Support the developer» block. The right side of the Help tab is no longer empty — it now has a sticky aside with four ways to support the project: CloudTips (Russia, RU cards), USDT TRC-20, TON, USDT ERC-20. Each crypto option expands into a card with the address (monospace, select-all), a Copy button, and a 128×128 QR code (SVG, generated locally via qrcode.react — no external requests, works offline). On narrow screens (<1280px) the aside collapses to the bottom of the main column.',
+        'Support — important crypto network disclaimer: send only the specified currency on the specified network to the matching address. Sending USDT TRC-20 to an ERC-20 address (or vice versa), TON to an Ethereum address — permanent loss of funds. The disclaimer sits directly under all methods in the app and on the landing page.',
+        'Dependencies: added qrcode.react (~5 KB gzipped, QR generation is local). No network requests — important for the app’s offline mentality and for privacy.',
+      ],
+    },
+  },
+  {
     version: '0.9.30',
     date: '2026-07-05',
     items: {

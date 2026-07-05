@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { CheckSquare, Loader2, PauseCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { daysUntilDeadline } from '../lib/utils';
+import { daysUntilDeadline, todayISO } from '../lib/utils';
 
 /**
  * Compact metric chips shown in the Topbar on the Tasks screen.
@@ -29,7 +29,7 @@ export function MetricChips() {
     const pausedStatusIds = new Set(
       statuses.filter(s => s.behavior === 'bottom' || s.behavior === 'paused').map(s => s.id),
     );
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayISO(useStore.getState().timezone);
     // v0.8.6: «внимание» — дедлайн в [today; today+3], не просрочен, активная задача.
     // v0.9.2 (№1): в business-режиме «3 дня» = 3 будних дня, в calendar = 3 календарных.
     let total = 0, inProgress = 0, paused = 0, done = 0, overdue = 0, attention = 0;

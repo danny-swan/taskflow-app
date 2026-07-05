@@ -91,6 +91,9 @@ interface State {
   customThemeBg: string;
   customThemeText: string;
 
+  // v0.9.31: часовой пояс — 'auto' = локальная TZ системы, либо IANA (Europe/Moscow, UTC, etc.)
+  timezone: string;
+
   // Derived helpers
   getDeletedStatusId(): number | undefined;
   visibleStatuses(): Status[];                 // for Tasks screen (no technical, no hidden)
@@ -114,6 +117,7 @@ interface State {
   setAutocleanupMode(m: 'weekday' | 'age'): void;
   setAutocleanupDay(d: number): void;
   setAutocleanupMinAgeDays(n: number): void;
+  setTimezone(tz: string): void; // v0.9.31
 
   runAutoCleanup(opts?: { manual?: boolean; ignoreAge?: boolean }): { count: number; ids: number[] }; // v0.9.30: возвращает id архивированных для Undo
   checkAndRunAutoCleanupOnStartup(): number; // catch-up логика; возвращает кол-во архивированных (0 если не надо)
@@ -190,6 +194,9 @@ export const useStore = create<State>((set, get) => ({
   customThemeBg: '#F7F6F2',
   customThemeText: '#28251D',
 
+  // v0.9.31: часовой пояс — 'auto' по умолчанию (локальная TZ системы)
+  timezone: 'auto',
+
   getDeletedStatusId() {
     return get().statuses.find(s => s.is_technical === 1 && s.name === 'Удалено')?.id;
   },
@@ -262,6 +269,12 @@ export const useStore = create<State>((set, get) => ({
       customThemeAccent: (map.custom_theme_accent && /^#[0-9A-Fa-f]{6}$/.test(map.custom_theme_accent)) ? map.custom_theme_accent : '#5B7FB8',
       customThemeBg: (map.custom_theme_bg && /^#[0-9A-Fa-f]{6}$/.test(map.custom_theme_bg)) ? map.custom_theme_bg : '#F7F6F2',
       customThemeText: (map.custom_theme_text && /^#[0-9A-Fa-f]{6}$/.test(map.custom_theme_text)) ? map.custom_theme_text : '#28251D',
+      // v0.9.31: часовой пояс (auto/UTC/IANA); валидация через try Intl.
+      timezone: (function() {
+        const v = map.timezone;
+        if (!v || v === 'auto') return 'auto';
+        try { new Intl.DateTimeFormat('en-CA', { timeZone: v }); return v; } catch { return 'auto'; }
+      })(),
       quote,
       columnWidths,
       recentEmojis,
@@ -289,7 +302,7 @@ export const useStore = create<State>((set, get) => ({
     // отсутствия пользователя дедлайн у какой-то задачи пересекся впервые — зафиксируем его.
     // Не ломаем init если что-то пошло не так: это вторичная аналитика.
     try {
-      const created = detectOverdueEvents(get().tasks, get().statuses, todayISO());
+      const created = detectOverdueEvents(get().tasks, get().statuses, todayISO(get().timezone));
       if (created > 0) {
         console.log(`[overdue] зафиксировано ${created} новых пересечений дедлайна`);
         set(s => ({ overdueTick: s.overdueTick + 1 }));
@@ -388,6 +401,15 @@ export const useStore = create<State>((set, get) => ({
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['autocleanup_min_age_days', String(clamped)]);
     set({ autocleanupMinAgeDays: clamped });
   },
+  setTimezone(tz) {
+    // v0.9.31: 'auto' или любой валидный IANA TZ. Невалидные — fallback на 'auto'.
+    let clean = 'auto';
+    if (tz && tz !== 'auto') {
+      try { new Intl.DateTimeFormat('en-CA', { timeZone: tz }); clean = tz; } catch { clean = 'auto'; }
+    }
+    db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['timezone', clean]);
+    set({ timezone: clean });
+  },
   /**
    * v0.9.30: архивирует выполненные задачи в «Архив».
    *
@@ -429,7 +451,7 @@ export const useStore = create<State>((set, get) => ({
 
     if (candidates.length === 0) {
       if (!manual) {
-        const today = nowIso.slice(0, 10);
+        const today = todayISO(get().timezone);
         db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['autocleanup_last_run', today]);
         set({ autocleanupLastRun: today });
       }
@@ -445,7 +467,7 @@ export const useStore = create<State>((set, get) => ({
     logger.info('autocleanup done', { archived: archivedIds.length, manual, ignoreAge, minAgeDays: state.autocleanupMinAgeDays });
 
     if (!manual) {
-      const today = nowIso.slice(0, 10);
+      const today = todayISO(get().timezone);
       db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['autocleanup_last_run', today]);
       set({ autocleanupLastRun: today });
     }
@@ -464,7 +486,7 @@ export const useStore = create<State>((set, get) => ({
     if (!state.autocleanupEnabled) return 0;
 
     const now = new Date();
-    const today = now.toISOString().slice(0, 10);
+    const today = todayISO(get().timezone);
     if (state.autocleanupLastRun === today) return 0; // уже запускали сегодня
 
     // v0.9.30: режим 'age' — просто запускаем каждый день, фильтр по возрасту.
@@ -497,7 +519,7 @@ export const useStore = create<State>((set, get) => ({
 
   addTask(p) {
     const now = new Date().toISOString();
-    const today = now.slice(0, 10);
+    const today = todayISO(get().timezone);
     const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM tasks WHERE status_id=?',
       [p.status_id])?.m) ?? 0;
     const startDate = p.start_date || today;
@@ -515,7 +537,7 @@ export const useStore = create<State>((set, get) => ({
     // v0.9.2 (№3): если создали задачу с уже прошедшим дедлайном — тоже фиксируем как пересечение.
     try {
       const fresh = get().tasks.find(t => t.id === r.lastInsertRowid);
-      if (fresh && detectOverdueEventForTask(fresh, get().statuses, todayISO())) {
+      if (fresh && detectOverdueEventForTask(fresh, get().statuses, todayISO(get().timezone))) {
         set(s => ({ overdueTick: s.overdueTick + 1 }));
       }
     } catch (e) { console.warn('[overdue] detect after addTask failed:', e); }
@@ -524,7 +546,7 @@ export const useStore = create<State>((set, get) => ({
   },
   updateTask(id, p) {
     const now = new Date().toISOString();
-    const today = now.slice(0, 10);
+    const today = todayISO(get().timezone);
     const fields: string[] = [];
     const vals: any[] = [];
     let patch: Partial<Task> = { ...p };
@@ -558,7 +580,7 @@ export const useStore = create<State>((set, get) => ({
     if (p.deadline !== undefined || p.status_id !== undefined) {
       try {
         const fresh = get().tasks.find(t => t.id === id);
-        if (fresh && detectOverdueEventForTask(fresh, get().statuses, todayISO())) {
+        if (fresh && detectOverdueEventForTask(fresh, get().statuses, todayISO(get().timezone))) {
           set(s => ({ overdueTick: s.overdueTick + 1 }));
         }
       } catch (e) { console.warn('[overdue] detect after updateTask failed:', e); }

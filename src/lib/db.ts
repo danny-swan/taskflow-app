@@ -210,11 +210,18 @@ async function tauriSeed(): Promise<void> {
   const statusId = statusRows[0]?.id ?? 1;
   const tagId = tagRows[0]?.id ?? null;
 
+  // v0.9.31: используем локальную дату вместо UTC.
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const y = today.getFullYear();
+  const m = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+  const todayStr = `${y}-${m}-${day}`;
   const deadline = new Date(today);
   deadline.setDate(deadline.getDate() + 3);
-  const deadlineStr = deadline.toISOString().slice(0, 10);
+  const dy = deadline.getFullYear();
+  const dm = String(deadline.getMonth() + 1).padStart(2, '0');
+  const dd = String(deadline.getDate()).padStart(2, '0');
+  const deadlineStr = `${dy}-${dm}-${dd}`;
 
   await d.execute(
     `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
@@ -388,11 +395,18 @@ function seed(d: Database) {
   });
 
   // Welcome seed task (single task)
+  // v0.9.31: локальная дата (не UTC), чтобы у пользователей в TZ +N не сдвигалось на день назад.
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const y = today.getFullYear();
+  const m = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+  const todayStr = `${y}-${m}-${day}`;
   const deadlineDate = new Date(today);
   deadlineDate.setDate(deadlineDate.getDate() + 3);
-  const deadlineStr = deadlineDate.toISOString().slice(0, 10);
+  const dy = deadlineDate.getFullYear();
+  const dm = String(deadlineDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(deadlineDate.getDate()).padStart(2, '0');
+  const deadlineStr = `${dy}-${dm}-${dd}`;
 
   // Get the "Сегодня" status (index 1 → id 2) and "PRS" tag (index 4 → id 5)
   const statusStmt = d.prepare(`SELECT id FROM statuses WHERE name='Сегодня' LIMIT 1`);

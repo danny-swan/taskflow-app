@@ -9,8 +9,39 @@ export function formatDate(s?: string | null): string {
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
-export function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+/**
+ * v0.9.31: возвращает сегодняшнюю дату в формате YYYY-MM-DD.
+ *
+ * ВАЖНО: до v0.9.31 функция использовала `.toISOString().slice(0, 10)`,
+ * который возвращает дату по UTC. Из-за этого пользователи в положительных
+ * часовых поясах (MSK +3, JST +9 и т.п.) видели баг: задача завершённая
+ * ночью (например, 05.07 в 02:25 MSK = 04.07 23:25 UTC) сохранялась с
+ * датой 04.07 в Статистике.
+ *
+ * Теперь по умолчанию берём локальный день пользователя. Если задан tz
+ * (IANA timezone, например 'Europe/Moscow' или 'UTC') — используем его.
+ * Значение 'auto' или undefined = локальная TZ системы.
+ */
+export function todayISO(tz?: string): string {
+  const d = new Date();
+  if (tz && tz !== 'auto') {
+    // Используем Intl для получения даты в конкретной TZ.
+    // Формат 'en-CA' даёт YYYY-MM-DD — самый простой способ.
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(d);
+    } catch {
+      // Fallback если tz невалидный — используем локальную.
+    }
+  }
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 export function daysBetween(a?: string | null, b?: string | null): number | null {
