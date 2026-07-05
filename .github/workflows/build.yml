@@ -300,6 +300,12 @@ jobs:
 
   # v0.9.32: объединённый release-job — скачивает артефакты
   # обоих платформ и публикует GitHub Release одним списком.
+  #
+  # v0.9.35: разделение на stable / pre-release каналы.
+  # Теги вида v1.2.3           → stable release, latest.json обновляется (auto-updater подтянет).
+  # Теги вида v1.2.3-dev.N     → pre-release, latest.json НЕ публикуется (юзеры остаются на stable).
+  # Теги вида v1.2.3-beta.N    → pre-release, latest.json НЕ публикуется.
+  # Теги вида v1.2.3-rc.N      → pre-release, latest.json НЕ публикуется.
   release:
     needs: [build, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
@@ -308,6 +314,21 @@ jobs:
       contents: write
 
     steps:
+      - name: Determine release channel
+        id: channel
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" =~ -(dev|beta|rc|alpha)(\.[0-9]+)?$ ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "publish_latest_json=false" >> $GITHUB_OUTPUT
+            echo "Tag $TAG → pre-release channel (latest.json will NOT be updated)"
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "publish_latest_json=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG → stable channel (latest.json WILL be updated)"
+          fi
+
       - name: Download Windows release files
         uses: actions/download-artifact@v4
         with:
@@ -315,6 +336,7 @@ jobs:
           path: release-files/windows
 
       - name: Download latest.json
+        if: steps.channel.outputs.publish_latest_json == 'true'
         uses: actions/download-artifact@v4
         with:
           name: latest-windows
@@ -329,7 +351,8 @@ jobs:
       - name: List release files
         run: find release-files -type f
 
-      - name: Create Release
+      - name: Create Stable Release
+        if: steps.channel.outputs.is_prerelease == 'false'
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -341,5 +364,20 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Pre-Release (no latest.json)
+        if: steps.channel.outputs.is_prerelease == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-files/windows/**/*.exe
+            release-files/windows/**/*.msi
+            release-files/windows/taskflow.exe
+            release-files/macos/**/*.dmg
+          generate_release_notes: true
+          draft: false
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
