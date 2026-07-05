@@ -314,16 +314,28 @@ export const useStore = create<State>((set, get) => ({
     // v0.8.13: task_templates выбираем в try/catch — таблица появляется после миграции v2.
     // Если миграция ещё не прошла (экзотический крайний случай — сбой в процессе init),
     // приложение всё равно работает — просто без шаблонов.
+    //
+    // v0.9.35-dev.1: soft delete — везде фильтруем deleted_at IS NULL.
+    // После миграции v5 колонка есть везде; на экзотических старых базах без v5
+    // запрос упадёт — это ОК, мигратор к этому моменту должен был отработать.
     let taskTemplates: TaskTemplate[] = [];
     try {
-      taskTemplates = db.all<TaskTemplate>('SELECT * FROM task_templates ORDER BY sort_order, id');
+      taskTemplates = db.all<TaskTemplate>(
+        'SELECT * FROM task_templates WHERE deleted_at IS NULL ORDER BY sort_order, id'
+      );
     } catch (e) {
       console.warn('[refresh] task_templates not available yet:', e);
     }
     set({
-      statuses: db.all<Status>('SELECT * FROM statuses ORDER BY sort_order'),
-      tags: db.all<Tag>('SELECT * FROM tags ORDER BY sort_order'),
-      tasks: db.all<Task>('SELECT * FROM tasks ORDER BY sort_order'),
+      statuses: db.all<Status>(
+        'SELECT * FROM statuses WHERE deleted_at IS NULL ORDER BY sort_order'
+      ),
+      tags: db.all<Tag>(
+        'SELECT * FROM tags WHERE deleted_at IS NULL ORDER BY sort_order'
+      ),
+      tasks: db.all<Task>(
+        'SELECT * FROM tasks WHERE deleted_at IS NULL ORDER BY sort_order'
+      ),
       taskTemplates,
     });
   },
@@ -585,7 +597,15 @@ export const useStore = create<State>((set, get) => ({
     }
   },
   permanentlyDeleteTask(id) {
-    db.run('DELETE FROM tasks WHERE id=?', [id]);
+    // v0.9.35-dev.1: soft delete. Физически строка остаётся — это нужно для
+    // корректного sync (другие устройства должны увидеть deleted_at
+    // и скрыть у себя, а не считать «нету — стало быть не было и вовсе»).
+    // Полное hard-delete делает сервисный воркер через N дней (не в этой версии).
+    const now = new Date().toISOString();
+    db.run(
+      'UPDATE tasks SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
+      [now, now, id]
+    );
     get().refresh();
   },
   softDeleteTask(id) {
@@ -623,8 +643,18 @@ export const useStore = create<State>((set, get) => ({
     get().refresh();
   },
   deleteTag(id) {
-    db.run('UPDATE tasks SET tag_id=NULL WHERE tag_id=?', [id]);
-    db.run('DELETE FROM tags WHERE id=?', [id]);
+    // v0.9.35-dev.1: soft delete. Сначала отвязываем тег от всех задач
+    // (бампая version, чтобы sync подхватил это изменение), затем тег помечаем
+    // как удалённый.
+    const now = new Date().toISOString();
+    db.run(
+      'UPDATE tasks SET tag_id=NULL, updated_at=?, version=version+1 WHERE tag_id=?',
+      [now, id]
+    );
+    db.run(
+      'UPDATE tags SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
+      [now, now, id]
+    );
     get().refresh();
   },
 
@@ -649,9 +679,23 @@ export const useStore = create<State>((set, get) => ({
     // v0.8.11: «Выполнено» (единственный не-technical статус с behavior='archive') системный и неудаляемый:
     // без него сломается кнопка-галочка «Выполнить» на карточке (не найдёт куда переместить).
     if (status?.behavior === 'archive') return;
-    const first = db.get<{ id: number }>('SELECT id FROM statuses WHERE id != ? AND is_technical=0 ORDER BY sort_order LIMIT 1', [id]);
-    if (first) db.run('UPDATE tasks SET status_id=? WHERE status_id=?', [first.id, id]);
-    db.run('DELETE FROM statuses WHERE id=?', [id]);
+    // v0.9.35-dev.1: soft delete. Переливаем задачи на первый видимый статус
+    // (также с бампом version), сам статус помечаем удалённым.
+    const now = new Date().toISOString();
+    const first = db.get<{ id: number }>(
+      'SELECT id FROM statuses WHERE id != ? AND is_technical=0 AND deleted_at IS NULL ORDER BY sort_order LIMIT 1',
+      [id]
+    );
+    if (first) {
+      db.run(
+        'UPDATE tasks SET status_id=?, updated_at=?, version=version+1 WHERE status_id=?',
+        [first.id, now, id]
+      );
+    }
+    db.run(
+      'UPDATE statuses SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
+      [now, now, id]
+    );
     get().refresh();
   },
   reorderStatuses(ids) {
@@ -722,7 +766,12 @@ export const useStore = create<State>((set, get) => ({
   },
 
   deleteTemplate(id) {
-    db.run('DELETE FROM task_templates WHERE id=?', [id]);
+    // v0.9.35-dev.1: soft delete.
+    const now = new Date().toISOString();
+    db.run(
+      'UPDATE task_templates SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
+      [now, now, id]
+    );
     get().refresh();
   },
 

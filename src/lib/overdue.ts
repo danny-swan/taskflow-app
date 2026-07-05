@@ -45,9 +45,11 @@ export function detectOverdueEventForTask(
 
   // Проверяем последнее событие по этой задаче.
   try {
+    // v0.9.35-dev.1: игнорируем удалённые события (deleted_at IS NULL).
     const last = db.get<{ deadline_snapshot: string }>(
       `SELECT deadline_snapshot FROM overdue_events
-       WHERE task_id = ? ORDER BY id DESC LIMIT 1`,
+       WHERE task_id = ? AND deleted_at IS NULL
+       ORDER BY id DESC LIMIT 1`,
       [task.id],
     );
     if (last && last.deadline_snapshot === task.deadline) {
@@ -102,9 +104,11 @@ export function detectOverdueEvents(
 export function overdueEventsByDate(fromDate: string, toDate: string): Map<string, number> {
   const map = new Map<string, number>();
   try {
+    // v0.9.35-dev.1: только актуальные события (deleted_at IS NULL).
     const rows = db.all<{ event_date: string; c: number }>(
       `SELECT event_date, COUNT(*) AS c FROM overdue_events
        WHERE event_date >= ? AND event_date <= ?
+         AND deleted_at IS NULL
        GROUP BY event_date`,
       [fromDate, toDate],
     );

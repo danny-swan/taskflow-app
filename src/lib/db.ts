@@ -543,6 +543,9 @@ export async function initDb(): Promise<void> {
 
     // Pull data from Tauri DB into webDb (in-memory) so sync calls work
     const d = await getTauriDb();
+    // v0.9.35-dev.1: SELECT * во всех таблицах возвращает sync-колонки,
+    // которые мы добавили миграцией v5. Копируем всё в webDb — она должна
+    // работать как полное зеркало Tauri-DB.
     const statuses: any[] = await d.select('SELECT * FROM statuses ORDER BY sort_order');
     const tags: any[] = await d.select('SELECT * FROM tags ORDER BY sort_order');
     const tasks: any[] = await d.select('SELECT * FROM tasks ORDER BY sort_order');
@@ -560,21 +563,43 @@ export async function initDb(): Promise<void> {
     webDb = new SQL!.Database();
     ensureSchema(webDb);
     migrate(webDb);
+    // v0.9.35-dev.1: накатываем PRAGMA-миграции (v2–v5) также для webDb
+    // в Tauri-режиме. Схема должна быть готова принять sync-колонки
+    // до hydrate. Сам backfill uuid'ов внутри v5 отработает вхолостую
+    // (webDb пуст, строк в SELECT WHERE uuid IS NULL нет) — hydrate
+    // сам зальёт правильные uuid из Tauri.
+    try {
+      await runMigrations(webMigrationApi(webDb), { onLog: (m) => console.log(m) });
+    } catch (e) {
+      console.error('[migrate][webDb-cache]', e);
+    }
+
+    // v0.9.35-dev.1: helper — берём sync-колонки из строки Tauri;
+    // если в старой базе их нет — подставляем NULL/1 (безопасные дефолты).
+    const syncCols = (r: any) => [
+      r.uuid ?? null,
+      r.deleted_at ?? null,
+      r.version ?? 1,
+      r.client_id ?? null,
+    ];
 
     // Populate webDb from Tauri data
     for (const s of statuses) {
       webDb.run(
-        `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical,hidden,default_collapsed) VALUES (?,?,?,?,?,?,?,?,?)`,
-        [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical, s.hidden ?? 0, s.default_collapsed ?? 0]
+        `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical,hidden,default_collapsed,updated_at,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical, s.hidden ?? 0, s.default_collapsed ?? 0, s.updated_at ?? new Date().toISOString(), ...syncCols(s)]
       );
     }
     for (const t of tags) {
-      webDb.run(`INSERT OR REPLACE INTO tags (id,name,color,sort_order) VALUES (?,?,?,?)`, [t.id, t.name, t.color, t.sort_order]);
+      webDb.run(
+        `INSERT OR REPLACE INTO tags (id,name,color,sort_order,updated_at,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.name, t.color, t.sort_order, t.updated_at ?? new Date().toISOString(), ...syncCols(t)]
+      );
     }
     for (const t of tasks) {
       webDb.run(
-        `INSERT OR REPLACE INTO tasks (id,title,comment,tag_id,status_id,start_date,deadline,finish_date,created_at,updated_at,sort_order,archived) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [t.id, t.title, t.comment, t.tag_id, t.status_id, t.start_date, t.deadline, t.finish_date, t.created_at, t.updated_at, t.sort_order, t.archived]
+        `INSERT OR REPLACE INTO tasks (id,title,comment,tag_id,status_id,start_date,deadline,finish_date,created_at,updated_at,sort_order,archived,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.title, t.comment, t.tag_id, t.status_id, t.start_date, t.deadline, t.finish_date, t.created_at, t.updated_at, t.sort_order, t.archived, ...syncCols(t)]
       );
     }
     for (const s of settings) {
@@ -582,14 +607,14 @@ export async function initDb(): Promise<void> {
     }
     for (const t of templates) {
       webDb.run(
-        `INSERT OR REPLACE INTO task_templates (id,name,title,comment,status_id,tag_id,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-        [t.id, t.name, t.title, t.comment, t.status_id, t.tag_id, t.sort_order, t.created_at, t.updated_at]
+        `INSERT OR REPLACE INTO task_templates (id,name,title,comment,status_id,tag_id,sort_order,created_at,updated_at,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.name, t.title, t.comment, t.status_id, t.tag_id, t.sort_order, t.created_at, t.updated_at, ...syncCols(t)]
       );
     }
     for (const e of overdueEvents) {
       webDb.run(
-        `INSERT OR REPLACE INTO overdue_events (id, task_id, deadline_snapshot, event_date, created_at) VALUES (?,?,?,?,?)`,
-        [e.id, e.task_id, e.deadline_snapshot, e.event_date, e.created_at]
+        `INSERT OR REPLACE INTO overdue_events (id, task_id, deadline_snapshot, event_date, created_at, updated_at, uuid, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [e.id, e.task_id, e.deadline_snapshot, e.event_date, e.created_at, e.updated_at ?? e.created_at, ...syncCols(e)]
       );
     }
   } else {

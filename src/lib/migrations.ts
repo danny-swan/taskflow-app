@@ -15,6 +15,8 @@
  * stamp existing DBs as v1 and start applying any future migrations from v2.
  */
 
+import { uuidv7 } from './uuid';
+
 // Public type — exported so callers can register/inspect migrations.
 export type Migration = {
   version: number;
@@ -183,6 +185,135 @@ export const MIGRATIONS: Migration[] = [
       // Запись создаём только если её ещё нет, чтобы не перетирать
       // пользовательское значение при ретри-миграции.
       await exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('overdue_mode', 'calendar')`);
+    },
+  },
+  {
+    version: 5,
+    description: 'Sync foundation: uuid/updated_at/deleted_at/version/client_id + backfill (v0.9.35-dev.1)',
+    up: async ({ exec, execIgnoreDuplicate, select }) => {
+      // v0.9.35-dev.1: готовим локальную схему к sync через Supabase.
+      //
+      // Ключевые принципы:
+      //   * INTEGER id ОСТАЁТСЯ — локальный PK, быстрые JOIN, меньше
+      //     рефакторинга. uuid — «внешний» идентификатор для sync-слоя
+      //     (тот же UUIDv7, что и sync_*.id на сервере).
+      //   * Soft delete везде: DELETE FROM в пользовательском UI больше
+      //     НЕ выполняем — вместо этого UPDATE deleted_at = datetime('now').
+      //   * version бампается на каждый UPDATE (клиент-сайд триггер не ставим,
+      //     но сеттеры в store.ts будут обновлять явно).
+      //   * client_id — UUIDv7 этого устанавления, генерится один раз
+      //     и хранится в settings('client_id'). На каждой строке тот, кто
+      //     последним её трогал.
+      //
+      // UNIQUE(uuid) нельзя добавить через ALTER TABLE ADD COLUMN в SQLite,
+      // поэтому делаем CREATE UNIQUE INDEX после backfill — как partial index
+      // WHERE uuid IS NOT NULL, чтобы NULL-значения (между ADD COLUMN
+      // и backfill внутри этой же миграции) не ломали ограничение.
+
+      // ==============================================================
+      // 1. Добавляем колонки во все пять таблиц (идемпотентно).
+      // ==============================================================
+      const tables = ['tasks', 'tags', 'statuses', 'task_templates', 'overdue_events'];
+
+      for (const t of tables) {
+        // uuid TEXT — пока не NOT NULL. Backfill в шаге 2, UNIQUE индекс в шаге 3.
+        await execIgnoreDuplicate(`ALTER TABLE ${t} ADD COLUMN uuid TEXT`);
+        // deleted_at TEXT (наличие → строка удалена).
+        await execIgnoreDuplicate(`ALTER TABLE ${t} ADD COLUMN deleted_at TEXT`);
+        // version INTEGER, по-умолчанию 1. Бампаем в setter'ах store.
+        await execIgnoreDuplicate(`ALTER TABLE ${t} ADD COLUMN version INTEGER NOT NULL DEFAULT 1`);
+        // client_id TEXT — кто сделал последнее изменение. NULLable
+        // на время backfill'а текущих данных; при первом запуске store
+        // накатит client_id на все строки (как отметку «это моё устройство»).
+        await execIgnoreDuplicate(`ALTER TABLE ${t} ADD COLUMN client_id TEXT`);
+      }
+
+      // updated_at — только там где её ещё нет.
+      // tasks: есть (в baseline). task_templates: есть (с v2).
+      // Нужно добавить в: tags, statuses, overdue_events.
+      //
+      // ❗ SQLite не допускает non-константный DEFAULT (`datetime('now')`)
+      //   в ALTER TABLE ADD COLUMN. Поэтому добавляем NULLable без DEFAULT,
+      //   бэкфиллим текущим временем, а NOT NULL-инвариант держим на
+      //   уровне приложения (INSERT'ы в store.ts всегда указывают updated_at).
+      await execIgnoreDuplicate(`ALTER TABLE tags ADD COLUMN updated_at TEXT`);
+      await execIgnoreDuplicate(`ALTER TABLE statuses ADD COLUMN updated_at TEXT`);
+      await execIgnoreDuplicate(`ALTER TABLE overdue_events ADD COLUMN updated_at TEXT`);
+
+      // Бэкфиллим updated_at для существующих строк (новые INSERT'ы
+      // всегда ставят datetime('now') явно). Оборачиваем в try/catch
+      // — overdue_events могут отсутствовать в крайне старых базах.
+      for (const t of ['tags', 'statuses', 'overdue_events']) {
+        try {
+          await exec(
+            `UPDATE ${t} SET updated_at = datetime('now') WHERE updated_at IS NULL`,
+          );
+        } catch (e) {
+          console.warn(`[migrate v5] updated_at backfill skipped for ${t}:`, e);
+        }
+      }
+
+      // ==============================================================
+      // 2. Backfill uuid для всех существующих строк.
+      // ==============================================================
+      // Генерить UUIDv7 в SQL нельзя — SQLite не умеет.
+      // Читаем id'шки, генерируем на клиенте, UPDATE per row.
+      // На 100+ строках это быстро (миграция единовременно, не hot path).
+      for (const t of tables) {
+        try {
+          const rows = await select<{ id: number }>(`SELECT id FROM ${t} WHERE uuid IS NULL`);
+          for (const r of rows) {
+            await exec(`UPDATE ${t} SET uuid = ? WHERE id = ?`, [uuidv7(), r.id]);
+          }
+        } catch (e) {
+          // overdue_events или task_templates могут отсутствовать
+          // в крайне старых базах — не валим миграцию.
+          console.warn(`[migrate v5] uuid backfill skipped for ${t}:`, e);
+        }
+      }
+
+      // ==============================================================
+      // 3. UNIQUE-индексы на uuid (partial — чтобы NULL не блокировали).
+      // ==============================================================
+      for (const t of tables) {
+        try {
+          await exec(
+            `CREATE UNIQUE INDEX IF NOT EXISTS idx_${t}_uuid ` +
+            `ON ${t}(uuid) WHERE uuid IS NOT NULL`
+          );
+        } catch (e) {
+          console.warn(`[migrate v5] index idx_${t}_uuid skipped:`, e);
+        }
+      }
+
+      // ==============================================================
+      // 4. Клиентский client_id для этого установления.
+      // ==============================================================
+      // Генерится только если его ещё нет. Не перегенерируем при
+      // повторных запусках (INSERT OR IGNORE).
+      try {
+        const existing = await select<{ value: string }>(
+          `SELECT value FROM settings WHERE key = 'client_id'`
+        );
+        if (!existing[0]?.value) {
+          const clientId = uuidv7();
+          await exec(
+            `INSERT OR REPLACE INTO settings (key, value) VALUES ('client_id', ?)`,
+            [clientId]
+          );
+          // Заодно — протагиваем этот client_id во все существующие строки
+          // (чтобы история тоже была «моя»).
+          for (const t of tables) {
+            try {
+              await exec(`UPDATE ${t} SET client_id = ? WHERE client_id IS NULL`, [clientId]);
+            } catch (e) {
+              console.warn(`[migrate v5] client_id backfill skipped for ${t}:`, e);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[migrate v5] client_id setup skipped:', e);
+      }
     },
   },
 ];
