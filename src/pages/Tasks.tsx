@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useStore, Task } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { daysUntilDeadline } from '../lib/utils';
+import { daysUntilDeadline, todayISO } from '../lib/utils';
 import { StatusGroup } from '../components/StatusGroup';
 import { TaskModal } from '../components/TaskModal';
 import { NewTaskModal } from '../components/NewTaskModal';
@@ -126,7 +126,7 @@ export function TasksPage() {
 
   // v0.9.0: вынесли фильтрацию в отдельный useMemo — и Список, и Канбан работают с одними и теми же задачами.
   const filtered = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayISO(useStore.getState().timezone);
     return tasks.filter(t => {
       if (query && !(t.title.toLowerCase().includes(query.toLowerCase()) ||
         (t.comment || '').toLowerCase().includes(query.toLowerCase()))) return false;
