@@ -918,9 +918,10 @@ export function HelpPage() {
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
-      {/* v0.9.31: 2-колоночный layout — контент + sticky SupportBlock справа.
-          На узких экранах схлопывается в одну колонку. */}
-      <div className="grid gap-8 xl:grid-cols-[minmax(0,42rem)_320px] items-start">
+      {/* v0.9.32: fluid 2-колоночный layout — aside ширины clamp(280px, 22vw, 360px)
+          подстраивается под ширину окна; контент занимает оставшееся место.
+          Переход на sticky-aside — с lg (1024px). */}
+      <div className="help-layout grid gap-8 items-start">
         <div className="min-w-0">
           <h2 className="font-display text-[18px] font-semibold mb-1">{tr(lang, 'help_title')}</h2>
           <div className="text-[12px] text-muted mb-5">TaskFlow v{latest.version}</div>
@@ -961,17 +962,27 @@ export function HelpPage() {
             <WhatsNewSection lang={lang} />
             <AboutSection lang={lang} />
 
-            {/* v0.9.31: на xl+ SupportBlock в sticky aside справа, на меньших внизу основной колонки. */}
-            <div className="xl:hidden">
+            {/* v0.9.32: на lg+ SupportBlock в sticky aside справа, на меньших внизу основной колонки. */}
+            <div className="help-support-inline">
               <SupportBlock />
             </div>
           </div>
         </div>
 
-        <div className="hidden xl:block sticky top-4 self-start">
+        <div className="help-support-aside sticky top-4 self-start min-w-0">
           <SupportBlock />
         </div>
       </div>
+
+      <style>{`
+        .help-layout { grid-template-columns: minmax(0, 1fr); }
+        .help-support-aside { display: none; }
+        @media (min-width: 1024px) {
+          .help-layout { grid-template-columns: minmax(0, 1fr) clamp(280px, 22vw, 360px); }
+          .help-support-inline { display: none; }
+          .help-support-aside { display: block; }
+        }
+      `}</style>
     </div>
   );
 }
