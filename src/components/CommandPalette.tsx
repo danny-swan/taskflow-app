@@ -15,7 +15,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, ListTodo, Calendar, LayoutDashboard, BarChart3, Settings as SettingsIcon,
-  HelpCircle, Plus, Sun, LayoutList,
+  HelpCircle, Plus, Sun, LayoutList, X,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
@@ -212,7 +212,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             spellCheck={false}
             autoComplete="off"
           />
-          <kbd className="hidden sm:inline text-[10px] text-muted border border-border-soft rounded px-1.5 py-0.5">Esc</kbd>
+          {/* v0.9.30: кликабельный крестик вместо бэйджа Esc */}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={tr(lang, 'palette_close')}
+            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-md border border-border-soft text-muted hover:text-text hover:bg-surface-alt transition-colors"
+          >
+            <X size={14} />
+          </button>
         </div>
 
         <div ref={listRef} className="max-h-[50vh] overflow-y-auto py-2">

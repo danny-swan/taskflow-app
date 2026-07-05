@@ -81,7 +81,8 @@ interface State {
 
   // v0.9.28: автоочистка выполненных задач
   autocleanupEnabled: boolean;           // вкл/выкл автозапуска при старте
-  autocleanupDay: number;                // день недели (0=Вс ... 6=Сб), дефолт 0 (Вс)
+  autocleanupMode: 'weekday' | 'age';    // v0.9.30: режим автоочистки
+  autocleanupDay: number;                // день недели (0=Вс ... 6=Сб), дефолт 1 (Пн)
   autocleanupMinAgeDays: number;         // возрастной фильтр (дефолт 7)
   autocleanupLastRun: string | null;     // ISO-дата (YYYY-MM-DD) последнего cleanup, или null
 
@@ -110,10 +111,11 @@ interface State {
 
   // v0.9.28: автоочистка выполненных
   setAutocleanupEnabled(v: boolean): void;
+  setAutocleanupMode(m: 'weekday' | 'age'): void;
   setAutocleanupDay(d: number): void;
   setAutocleanupMinAgeDays(n: number): void;
 
-  runAutoCleanup(opts?: { manual?: boolean }): number; // возвращает количество архивированных задач
+  runAutoCleanup(opts?: { manual?: boolean; ignoreAge?: boolean }): { count: number; ids: number[] }; // v0.9.30: возвращает id архивированных для Undo
   checkAndRunAutoCleanupOnStartup(): number; // catch-up логика; возвращает кол-во архивированных (0 если не надо)
 
   // v0.9.29: кастом-тема
@@ -178,7 +180,8 @@ export const useStore = create<State>((set, get) => ({
   autoUpdateEnabled: true,
   // v0.9.28: автоочистка выполненных — дефолты (для новых БД opt-in через fresh_db_marker в init())
   autocleanupEnabled: false,
-  autocleanupDay: 0,
+  autocleanupMode: 'weekday',
+  autocleanupDay: 1, // v0.9.30: Пн по умолчанию (было Вс)
   autocleanupMinAgeDays: 7,
   autocleanupLastRun: null,
 
@@ -248,10 +251,11 @@ export const useStore = create<State>((set, get) => ({
       autoUpdateEnabled: map.auto_update_enabled !== '0',
       // v0.9.28: автоочистка — opt-out только для новых БД. Старые БД — opt-in.
       // Флаг autocleanup_seen ставится при первом видении ключа (ниже). Если ключа нет И все задачи отсутствуют — это свежая БД.
+      autocleanupMode: (map.autocleanup_mode === 'age' ? 'age' : 'weekday') as 'weekday' | 'age',
       autocleanupEnabled: map.autocleanup_enabled !== undefined
         ? map.autocleanup_enabled === '1'
         : (get().tasks.length === 0), // новая БД → ON по умолчанию
-      autocleanupDay: map.autocleanup_day !== undefined ? parseInt(map.autocleanup_day, 10) : 0,
+      autocleanupDay: map.autocleanup_day !== undefined ? parseInt(map.autocleanup_day, 10) : 1,
       autocleanupMinAgeDays: map.autocleanup_min_age_days !== undefined ? parseInt(map.autocleanup_min_age_days, 10) : 7,
       autocleanupLastRun: map.autocleanup_last_run || null,
       // v0.9.29: кастом-тема — читаем из БД, fallback на дефолты
@@ -363,10 +367,16 @@ export const useStore = create<State>((set, get) => ({
     set({ autoUpdateEnabled: v });
   },
 
-  // v0.9.28: автоочистка выполненных — 3 сеттера + 2 активные операции
+  // v0.9.28: автоочистка выполненных — сеттеры + 2 активные операции
   setAutocleanupEnabled(v) {
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['autocleanup_enabled', v ? '1' : '0']);
     set({ autocleanupEnabled: v });
+  },
+  // v0.9.30: режим автоочистки — 'weekday' (в опр. день, все вып.) или 'age' (по возрасту, каждый день)
+  setAutocleanupMode(m) {
+    const clean = m === 'age' ? 'age' : 'weekday';
+    db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['autocleanup_mode', clean]);
+    set({ autocleanupMode: clean });
   },
   setAutocleanupDay(d) {
     const clamped = Math.max(0, Math.min(6, d));
@@ -379,35 +389,37 @@ export const useStore = create<State>((set, get) => ({
     set({ autocleanupMinAgeDays: clamped });
   },
   /**
-   * v0.9.28: архивирует все выполненные задачи старше minAgeDays дней по finish_date.
-   * Soft-delete: задача переносится в статус «Удалено» (как клик по 🗑 на карточке).
-   * Задачи остаются в Статистике → Удалённые, откуда их можно восстановить.
+   * v0.9.30: архивирует выполненные задачи в «Архив».
    *
-   * Как определяется «выполненная»: таск в статусе с behavior='archive' НО is_technical=0.
-   * Это статус «Выполнено» (системный, но видимый). Technical «Удалено» исключается.
+   * Фильтр по возрасту:
+   *  • opts.ignoreAge=true — архивируем ВСЕ выполненные (кнопка «Почистить сейчас» + режим 'weekday' при автозапуске).
+   *  • opts.ignoreAge=false/undefined — старше minAgeDays по finish_date (режим 'age').
    *
-   * Записывает last_run в settings только при автоматическом запуске (opts.manual=false).
-   * При ручном (кнопка «Почистить сейчас») last_run НЕ обновляется — следующее воскресенье сработает по плану.
+   * v0.9.30 fix (баг пользователя): НЕ сбрасываем status_id на «Удалено», только archived=1.
+   * Так в Статистике задача остаётся со статусом «Выполнено», а не «Удалено».
+   * Логика softDeleteTask уже так работает — теперь автоочистка согласована.
+   *
+   * Возвращает { count, ids } — id ужны для Undo.
    */
   runAutoCleanup(opts) {
     const manual = opts?.manual === true;
+    const ignoreAge = opts?.ignoreAge === true;
     const state = get();
     const now = new Date();
     const nowIso = now.toISOString();
-    const minAgeMs = state.autocleanupMinAgeDays * 24 * 60 * 60 * 1000;
-    const cutoff = new Date(now.getTime() - minAgeMs);
 
     // Фильтруем «архивные» не-technical статусы (типично — только «Выполнено»).
     const doneStatusIds = new Set(
       state.statuses.filter(s => s.behavior === 'archive' && s.is_technical !== 1).map(s => s.id)
     );
-    if (doneStatusIds.size === 0) return 0;
+    if (doneStatusIds.size === 0) return { count: 0, ids: [] };
 
-    // Находим кандидатов: в done-статусе, ещё не архивированы (archived=0),
-    // с finish_date старше cutoff. Если finish_date нет — fallback на updated_at.
+    const cutoff = new Date(now.getTime() - state.autocleanupMinAgeDays * 24 * 60 * 60 * 1000);
+
     const candidates = state.tasks.filter(t => {
       if (!doneStatusIds.has(t.status_id)) return false;
       if (t.archived === 1) return false;
+      if (ignoreAge) return true;
       const dateStr = t.finish_date || t.updated_at;
       if (!dateStr) return false;
       const finishTime = new Date(dateStr).getTime();
@@ -416,31 +428,21 @@ export const useStore = create<State>((set, get) => ({
     });
 
     if (candidates.length === 0) {
-      // Даже если чистить нечего — при автозапуске фиксируем last_run,
-      // чтобы не перезапускаться 100 раз за вечер.
       if (!manual) {
         const today = nowIso.slice(0, 10);
         db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['autocleanup_last_run', today]);
         set({ autocleanupLastRun: today });
       }
-      return 0;
+      return { count: 0, ids: [] };
     }
 
-    const deletedId = state.getDeletedStatusId();
-    if (deletedId === undefined) {
-      // Статус «Удалено» должен существовать в любой базе — если его нет, база бита; просто выйдем.
-      console.warn('[autocleanup] технический статус «Удалено» не найден, очистка пропущена');
-      return 0;
-    }
-
-    // Массовое архивирование — в транзакции через цикл (SQLite/sql.js).
-    // Ставим archived=1 + status_id=deleted, сохраняя finish_date/updated_at.
-    let archived = 0;
+    // v0.9.30: СТАТУС НЕ МЕНЯЕМ — остаётся «Выполнено». Только archived=1.
+    const archivedIds: number[] = [];
     for (const t of candidates) {
-      db.run('UPDATE tasks SET status_id=?, archived=1, updated_at=? WHERE id=?', [deletedId, nowIso, t.id]);
-      archived++;
+      db.run('UPDATE tasks SET archived=1, updated_at=? WHERE id=?', [nowIso, t.id]);
+      archivedIds.push(t.id);
     }
-    logger.info('autocleanup done', { archived, manual, minAgeDays: state.autocleanupMinAgeDays });
+    logger.info('autocleanup done', { archived: archivedIds.length, manual, ignoreAge, minAgeDays: state.autocleanupMinAgeDays });
 
     if (!manual) {
       const today = nowIso.slice(0, 10);
@@ -448,14 +450,14 @@ export const useStore = create<State>((set, get) => ({
       set({ autocleanupLastRun: today });
     }
     get().refresh();
-    return archived;
+    return { count: archivedIds.length, ids: archivedIds };
   },
   /**
-   * v0.9.28: catch-up логика при старте. Запускается из App.tsx после init().
+   * v0.9.30: catch-up логика при старте. Запускается из App.tsx после init().
    *
-   * Логика: если autocleanupEnabled=true И с последнего last_run прошло больше недели,
-   * АЛИ сегодня — выбранный день недели А last_run не сегодня — запускаем сейчас.
-   * Практически это = проверяем: «прошло ли выбранное воскресенье между last_run и сегодня?»
+   * Режимы:
+   *   • 'weekday' — в выбранный день недели (или catch-up если прошли) архивируются ВСЕ выполненные.
+   *   • 'age'     — проверка каждый день, архивируются выполненные старше minAgeDays.
    */
   checkAndRunAutoCleanupOnStartup() {
     const state = get();
@@ -465,29 +467,29 @@ export const useStore = create<State>((set, get) => ({
     const today = now.toISOString().slice(0, 10);
     if (state.autocleanupLastRun === today) return 0; // уже запускали сегодня
 
-    // Если last_run нет — срабатываем если сегодня целевой день ИЛИ вцелом чтобы не терять catch-up.
+    // v0.9.30: режим 'age' — просто запускаем каждый день, фильтр по возрасту.
+    if (state.autocleanupMode === 'age') {
+      return get().runAutoCleanup({ manual: false, ignoreAge: false }).count;
+    }
+
+    // Режим 'weekday'. Если last_run нет — срабатываем если сегодня целевой день.
     if (!state.autocleanupLastRun) {
-      // Первый запуск. Запускаем только если сегодня = target day; иначе ждём
-      // (не важно, свежая база — там нечего чистить).
       if (now.getDay() === state.autocleanupDay) {
-        return get().runAutoCleanup({ manual: false });
+        return get().runAutoCleanup({ manual: false, ignoreAge: true }).count;
       }
       return 0;
     }
 
     // Есть last_run. Проверяем, прошла ли target-дата в интервале (last_run+1, today].
-    // Простой подход: если разница ≥ 7 дней — 100% сработать; если < 7 дней, но
-    // в этом интервале был target day — тоже сработать.
     const lastRunDate = new Date(state.autocleanupLastRun + 'T00:00:00');
     const daysSince = Math.floor((now.getTime() - lastRunDate.getTime()) / (24 * 60 * 60 * 1000));
     if (daysSince >= 7) {
-      return get().runAutoCleanup({ manual: false });
+      return get().runAutoCleanup({ manual: false, ignoreAge: true }).count;
     }
-    // Проверяем, был ли target day в интервале (last_run, today].
     for (let i = 1; i <= daysSince; i++) {
       const d = new Date(lastRunDate.getTime() + i * 24 * 60 * 60 * 1000);
       if (d.getDay() === state.autocleanupDay) {
-        return get().runAutoCleanup({ manual: false });
+        return get().runAutoCleanup({ manual: false, ignoreAge: true }).count;
       }
     }
     return 0;
@@ -640,8 +642,8 @@ export const useStore = create<State>((set, get) => ({
   pushToast(text, action) {
     const id = ++toastId;
     set(s => ({ toasts: [...s.toasts, { id, text, action }] }));
-    // v0.8.12: с action (undo) даём пользователю время отреагировать
-    setTimeout(() => get().dismissToast(id), action ? 6000 : 2400);
+    // v0.9.30: с action (undo) — 10 сек (было 6). Без action — прежние 2.4 с.
+    setTimeout(() => get().dismissToast(id), action ? 10000 : 2400);
   },
   dismissToast(id) {
     set(s => ({ toasts: s.toasts.filter(t => t.id !== id) }));

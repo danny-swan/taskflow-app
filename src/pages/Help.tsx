@@ -13,6 +13,33 @@ interface HelpSection {
 // ─── RU ──────────────────────────────────────────────────────────────────────
 const sectionsRu: HelpSection[] = [
   {
+    title: '⌨ Горячие клавиши',
+    items: [
+      {
+        q: 'Список горячих клавиш',
+        a: (
+          <ul className="space-y-1 list-disc pl-4">
+            {/* v0.9.26: синхронизировано с src/App.tsx → KeyboardShortcuts. */}
+            <li><code>1</code> — Задачи</li>
+            <li><code>2</code> — Календарь</li>
+            <li><code>3</code> — Дашборд</li>
+            <li><code>4</code> — Статистика</li>
+            <li><code>5</code> — Настройки</li>
+            <li><code>6</code> — Помощь</li>
+            <li><code>/</code> — фокус на поле поиска (на вкладке Задачи)</li>
+            <li><code>N</code> — новая задача (на вкладке Задачи)</li>
+            <li><code>Ctrl+K</code> / <code>Cmd+K</code> — Command Palette (глобальный поиск и действия, v0.9.29)</li>
+            <li><code>Esc</code> — закрыть модальное окно / отменить редактирование / закрыть эмодзи-пикер</li>
+            <li><code>Enter</code> в полях карточки — сохранить inline-правку</li>
+            <li className="text-muted text-[12px] mt-1">Модификаторы Ctrl/Cmd/Alt блокируют навигацию, чтобы не конфликтовать с системными шорткатами. В полях ввода цифры тоже не тригерят переход.</li>
+          </ul>
+        ),
+      },
+    ],
+  },
+  // v0.9.25: три новые секции под то, что появилось в v0.9.0–v0.9.24:
+  // Облако и аккаунт (Supabase), Безопасность и приватность, Обновления.
+  {
     title: '📋 Основы',
     items: [
       {
@@ -292,33 +319,6 @@ const sectionsRu: HelpSection[] = [
     ],
   },
   {
-    title: '⌨ Горячие клавиши',
-    items: [
-      {
-        q: 'Список горячих клавиш',
-        a: (
-          <ul className="space-y-1 list-disc pl-4">
-            {/* v0.9.26: синхронизировано с src/App.tsx → KeyboardShortcuts. */}
-            <li><code>1</code> — Задачи</li>
-            <li><code>2</code> — Календарь</li>
-            <li><code>3</code> — Дашборд</li>
-            <li><code>4</code> — Статистика</li>
-            <li><code>5</code> — Настройки</li>
-            <li><code>6</code> — Помощь</li>
-            <li><code>/</code> — фокус на поле поиска (на вкладке Задачи)</li>
-            <li><code>N</code> — новая задача (на вкладке Задачи)</li>
-            <li><code>Ctrl+K</code> / <code>Cmd+K</code> — Command Palette (глобальный поиск и действия, v0.9.29)</li>
-            <li><code>Esc</code> — закрыть модальное окно / отменить редактирование / закрыть эмодзи-пикер</li>
-            <li><code>Enter</code> в полях карточки — сохранить inline-правку</li>
-            <li className="text-muted text-[12px] mt-1">Модификаторы Ctrl/Cmd/Alt блокируют навигацию, чтобы не конфликтовать с системными шорткатами. В полях ввода цифры тоже не тригерят переход.</li>
-          </ul>
-        ),
-      },
-    ],
-  },
-  // v0.9.25: три новые секции под то, что появилось в v0.9.0–v0.9.24:
-  // Облако и аккаунт (Supabase), Безопасность и приватность, Обновления.
-  {
     title: '👤 Аккаунт и email',
     items: [
       {
@@ -424,6 +424,33 @@ const sectionsRu: HelpSection[] = [
 
 // ─── EN ──────────────────────────────────────────────────────────────────────
 const sectionsEn: HelpSection[] = [
+  {
+    title: '⌨ Keyboard Shortcuts',
+    items: [
+      {
+        q: 'Shortcut list',
+        a: (
+          <ul className="space-y-1 list-disc pl-4">
+            {/* v0.9.26: in sync with src/App.tsx → KeyboardShortcuts. */}
+            <li><code>1</code> — Tasks</li>
+            <li><code>2</code> — Calendar</li>
+            <li><code>3</code> — Dashboard</li>
+            <li><code>4</code> — Statistics</li>
+            <li><code>5</code> — Settings</li>
+            <li><code>6</code> — Help</li>
+            <li><code>/</code> — focus the search box (on the Tasks tab)</li>
+            <li><code>N</code> — new task (on the Tasks tab)</li>
+            <li><code>Ctrl+K</code> / <code>Cmd+K</code> — Command Palette (global search and actions, v0.9.29)</li>
+            <li><code>Esc</code> — close modal / cancel edit / close emoji picker</li>
+            <li><code>Enter</code> in card fields — save the inline edit</li>
+            <li className="text-muted text-[12px] mt-1">Ctrl/Cmd/Alt modifiers disable navigation to avoid clashing with system shortcuts. Digits in input fields also don’t trigger a tab switch.</li>
+          </ul>
+        ),
+      },
+    ],
+  },
+  // v0.9.26: renamed section, removed outdated "cloud sync" FAQ
+  // (cloud sync is on the roadmap, not shipped), added "Where are my tasks stored?".
   {
     title: '📋 Basics',
     items: [
@@ -703,33 +730,6 @@ const sectionsEn: HelpSection[] = [
       },
     ],
   },
-  {
-    title: '⌨ Keyboard Shortcuts',
-    items: [
-      {
-        q: 'Shortcut list',
-        a: (
-          <ul className="space-y-1 list-disc pl-4">
-            {/* v0.9.26: in sync with src/App.tsx → KeyboardShortcuts. */}
-            <li><code>1</code> — Tasks</li>
-            <li><code>2</code> — Calendar</li>
-            <li><code>3</code> — Dashboard</li>
-            <li><code>4</code> — Statistics</li>
-            <li><code>5</code> — Settings</li>
-            <li><code>6</code> — Help</li>
-            <li><code>/</code> — focus the search box (on the Tasks tab)</li>
-            <li><code>N</code> — new task (on the Tasks tab)</li>
-            <li><code>Ctrl+K</code> / <code>Cmd+K</code> — Command Palette (global search and actions, v0.9.29)</li>
-            <li><code>Esc</code> — close modal / cancel edit / close emoji picker</li>
-            <li><code>Enter</code> in card fields — save the inline edit</li>
-            <li className="text-muted text-[12px] mt-1">Ctrl/Cmd/Alt modifiers disable navigation to avoid clashing with system shortcuts. Digits in input fields also don’t trigger a tab switch.</li>
-          </ul>
-        ),
-      },
-    ],
-  },
-  // v0.9.26: renamed section, removed outdated "cloud sync" FAQ
-  // (cloud sync is on the roadmap, not shipped), added "Where are my tasks stored?".
   {
     title: '👤 Account & email',
     items: [

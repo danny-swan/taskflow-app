@@ -13,6 +13,36 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.30',
+    date: '2026-07-05',
+    items: {
+      ru: [
+        'Настройки → Тема: полностью переделан лэйаут «Пользовательской» темы (в v0.9.29 называлась «Своя»). Три color-picker (Акцент, Фон, Текст) теперь стабильно рендерятся во всех версиях WebView2 — вместо native <input type=color> с плавающим размером теперь фиксированный swatch 40×40px со скруглёнными углами и рамкой; сам input лежит поверх с opacity-0 и всё так же открывает системную палитру по клику. Grid адаптивный: одна колонка на узких окнах, три — на sm+. Ничего не вылазит за рамку карточки, названия читаются, min-w-0 защищает от переполнения.',
+        'Sidebar → переключатель тем: добавлен 5-й вариант — «Пользовательская» с иконкой Palette (lucide-react). Раньше кастом-тему можно было выбрать только в Настройках; теперь она равноправна с light/dark/Акацуки/Деревня листа в одноклике из бокового меню.',
+        'Command Palette: клавиша Esc осталась, но справа сверху вместо «Esc» бэйджа теперь кликабельный крестик × в рамке — визуально понятнее, что это управление, а не подсказка. Крестик имеет aria-label, focus-ring, hover-стейт и корректный размер тач-таргета.',
+        'Command Palette: горячая клавиша Ctrl+K теперь работает НА ЛЮБОЙ РАСКЛАДКЕ клавиатуры — в предыдущей версии на русской раскладке (когда K → «л») палитра не открывалась. Переехали с event.key на event.code === «KeyK», который считывает физическое положение клавиши и не зависит от языка ввода.',
+        'Помощь: секция «⌨ Горячие клавиши» поднята в самый верх — над «📋 Основы». Сочетания клавиш — то, что нужно новому пользователю в первую очередь; раньше приходилось проматывать до 8-й секции. Порядок изменён и в русской, и в английской версии.',
+        'Статистика — важный фикс: при автоочистке выполненные задачи ТЕПЕРЬ остаются со статусом «Выполнено», а не переходят в «Удалено». В v0.9.28 автоочистка ставила status_id=deleted, из-за чего в Статистике задачи учитывались как удалённые. Восстановлена та же логика, что у ручного клика по 🗑 в столбце «Выполнено» — меняется только флаг archived=1, статус сохраняется, и в Статистике → «Выполнено» карточки видны как раньше. Undo работает через updateTask({archived: 0}).',
+        'Настройки → Автоочистка выполненных: разграничены ДВА независимых режима через radio-selector — (1) «По дню недели» — чистит В КОНКРЕТНЫЙ день недели ВСЕ выполненные без учёта возраста (типичный кейс: «в понедельник смахнуть всё за неделю»), (2) «По возрасту» — чистит задачи старше N дней при каждом запуске, независимо от дня. Раньше эти два фильтра работали одновременно (И день недели, И возраст), из-за чего механика была непонятной. Теперь под каждым режимом свой контрол (день недели ИЛИ количество дней) и своя подсказка.',
+        'Настройки → Автоочистка: день недели по умолчанию — Понедельник (было Воскресенье). Более естественный «понедельничный ритуал» — начать неделю с чистой доской.',
+        'Кнопка «Почистить сейчас» переработана — теперь чистит ВСЕ выполненные задачи БЕЗ УЧЁТА возраста и дня недели. Раньше она уважала настроенный age-фильтр, что было неочевидно (пользователь ожидал «прямо сейчас всё»). Confirm-диалог обновлён, чтобы это отражать.',
+        'Undo-тост при автоочистке: время жизни увеличено с 6 до 10 секунд — 6 секунд оказалось мало, чтобы прочитать сообщение и решить, отменять ли. Откат корректный: updateTask({archived: 0}) для всех архивированных ID.',
+      ],
+      en: [
+        'Settings → Theme: fully reworked layout of the «Custom» theme (called «Your own» in v0.9.29). Three color pickers (Accent, Background, Text) now render stably across all WebView2 versions — instead of a native <input type=color> with wobbly sizing, there is a fixed 40×40px rounded swatch with a border; the input itself sits on top with opacity-0 and still opens the system picker on click. The grid is adaptive: one column on narrow windows, three on sm+. Nothing spills outside the card, labels stay readable, min-w-0 prevents overflow.',
+        'Sidebar → theme switcher: added a 5th option — «Custom» with a Palette icon (lucide-react). Previously the custom theme could be picked only from Settings; now it is on equal footing with light/dark/Akatsuki/Konohagakure in a one-click from the side menu.',
+        'Command Palette: Esc still closes, but the top-right «Esc» badge is replaced with a clickable × button in a frame — visually clearer that this is a control, not a hint. The × has an aria-label, focus-ring, hover state and a proper touch-target size.',
+        'Command Palette: the Ctrl+K hotkey now works ON ANY KEYBOARD LAYOUT — in the previous version, on the Russian layout (where K → «л»), the palette wouldn’t open. Migrated from event.key to event.code === «KeyK», which reads the physical key position and doesn’t depend on the input language.',
+        'Help: the «⌨ Keyboard Shortcuts» section is moved to the very top — above «📋 Basics». Shortcuts are what a new user needs first; previously you had to scroll down to the 8th section. Order updated in both Russian and English versions.',
+        'Statistics — important fix: auto-cleanup now KEEPS completed tasks with status «Done», rather than switching them to «Deleted». In v0.9.28 auto-cleanup was setting status_id=deleted, which caused Statistics to count those tasks as deleted. Restored the same logic as manual 🗑 click in the «Done» column — only the archived=1 flag changes, the status is preserved, and cards remain visible in Statistics → «Done» as before. Undo works via updateTask({archived: 0}).',
+        'Settings → Auto-cleanup completed: TWO independent modes are now separated via a radio-selector — (1) «By day of week» — cleans ALL completed tasks on A SPECIFIC weekday regardless of age (typical case: «wipe the week on Monday»), (2) «By age» — cleans tasks older than N days on every launch, regardless of day. Previously the two filters worked simultaneously (AND day-of-week, AND age), which made the mechanic unclear. Now each mode has its own control (day-of-week OR number of days) and its own hint.',
+        'Settings → Auto-cleanup: default day of week is Monday (was Sunday). A more natural «Monday ritual» — start the week with a clean board.',
+        'The «Clean up now» button was reworked — it now cleans ALL completed tasks WITHOUT respecting age or day-of-week. Previously it honoured the configured age filter, which was non-obvious (users expected «everything, right now»). The confirm dialog was updated to reflect that.',
+        'Undo toast on auto-cleanup: lifetime increased from 6 to 10 seconds — 6 seconds turned out to be too short to read the message and decide whether to undo. Rollback is correct: updateTask({archived: 0}) for all archived IDs.',
+      ],
+    },
+  },
+  {
     version: '0.9.29',
     date: '2026-07-05',
     items: {

@@ -3,7 +3,7 @@ import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import {
   ListChecks, Plus, LayoutDashboard, BarChart3, Settings, HelpCircle,
-  Sun, Moon, Sparkles, Leaf, ChevronDown, CalendarDays,
+  Sun, Moon, Sparkles, Leaf, Palette, ChevronDown, CalendarDays,
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 
@@ -38,6 +38,7 @@ export function Sidebar() {
     { key: 'dark', label: tr(lang, 'theme_dark'), icon: Moon },
     { key: 'akatsuki', label: tr(lang, 'theme_akatsuki'), icon: Sparkles },
     { key: 'konoha', label: tr(lang, 'theme_konoha'), icon: Leaf },
+    { key: 'custom', label: tr(lang, 'theme_custom'), icon: Palette },
   ];
   const ThemeIcon = themeOptions.find(t => t.key === theme)?.icon || Sun;
 
