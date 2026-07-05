@@ -51,7 +51,8 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   useEffect(() => {
     const fn = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      // v0.9.30: e.code === 'KeyK' — горячая клавиша работает на любой раскладке (в т.ч. русской)
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyK') {
         e.preventDefault();
         setPaletteOpen(o => !o);
       }
@@ -115,32 +116,27 @@ function App() {
     try {
       const archived = checkAndRunAutoCleanupOnStartup();
       if (archived > 0) {
-        // Snapshot — id всех задач, которые только что перевели в «Удалено».
-        // Простое отменение: снять archived=1 + вернуть в «Выполнено».
-        // Найдём id «Выполнено» через statuses (behavior=archive, is_technical=0).
+        // v0.9.30: Статус теперь НЕ меняется автоочисткой (остаётся «Выполнено»).
+        // Снапшот — id последних N архивных выполненных задач (archived=1) по updated_at.
         const s = useStore.getState();
-        const doneStatus = s.statuses.find(st => st.behavior === 'archive' && st.is_technical !== 1);
-        // id архивированных задач — те, что сейчас archived=1 и обновлены в этой секунде.
-        // Простая эвристика: берём последние N задач в статусе «Удалено» по updated_at.
-        const deletedId = s.getDeletedStatusId();
-        const recentlyArchived = deletedId !== undefined
-          ? s.tasks
-              .filter(t => t.status_id === deletedId && t.archived === 1)
-              .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
-              .slice(0, archived)
-              .map(t => t.id)
-          : [];
+        const doneStatusIds = new Set(
+          s.statuses.filter(st => st.behavior === 'archive' && st.is_technical !== 1).map(st => st.id)
+        );
+        const recentlyArchived = s.tasks
+          .filter(t => doneStatusIds.has(t.status_id) && t.archived === 1)
+          .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
+          .slice(0, archived)
+          .map(t => t.id);
         const msg = lang === 'ru'
           ? `Автоочистка: ${archived} ${archived === 1 ? 'задача архивирована' : archived < 5 ? 'задачи архивированы' : 'задач архивировано'}`
           : `Auto-cleanup: ${archived} task${archived === 1 ? '' : 's'} archived`;
         pushToast(msg, {
           label: lang === 'ru' ? 'Отменить' : 'Undo',
           onClick: () => {
-            if (!doneStatus) return;
             const st = useStore.getState();
-            // updateTask автоматически кладёт archived=0 при переводе в non-technical статус (см. useStore стр. ~508).
+            // v0.9.30: возврат в Активные — снимаем archived=1 → 0 через updateTask.
             for (const id of recentlyArchived) {
-              st.updateTask(id, { status_id: doneStatus.id });
+              st.updateTask(id, { archived: 0 });
             }
             st.pushToast(lang === 'ru' ? 'Восстановлено' : 'Restored');
           },
