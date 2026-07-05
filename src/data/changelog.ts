@@ -13,6 +13,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.34',
+    date: '2026-07-05',
+    items: {
+      ru: [
+        'Онбординг — переработано позиционирование подсказок. Раньше tooltip был жёстко привязан к 15%/68% высоты окна, из-за чего на некоторых шагах (например «Список/Канбан») подсказка вылезала вплотную к нижнему краю или заезжала на подсвеченный элемент. Теперь tooltip позиционируется относительно spotlight: ставится ПОД выделенным элементом с отступом 20px, если не помещается — НАД ним, если и там не помещается — по центру экрана. Всё клампится в безопасную зону [top+16px, bottom-16px], так что подсказка гарантированно видна на любом размере окна.',
+        'Онбординг — исправлен текст шага «Статистика». Раньше подсказка обещала графики продуктивности, которых на вкладке нет — только историческая таблица выполненных задач. Переписали текст: теперь честно рассказываем про поиск, фильтры и восстановление задач из «Выполнено».',
+        'Настройки → Автоочистка: (1) переименовано в «Автоочистка выполненных задач» — раньше label обрывался и был неоднозначным. (2) Для новых установок автоочистка теперь ВКЛЮЧЕНА по умолчанию: галочка + режим «В день недели» + понедельник + минимальный возраст 7 дней. У существующих пользователей ничего не меняется — сохранённые настройки остаются как есть (opt-in вручную через галочку).',
+      ],
+      en: [
+        'Onboarding — reworked tooltip positioning. Previously the tooltip was pinned at 15%/68% of the window height, so on some steps (e.g. «List/Kanban») it either clipped against the bottom edge or overlapped the spotlighted element. Now tooltips are positioned relative to the spotlight: placed BELOW the highlighted element with a 20px gap; if it does not fit — ABOVE; if neither — centered on screen. Everything is clamped inside the safe zone [top+16px, bottom-16px], so the tooltip is guaranteed to be visible at any window size.',
+        'Onboarding — fixed the text for the «Statistics» step. Previously the tooltip promised productivity charts that don’t exist on the tab — only a historical table of completed tasks. Rewrote the copy: now it honestly describes search, filters, and restoring tasks from «Completed».',
+        'Settings → Auto-cleanup: (1) renamed to «Auto-cleanup completed tasks» — the previous label was clipped and ambiguous. (2) For fresh installs auto-cleanup is now ENABLED by default: checkbox on + «By weekday» mode + Monday + minimum age 7 days. Existing users are not affected — saved settings remain as-is (manual opt-in via the checkbox).',
+      ],
+    },
+  },
+  {
     version: '0.9.33',
     date: '2026-07-05',
     items: {

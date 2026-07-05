@@ -182,7 +182,8 @@ export const useStore = create<State>((set, get) => ({
   overdueMode: 'calendar',
   overdueTick: 0,
   autoUpdateEnabled: true,
-  // v0.9.28: автоочистка выполненных — дефолты (для новых БД opt-in через fresh_db_marker в init())
+  // v0.9.28: автоочистка выполненных — дефолты state (до чтения из БД).
+  // v0.9.34: для новых установок autocleanup_enabled='1' пишется в seed таблицы settings.
   autocleanupEnabled: false,
   autocleanupMode: 'weekday',
   autocleanupDay: 1, // v0.9.30: Пн по умолчанию (было Вс)
@@ -257,11 +258,11 @@ export const useStore = create<State>((set, get) => ({
       // v0.9.8: автопроверка обновлений — включена по умолчанию
       autoUpdateEnabled: map.auto_update_enabled !== '0',
       // v0.9.28: автоочистка — opt-out только для новых БД. Старые БД — opt-in.
-      // Флаг autocleanup_seen ставится при первом видении ключа (ниже). Если ключа нет И все задачи отсутствуют — это свежая БД.
+      // v0.9.34: для новых установок autocleanup_enabled='1' теперь пишется в seed
+      // (см. src/lib/db.ts). Здесь только читаем — если ключа нет, значит БД старой версии
+      // (<0.9.28) — оставляем OFF (пользователь сам включит, если нужно).
       autocleanupMode: (map.autocleanup_mode === 'age' ? 'age' : 'weekday') as 'weekday' | 'age',
-      autocleanupEnabled: map.autocleanup_enabled !== undefined
-        ? map.autocleanup_enabled === '1'
-        : (get().tasks.length === 0), // новая БД → ON по умолчанию
+      autocleanupEnabled: map.autocleanup_enabled === '1',
       autocleanupDay: map.autocleanup_day !== undefined ? parseInt(map.autocleanup_day, 10) : 1,
       autocleanupMinAgeDays: map.autocleanup_min_age_days !== undefined ? parseInt(map.autocleanup_min_age_days, 10) : 7,
       autocleanupLastRun: map.autocleanup_last_run || null,
@@ -280,12 +281,9 @@ export const useStore = create<State>((set, get) => ({
       recentEmojis,
     });
 
-    // v0.9.28: если это новая БД и autocleanup_enabled не был сохранён — сейчас закрепим его ON,
-    // чтобы при следующем запуске (уже с задачами) не переключиться на OFF.
-    if (map.autocleanup_enabled === undefined) {
-      const initialValue = get().autocleanupEnabled ? '1' : '0';
-      try { db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['autocleanup_enabled', initialValue]); } catch {}
-    }
+    // v0.9.34: все autocleanup_* дефолты пишутся в seed для новых установок —
+    // бывшая логика «если ключа нет и задач нет → ON» была ошибочна (welcome-задача
+    // всегда есть на новой БД). Старые БД (без ключа) остаются OFF.
     if (initError) {
       // Сохраняем в возможное поле store для показа в UI; если поля нет — хотя бы в консоль.
       (window as any).__taskflow_init_error = initError;

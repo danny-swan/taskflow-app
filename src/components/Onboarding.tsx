@@ -142,8 +142,8 @@ const STEPS: Step[] = [
     icon: BarChart3,
     title: { ru: 'Статистика', en: 'Stats' },
     body: {
-      ru: 'Графики по темпу выполнения, распределению по статусам и тэгам. Вкладка отключаема в Настройках — если не нужна, её можно скрыть.',
-      en: 'Charts of completion pace, distribution by status and tags. The tab can be hidden in Settings if you do not need it.',
+      ru: 'Историческая таблица всех задач — выполненных и удалённых. Поиск, фильтры по статусу и тэгу, сортировка по колонкам. Отсюда можно восстановить удалённые задачи или удалить окончательно. Вкладка отключаема в Настройках.',
+      en: 'A historical table of all tasks — completed and deleted. Search, filters by status and tag, column sorting. Restore deleted tasks or purge them permanently from here. The tab can be hidden in Settings.',
     },
   },
   {
@@ -316,12 +316,14 @@ export function Onboarding() {
 
   const Icon = cur.icon;
 
-  // Определяем вертикальное положение tooltip'а:
-  //  - если spotlight в верхней половине экрана → tooltip внизу (top: 65%)
-  //  - если spotlight в нижней половине → tooltip вверху (top: 15%)
-  //  - если spotlight нет → tooltip по центру (top: 50%)
-  // Все три случая — фиксированные top-значения, без расчёта относительно
-  // размера tooltip'а. Ничему уезжать некуда.
+  // v0.9.34: tooltip позиционируется относительно spotlight, а не в фиксированных
+  // 15%/68% viewport'а. Оценочная высота tooltip ~240px (шапка + прогресс + текст + футер).
+  // Логика:
+  //   1) Пытаемся поставить ПОД spotlight (spotlight.y + spotlight.h + gap).
+  //   2) Если не помещается — ставим НАД (spotlight.y - tooltipEstH - gap).
+  //   3) Если ни там ни там не помещается (мелкий viewport) — центр экрана.
+  //   4) Клампим top в [minTop, maxTop], чтобы не убежал за края.
+  //   Без spotlight — по центру.
   let tooltipTop: string;
   let tooltipTransform: string;
   if (!spotlight) {
@@ -329,16 +331,29 @@ export function Onboarding() {
     tooltipTransform = 'translate(-50%, -50%)';
   } else {
     const vh = window.innerHeight;
-    const spotlightCenter = spotlight.y + spotlight.h / 2;
-    if (spotlightCenter < vh / 2) {
-      // Target в верхней половине → tooltip в нижней трети.
-      tooltipTop = '68%';
-      tooltipTransform = 'translate(-50%, 0)';
+    const tooltipEstH = 240;         // оценочная высота — реальная 220–280px
+    const gap = 20;                  // отступ между spotlight и tooltip
+    const minTop = 16;               // не подходить вплотную к верху экрана
+    const maxTop = vh - tooltipEstH - 16; // и не убегать за низ
+
+    const belowY = spotlight.y + spotlight.h + gap;
+    const aboveY = spotlight.y - tooltipEstH - gap;
+
+    let topPx: number;
+    if (belowY + tooltipEstH <= vh - 16) {
+      // Помещается снизу — ставим под spotlight.
+      topPx = belowY;
+    } else if (aboveY >= 16) {
+      // Не помещается снизу, но помещается сверху.
+      topPx = aboveY;
     } else {
-      // Target в нижней половине → tooltip в верхней трети.
-      tooltipTop = '15%';
-      tooltipTransform = 'translate(-50%, 0)';
+      // Тесно — центрируем.
+      topPx = Math.max(minTop, Math.min(maxTop, (vh - tooltipEstH) / 2));
     }
+
+    topPx = Math.max(minTop, Math.min(maxTop, topPx));
+    tooltipTop = `${topPx}px`;
+    tooltipTransform = 'translate(-50%, 0)';
   }
 
   return (
@@ -404,8 +419,9 @@ export function Onboarding() {
         )}
       </svg>
 
-      {/* Модал в одной из двух фиксированных позиций (top: 15% / 50% / 68%).
-          Плавно перемещается через CSS transition по top. */}
+      {/* v0.9.34: tooltip позиционируется относительно spotlight (снизу или сверху
+          с отступом gap=20px), с клампом по краям viewport'а. Плавно перемещается
+          через CSS transition по top. */}
       <div
         role="dialog"
         aria-modal="true"
