@@ -239,6 +239,11 @@ async function tauriSeed(): Promise<void> {
     ['stats_enabled', '1'],
     ['default_tab', 'tasks'],
     ['font_size', '14'],
+    // v0.9.34: автоочистка — включена по умолчанию для новых установок.
+    ['autocleanup_enabled', '1'],
+    ['autocleanup_mode', 'weekday'],
+    ['autocleanup_day', '1'],
+    ['autocleanup_min_age_days', '7'],
   ];
   for (const [k, v] of defaults) {
     await d.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)', [k, v]);
@@ -435,6 +440,13 @@ function seed(d: Database) {
     ['stats_enabled', '1'],
     ['default_tab', 'tasks'],
     ['font_size', '14'],
+    // v0.9.34: автоочистка выполненных задач — включена по умолчанию для новых
+    // установок. Старые БД не трогаем — INSERT OR IGNORE не перезапишет. Режим по
+    // умолчанию — weekday (день недели), день = 1 (Пн), мин. возраст = 7 дней.
+    ['autocleanup_enabled', '1'],
+    ['autocleanup_mode', 'weekday'],
+    ['autocleanup_day', '1'],
+    ['autocleanup_min_age_days', '7'],
   ];
   defaults.forEach(([k, v]) => d.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)', [k, v]));
 }

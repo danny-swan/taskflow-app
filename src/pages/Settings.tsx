@@ -195,7 +195,7 @@ function GeneralSection() {
       {/* v0.9.30: автоочистка выполненных задач — два режима (weekday/age) */}
       <div className="pt-4 border-t border-border-soft">
         <h4 className="font-display text-[14px] font-semibold mb-3">
-          {lang === 'ru' ? 'Автоочистка выполненных' : 'Auto-cleanup completed'}
+          {lang === 'ru' ? 'Автоочистка выполненных задач' : 'Auto-cleanup completed tasks'}
         </h4>
 
         <Row label={lang === 'ru' ? 'Включить' : 'Enable'}>
