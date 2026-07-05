@@ -1783,6 +1783,8 @@ function TemplatesSection({ lang }: { lang: 'ru' | 'en' }) {
 }
 
 // v0.9.8: секция «Обновления» — Tauri auto-updater
+// v0.9.33: на macOS авто-апдейт недоступен (сборка не подписана Apple сертификатом),
+// вместо кнопки «Скачать и установить» показываем линк на GitHub Releases.
 function UpdatesSection() {
   const lang = useStore(s => s.language);
   const autoUpdate = useStore(s => s.autoUpdateEnabled);
@@ -1795,8 +1797,22 @@ function UpdatesSection() {
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState(0);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [osName, setOsName] = useState<string>('');
 
   const tauri = isTauri();
+  const isMacOs = osName === 'macos';
+
+  useEffect(() => {
+    if (!tauri) return;
+    (async () => {
+      try {
+        const { platform } = await import('@tauri-apps/plugin-os');
+        setOsName(await platform());
+      } catch {
+        // не критично — остаётся windows-поведение по умолчанию
+      }
+    })();
+  }, [tauri]);
 
   const check = async () => {
     setChecking(true);
@@ -1905,14 +1921,33 @@ function UpdatesSection() {
               {info.notes}
             </div>
           )}
-          <button
-            type="button"
-            onClick={install}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-[13px] rounded-md bg-accent text-white hover:opacity-90"
-          >
-            <Download className="w-4 h-4" />
-            {lang === 'ru' ? 'Скачать и установить' : 'Download and install'}
-          </button>
+          {isMacOs ? (
+            <>
+              <div className="text-[12px] text-muted">
+                {lang === 'ru'
+                  ? 'Сборка под macOS не подписана, поэтому авто-установка обновлений недоступна. Скачайте новый .dmg вручную с GitHub Releases и установите поверх текущей версии.'
+                  : 'The macOS build is unsigned, so auto-install is unavailable. Please download the new .dmg from GitHub Releases and install it over the current version.'}
+              </div>
+              <a
+                href={`https://github.com/danny-swan/taskflow-app/releases/tag/v${info.newVersion}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-3 py-1.5 text-[13px] rounded-md bg-accent text-white hover:opacity-90 w-fit"
+              >
+                <Download className="w-4 h-4" />
+                {lang === 'ru' ? 'Открыть страницу релиза на GitHub' : 'Open release page on GitHub'}
+              </a>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={install}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-[13px] rounded-md bg-accent text-white hover:opacity-90"
+            >
+              <Download className="w-4 h-4" />
+              {lang === 'ru' ? 'Скачать и установить' : 'Download and install'}
+            </button>
+          )}
         </div>
       )}
 

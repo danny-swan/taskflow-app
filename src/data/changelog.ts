@@ -13,16 +13,30 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.33',
+    date: '2026-07-05',
+    items: {
+      ru: [
+        'Помощь → «Поддержать разработчика»: расширили боковую колонку — текст переносится реже, кнопки способов оплаты не сжимаются. Aside теперь clamp(340px, 28vw, 440px) — плавно масштабируется от 340 до 440px, вместо прежних 280–360px.',
+        'macOS → Настройки → Обновления: в macOS-сборке авто-апдейт отключён (сборка не подписана). Вместо кнопки «Скачать и установить» показываем плашку «Доступна новая версия» со ссылкой на GitHub Releases — скачать новый .dmg вручную. На Windows всё как обычно — авто-апдейт через latest.json.',
+      ],
+      en: [
+        'Help → «Support the developer»: widened the side column — text wraps less, payment method buttons no longer get squeezed. Aside is now clamp(340px, 28vw, 440px) — scales smoothly from 340 to 440px, up from the previous 280–360px.',
+        'macOS → Settings → Updates: auto-update is disabled on the macOS build (the build is unsigned). Instead of the «Download & install» button we show a «New version available» banner with a link to GitHub Releases — download the new .dmg manually. Windows behaviour is unchanged — auto-update via latest.json.',
+      ],
+    },
+  },
+  {
     version: '0.9.32',
     date: '2026-07-05',
     items: {
       ru: [
-        'Помощь → «Поддержать разработчика»: fluid-лейаут. Раньше колонка была жёстко 320px и переключалась только на xl (1280px) — на промежуточных ширинах окна блок прыгал скачками. Теперь aside ширины clamp(280px, 22vw, 360px) плавно подстраивается под любой размер окна, контент занимает всё оставшееся, брейкпоинт опущен на lg (1024px) — sticky-aside появляется раньше.',
-        'Переформулировали дисклеймер про сети крипты в блоке поддержки — без навязчивости, более человечный тон. Совпадает с версией на лендинге.',
+        'Помощь → «Поддержать разработчика»: fluid-лейаут. Раньше колонка была жёстко 320px и переключалась только на xl (1280px) — на промежуточных ширинах окна блок прыгал скачками. Теперь aside плавно подстраивается под любой размер окна, контент занимает всё оставшееся, брейкпоинт опущен на lg (1024px) — sticky-aside появляется раньше.',
+        'macOS: появилась официальная сборка под macOS — Universal DMG (Intel + Apple Silicon). Deployment target: macOS 10.13+. Сборка не подписана — при первом запуске Gatekeeper заблокирует, инструкция обхода в release notes и на лендинге.',
       ],
       en: [
-        'Help → «Support the developer»: fluid layout. Previously the aside was pinned at 320px and only appeared at xl (1280px), causing jumpy behaviour on intermediate widths. Now the aside width is clamp(280px, 22vw, 360px) — it scales smoothly with the window, content takes the remaining space, and the sticky-aside breakpoint drops to lg (1024px).',
-        'Rephrased the crypto network disclaimer in the support block — softer, more human tone. Matches the version on the landing page.',
+        'Help → «Support the developer»: fluid layout. Previously the aside was pinned at 320px and only appeared at xl (1280px), causing jumpy behaviour on intermediate widths. Now the aside scales smoothly with the window, content takes the remaining space, and the sticky-aside breakpoint drops to lg (1024px).',
+        'macOS: official macOS build — Universal DMG (Intel + Apple Silicon). Deployment target: macOS 10.13+. The build is unsigned — Gatekeeper blocks the first launch; bypass instructions are in release notes and on the landing page.',
       ],
     },
   },
