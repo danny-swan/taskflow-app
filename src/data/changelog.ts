@@ -13,6 +13,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.32',
+    date: '2026-07-05',
+    items: {
+      ru: [
+        'Помощь → «Поддержать разработчика»: fluid-лейаут. Раньше колонка была жёстко 320px и переключалась только на xl (1280px) — на промежуточных ширинах окна блок прыгал скачками. Теперь aside ширины clamp(280px, 22vw, 360px) плавно подстраивается под любой размер окна, контент занимает всё оставшееся, брейкпоинт опущен на lg (1024px) — sticky-aside появляется раньше.',
+        'Переформулировали дисклеймер про сети крипты в блоке поддержки — без навязчивости, более человечный тон. Совпадает с версией на лендинге.',
+      ],
+      en: [
+        'Help → «Support the developer»: fluid layout. Previously the aside was pinned at 320px and only appeared at xl (1280px), causing jumpy behaviour on intermediate widths. Now the aside width is clamp(280px, 22vw, 360px) — it scales smoothly with the window, content takes the remaining space, and the sticky-aside breakpoint drops to lg (1024px).',
+        'Rephrased the crypto network disclaimer in the support block — softer, more human tone. Matches the version on the landing page.',
+      ],
+    },
+  },
+  {
     version: '0.9.31',
     date: '2026-07-05',
     items: {
