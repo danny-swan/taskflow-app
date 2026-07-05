@@ -1,4 +1,4 @@
-name: Build TaskFlow for Windows
+name: Build TaskFlow
 
 on:
   push:
@@ -204,19 +204,140 @@ jobs:
           Write-Host "=== latest.json ==="
           Get-Content latest.json
 
-      - name: Create Release
+      - name: Upload latest.json (Windows part)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: actions/upload-artifact@v4
         with:
-          # v0.9.9: .sig файлы больше не публикуем в релизе (они остаются
-          # в workflow artifacts для дебага). Подписи для авто-апдейтера уже
-          # вшиты в latest.json (поле signature). Пользовательский релиз —
-          # чистые 5 файлов: 3 инсталлятора + portable + latest.json.
-          files: |
+          name: latest-windows
+          path: latest.json
+          if-no-files-found: warn
+
+      - name: Upload Windows bundle for release job
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-files
+          path: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             src-tauri/target/x86_64-pc-windows-msvc/release/taskflow.exe
-            latest.json
+          if-no-files-found: warn
+
+  # v0.9.32: macOS вариант A — unsigned .dmg через Universal Binary
+  # (aarch64 + x86_64 в одном файле). Запускается на macos-14 (Apple Silicon runner).
+  # Пользователи обойдут Gatekeeper через инструкцию в release notes.
+  build-macos:
+    needs: [test, e2e]
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Sync version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+          echo "Syncing version to $VER"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='$VER';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8'));p.version='$VER';fs.writeFileSync('src-tauri/tauri.conf.json',JSON.stringify(p,null,2)+'\n');"
+          sed -i '' "s/^version = \".*\"/version = \"$VER\"/" src-tauri/Cargo.toml
+
+      - name: Build Tauri app (Universal .dmg, unsigned)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+          # Вариант A: без Apple Developer ID — подпись не ставится,
+          # пользователь обойдёт Gatekeeper вручную.
+          APPLE_SIGNING_IDENTITY: '-'
+        run: npm run tauri:build -- --target universal-apple-darwin --bundles dmg
+
+      - name: List macOS build artifacts
+        run: |
+          find src-tauri/target/universal-apple-darwin/release/bundle -type f | head -30
+
+      - name: Upload .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: TaskFlow-macOS-DMG
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: warn
+
+      - name: Upload macOS release files
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release-files
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: warn
+
+  # v0.9.32: объединённый release-job — скачивает артефакты
+  # обоих платформ и публикует GitHub Release одним списком.
+  release:
+    needs: [build, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows release files
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-files
+          path: release-files/windows
+
+      - name: Download latest.json
+        uses: actions/download-artifact@v4
+        with:
+          name: latest-windows
+          path: release-files
+
+      - name: Download macOS release files
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-release-files
+          path: release-files/macos
+
+      - name: List release files
+        run: find release-files -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-files/windows/**/*.exe
+            release-files/windows/**/*.msi
+            release-files/windows/taskflow.exe
+            release-files/macos/**/*.dmg
+            release-files/latest.json
           generate_release_notes: true
           draft: false
           prerelease: false
