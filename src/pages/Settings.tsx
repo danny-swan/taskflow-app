@@ -2434,8 +2434,50 @@ function SyncSection() {
 
 // ============================================================================
 // v0.9.35-dev.6: SubscriptionSection — статус плана, trial, ручная активация,
-// крипто-адреса, история заявок.
+// альтернативные способы оплаты, история заявок.
 // ============================================================================
+
+/**
+ * Env-based конфиг альтернативных способов оплаты.
+ * Задаётся в `.env.local` (локально) или в CI (без secrets — blocks просто не показываются).
+ *
+ * VITE_PAY_CLOUDTIPS_URL / VITE_PAY_TON / VITE_PAY_USDT_TRC20 / VITE_PAY_USDT_ERC20
+ * VITE_PAY_PRICE_MONTHLY / VITE_PAY_PRICE_ANNUAL / VITE_PAY_PRICE_LIFETIME
+ */
+type PaymentMethodKey = 'cloudtips' | 'ton' | 'usdt-trc20' | 'usdt-erc20';
+type PaymentMethodDef = {
+  key: PaymentMethodKey;
+  label: string;
+  value: string;
+  displayValue: string;
+  linkUrl?: string;
+};
+
+const _env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+
+const PAYMENT_METHODS: PaymentMethodDef[] = (() => {
+  const list: PaymentMethodDef[] = [];
+  const ct = _env.VITE_PAY_CLOUDTIPS_URL?.trim();
+  if (ct) {
+    const display = ct.replace(/^https?:\/\//, '');
+    list.push({ key: 'cloudtips', label: 'CloudTips (RUB)', value: ct, displayValue: display, linkUrl: ct });
+  }
+  const ton = _env.VITE_PAY_TON?.trim();
+  if (ton) list.push({ key: 'ton', label: 'TON', value: ton, displayValue: ton });
+  const trc = _env.VITE_PAY_USDT_TRC20?.trim();
+  if (trc) list.push({ key: 'usdt-trc20', label: 'USDT (TRC-20)', value: trc, displayValue: trc });
+  const erc = _env.VITE_PAY_USDT_ERC20?.trim();
+  if (erc) list.push({ key: 'usdt-erc20', label: 'USDT (ERC-20)', value: erc, displayValue: erc });
+  return list;
+})();
+
+const PRICE_MONTHLY = _env.VITE_PAY_PRICE_MONTHLY?.trim() || '';
+const PRICE_ANNUAL = _env.VITE_PAY_PRICE_ANNUAL?.trim() || '';
+const PRICE_LIFETIME = _env.VITE_PAY_PRICE_LIFETIME?.trim() || '';
+
+/** Короткая строка цен, если хотя бы одна цена задана. */
+const PRICE_LINE = [PRICE_MONTHLY, PRICE_ANNUAL, PRICE_LIFETIME].filter(Boolean).join(' / ');
+
 function SubscriptionSection() {
   const lang = useStore(s => s.language);
   const isRu = lang === 'ru';
@@ -2455,7 +2497,9 @@ function SubscriptionSection() {
   // Локальный state для формы ручной активации.
   const [txRef, setTxRef] = useState('');
   const [planRequested, setPlanRequested] = useState<'monthly' | 'annual' | 'lifetime'>('monthly');
-  const [providerHint, setProviderHint] = useState<'cloudtips' | 'ton' | 'usdt-trc20' | 'usdt-erc20' | 'other'>('cloudtips');
+  const [providerHint, setProviderHint] = useState<'cloudtips' | 'ton' | 'usdt-trc20' | 'usdt-erc20' | 'other'>(
+    (PAYMENT_METHODS[0]?.key ?? 'other') as 'cloudtips' | 'ton' | 'usdt-trc20' | 'usdt-erc20' | 'other',
+  );
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [trialBusy, setTrialBusy] = useState(false);
@@ -2691,25 +2735,28 @@ function SubscriptionSection() {
         <div className="space-y-2 text-[13px]">
           <div className="flex justify-between items-center">
             <span>{t('Ежемесячно', 'Monthly')}</span>
-            <span className="font-medium tabular-nums">299 ₽ / {t('мес', 'mo')}</span>
+            <span className="font-medium tabular-nums">
+              {PRICE_MONTHLY || t('цена скоро', 'price soon')}
+              {PRICE_MONTHLY && <> / {t('мес', 'mo')}</>}
+            </span>
           </div>
           <div className="flex justify-between items-center">
             <span>{t('Ежегодно', 'Annual')}</span>
             <span className="font-medium tabular-nums">
-              2 990 ₽ / {t('год', 'yr')}
-              <span className="text-muted ml-1.5 text-[11px]">
-                (−16%)
-              </span>
+              {PRICE_ANNUAL || t('цена скоро', 'price soon')}
+              {PRICE_ANNUAL && <> / {t('год', 'yr')}</>}
             </span>
           </div>
           <div className="flex justify-between items-center">
             <span>Lifetime</span>
-            <span className="font-medium tabular-nums">4 990 ₽</span>
+            <span className="font-medium tabular-nums">
+              {PRICE_LIFETIME || t('цена скоро', 'price soon')}
+            </span>
           </div>
         </div>
         <button
           disabled
-          title={t('Скоро — подключаем провайдера (ЮKassa / CloudPayments)', 'Coming soon — connecting provider (YuKassa / CloudPayments)')}
+          title={t('Скоро — подключаем платёжного провайдера', 'Coming soon — connecting payment provider')}
           className="w-full px-3 py-2 text-[13px] rounded-md border border-border-soft opacity-50 cursor-not-allowed"
         >
           {t('Оплатить картой — скоро', 'Pay by card — coming soon')}
@@ -2717,106 +2764,65 @@ function SubscriptionSection() {
         <p className="text-[11px] text-muted flex items-start gap-1">
           <Info size={11} className="mt-0.5 shrink-0" />
           {t(
-            'Автоматическая оплата картой появится в dev.6.1. Пока — ручная активация ниже.',
-            'Automatic card payment will be available in dev.6.1. For now — use manual activation below.',
+            'Автоматическая оплата картой появится в ближайшем dev-релизе. Пока — ручная активация ниже.',
+            'Automatic card payment will be available in an upcoming dev release. For now — use manual activation below.',
           )}
         </p>
       </div>
 
-      {/* ──── Альтернативные способы оплаты ──── */}
-      <details className="bg-surface-alt border border-border-soft rounded-lg">
-        <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2">
-          <ExternalLink size={14} />
-          {t('Альтернативные способы оплаты', 'Alternative payment methods')}
-        </summary>
-        <div className="px-4 pb-4 space-y-3">
-          <p className="text-[12px] text-muted">
-            {t(
-              'Переведите нужную сумму (299 / 2990 / 4990 ₽) любым способом, скопируйте ID транзакции или хэш перевода и вставьте в форму ниже. Проверка занимает до 24 часов.',
-              'Transfer the required amount (299 / 2990 / 4990 ₽) by any method, copy the transaction ID or transfer hash, and paste it in the form below. Review takes up to 24 hours.',
-            )}
-          </p>
+      {/* ──── Альтернативные способы оплаты (env-driven) ──── */}
+      {PAYMENT_METHODS.length > 0 && (
+        <details className="bg-surface-alt border border-border-soft rounded-lg">
+          <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2">
+            <ExternalLink size={14} />
+            {t('Альтернативные способы оплаты', 'Alternative payment methods')}
+          </summary>
+          <div className="px-4 pb-4 space-y-3">
+            <p className="text-[12px] text-muted">
+              {PRICE_LINE
+                ? t(
+                    `Переведите нужную сумму (${PRICE_LINE}) любым способом, скопируйте ID транзакции или хэш перевода и вставьте в форму ниже. Проверка занимает до 24 часов.`,
+                    `Transfer the required amount (${PRICE_LINE}) by any method, copy the transaction ID or transfer hash, and paste it in the form below. Review takes up to 24 hours.`,
+                  )
+                : t(
+                    'Переведите нужную сумму любым способом, скопируйте ID транзакции или хэш перевода и вставьте в форму ниже. Проверка занимает до 24 часов.',
+                    'Transfer the required amount by any method, copy the transaction ID or transfer hash, and paste it in the form below. Review takes up to 24 hours.',
+                  )}
+            </p>
 
-          {/* CloudTips */}
-          <div className="border border-border-soft rounded-md p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[12px] font-semibold uppercase tracking-wide">CloudTips (RUB)</span>
-              <a
-                href="https://pay.cloudtips.ru/p/83f4d553"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[12px] flex items-center gap-1"
-                style={{ color: 'var(--accent, #01696F)' }}
-              >
-                {t('Открыть', 'Open')} <ExternalLink size={11} />
-              </a>
-            </div>
-            <div className="flex items-center gap-2">
-              <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
-                pay.cloudtips.ru/p/83f4d553
-              </code>
-              <button
-                onClick={() => copyToClipboard('https://pay.cloudtips.ru/p/83f4d553', 'CloudTips')}
-                className="p-1.5 rounded hover:bg-surface"
-                title={t('Скопировать', 'Copy')}
-              >
-                <Copy size={12} />
-              </button>
-            </div>
+            {PAYMENT_METHODS.map((m) => (
+              <div key={m.key} className="border border-border-soft rounded-md p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-semibold uppercase tracking-wide">{m.label}</span>
+                  {m.linkUrl && (
+                    <a
+                      href={m.linkUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[12px] flex items-center gap-1"
+                      style={{ color: 'var(--accent, #01696F)' }}
+                    >
+                      {t('Открыть', 'Open')} <ExternalLink size={11} />
+                    </a>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
+                    {m.displayValue}
+                  </code>
+                  <button
+                    onClick={() => copyToClipboard(m.value, m.label)}
+                    className="p-1.5 rounded hover:bg-surface"
+                    title={t('Скопировать', 'Copy')}
+                  >
+                    <Copy size={12} />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-
-          {/* TON */}
-          <div className="border border-border-soft rounded-md p-3 space-y-2">
-            <span className="text-[12px] font-semibold uppercase tracking-wide">TON</span>
-            <div className="flex items-center gap-2">
-              <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
-                UQDphkFo74Ff8yG92mYZk7wpclgdpjs666Qn9m1HvJ51becx
-              </code>
-              <button
-                onClick={() => copyToClipboard('UQDphkFo74Ff8yG92mYZk7wpclgdpjs666Qn9m1HvJ51becx', 'TON')}
-                className="p-1.5 rounded hover:bg-surface"
-                title={t('Скопировать', 'Copy')}
-              >
-                <Copy size={12} />
-              </button>
-            </div>
-          </div>
-
-          {/* USDT-TRC20 */}
-          <div className="border border-border-soft rounded-md p-3 space-y-2">
-            <span className="text-[12px] font-semibold uppercase tracking-wide">USDT (TRC-20)</span>
-            <div className="flex items-center gap-2">
-              <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
-                TJv97nWcARwvNTR6N62SW3TM2goo6gTpUZ
-              </code>
-              <button
-                onClick={() => copyToClipboard('TJv97nWcARwvNTR6N62SW3TM2goo6gTpUZ', 'USDT-TRC20')}
-                className="p-1.5 rounded hover:bg-surface"
-                title={t('Скопировать', 'Copy')}
-              >
-                <Copy size={12} />
-              </button>
-            </div>
-          </div>
-
-          {/* USDT-ERC20 */}
-          <div className="border border-border-soft rounded-md p-3 space-y-2">
-            <span className="text-[12px] font-semibold uppercase tracking-wide">USDT (ERC-20)</span>
-            <div className="flex items-center gap-2">
-              <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
-                0x316Da7F3930Cc8c45Ff689181f8053e5d45C9300
-              </code>
-              <button
-                onClick={() => copyToClipboard('0x316Da7F3930Cc8c45Ff689181f8053e5d45C9300', 'USDT-ERC20')}
-                className="p-1.5 rounded hover:bg-surface"
-                title={t('Скопировать', 'Copy')}
-              >
-                <Copy size={12} />
-              </button>
-            </div>
-          </div>
-        </div>
-      </details>
+        </details>
+      )}
 
       {/* ──── Форма ручной активации ──── */}
       <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
@@ -2853,9 +2859,15 @@ function SubscriptionSection() {
               onChange={e => setPlanRequested(e.target.value as 'monthly' | 'annual' | 'lifetime')}
               className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface"
             >
-              <option value="monthly">{t('Ежемесячно — 299 ₽', 'Monthly — 299 ₽')}</option>
-              <option value="annual">{t('Ежегодно — 2 990 ₽', 'Annual — 2 990 ₽')}</option>
-              <option value="lifetime">Lifetime — 4 990 ₽</option>
+              <option value="monthly">
+                {t('Ежемесячно', 'Monthly')}{PRICE_MONTHLY ? ` — ${PRICE_MONTHLY}` : ''}
+              </option>
+              <option value="annual">
+                {t('Ежегодно', 'Annual')}{PRICE_ANNUAL ? ` — ${PRICE_ANNUAL}` : ''}
+              </option>
+              <option value="lifetime">
+                Lifetime{PRICE_LIFETIME ? ` — ${PRICE_LIFETIME}` : ''}
+              </option>
             </select>
           </label>
 
@@ -2868,10 +2880,9 @@ function SubscriptionSection() {
               onChange={e => setProviderHint(e.target.value as any)}
               className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface"
             >
-              <option value="cloudtips">CloudTips (RUB)</option>
-              <option value="ton">TON</option>
-              <option value="usdt-trc20">USDT (TRC-20)</option>
-              <option value="usdt-erc20">USDT (ERC-20)</option>
+              {PAYMENT_METHODS.map((m) => (
+                <option key={m.key} value={m.key}>{m.label}</option>
+              ))}
               <option value="other">{t('Другой', 'Other')}</option>
             </select>
           </label>
@@ -2884,7 +2895,7 @@ function SubscriptionSection() {
               type="text"
               value={txRef}
               onChange={e => setTxRef(e.target.value)}
-              placeholder={t('например, 0xabc… или ID платежа CloudTips', 'e.g. 0xabc… or CloudTips payment ID')}
+              placeholder={t('например, 0xabc… или ID платежа провайдера', 'e.g. 0xabc… or provider payment ID')}
               className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface font-mono"
             />
           </label>

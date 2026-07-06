@@ -16,7 +16,7 @@
 //     в payment_events (миграция 0007). При дубле → 200 OK + skipped.
 //
 // Deploy:
-//   supabase functions deploy payment-webhook --project-ref sejpmzrmtgcvevukggkx --no-verify-jwt
+//   supabase functions deploy payment-webhook --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
 //   (--no-verify-jwt: провайдер не отправляет пользовательский JWT.)
 //
 // Secrets:

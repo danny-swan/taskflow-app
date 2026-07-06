@@ -4,24 +4,16 @@
 // v0.9.35-dev.6 — Supabase Edge Function: activation-notify
 //
 // Триггерится Database Webhook'ом на INSERT в activation_requests. Отправляет
-// уведомление админу через Resend API.
+// уведомление админу через email-провайдера (Resend API).
 //
-// Настройка (одноразово):
-//   1. Deploy:
-//        supabase functions deploy activation-notify --project-ref sejpmzrmtgcvevukggkx --no-verify-jwt
-//      (--no-verify-jwt обязателен: DB Webhook не отправляет пользовательский JWT.)
-//   2. Secrets в Dashboard → Edge Functions → activation-notify → Secrets:
-//        RESEND_API_KEY   — API-ключ Resend (https://resend.com/api-keys)
-//        ADMIN_EMAIL      — по умолчанию 'lebedevdo.one@gmail.com'
-//        RESEND_FROM      — например 'TaskFlow <noreply@taskflow.app>' (домен верифицирован в Resend)
-//        WEBHOOK_SECRET   — общий секрет, устанавливаемый в заголовке Webhook'а
-//   3. Database → Webhooks → Create:
-//        Table: activation_requests
-//        Events: INSERT
-//        HTTP Request → Method POST, URL:
-//          https://sejpmzrmtgcvevukggkx.functions.supabase.co/activation-notify
-//        HTTP Headers:
-//          x-webhook-secret: <WEBHOOK_SECRET>
+// Настройка — см. `docs/DEPLOY.md` (команды deploy и конфиг Database Webhook).
+//
+// Секреты (Dashboard → Edge Functions → activation-notify → Secrets):
+//   RESEND_API_KEY   — API-ключ вашего email-провайдера
+//   ADMIN_EMAIL      — email админа (обязательно; куда шлём уведомления)
+//   RESEND_FROM      — verified From-адрес
+//   WEBHOOK_SECRET   — общий секрет, устанавливаемый в заголовке x-webhook-secret
+//
 //
 // Идемпотентность: сама Postgres триггерит по одному разу на строку, но на
 // всякий случай (retry со стороны Supabase) — записываем `notified_at` в
@@ -118,23 +110,29 @@ Deno.serve(async (req) => {
       return json({ ok: true, skipped: 'already notified' }, 200)
     }
 
-    // ─── 4. Отправляем email через Resend ───────────────────────────────────
+    // ─── 4. Отправляем email через email-провайдера ─────────────────────────
     const resendKey = Deno.env.get('RESEND_API_KEY')
-    const adminEmail = Deno.env.get('ADMIN_EMAIL') || 'lebedevdo.one@gmail.com'
+    const adminEmail = Deno.env.get('ADMIN_EMAIL')
     const fromAddr = Deno.env.get('RESEND_FROM') || 'TaskFlow <onboarding@resend.dev>'
     if (!resendKey) {
-      // Если Resend ещё не сконфигурирован — возвращаем 200, чтобы Supabase
-      // не ретраил бесконечно; но лог оставляем в admin_notes для admin'а.
+      // Если провайдер ещё не сконфигурирован — возвращаем 200, чтобы Supabase
+      // не ретраил бесконечно; запись в БД всё равно видна через UI.
       console.warn('[activation-notify] RESEND_API_KEY not set, skipping email')
       return json({ ok: true, skipped: 'RESEND_API_KEY not set' }, 200)
     }
-
-    const priceMap: Record<string, string> = {
-      monthly: '299 ₽/мес',
-      annual: '2 990 ₽/год',
-      lifetime: '4 990 ₽ (Lifetime)',
+    if (!adminEmail) {
+      // Fail-safe: без ADMIN_EMAIL отправлять некуда.
+      console.warn('[activation-notify] ADMIN_EMAIL not set, skipping email')
+      return json({ ok: true, skipped: 'ADMIN_EMAIL not set' }, 200)
     }
-    const priceStr = priceMap[row.plan_requested] ?? row.plan_requested
+
+    // Мап план → человеко-читаемое название (цены — в UI/в сообщении заявки).
+    const planLabelMap: Record<string, string> = {
+      monthly: 'Месячная',
+      annual: 'Годовая',
+      lifetime: 'Lifetime',
+    }
+    const priceStr = planLabelMap[row.plan_requested] ?? row.plan_requested
 
     const subject = `[TaskFlow] Заявка на активацию: ${row.email} — ${priceStr}`
     const bodyText = [

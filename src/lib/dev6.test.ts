@@ -91,7 +91,7 @@ const NOW = new Date('2026-07-06T12:00:00Z');
 
 describe('resolveEntitlement — admin override', () => {
   it('email из ADMIN_EMAILS → всегда lifetime, даже если row=null', () => {
-    const e = resolveEntitlement(null, 'lebedevdo.one@gmail.com', NOW.getTime());
+    const e = resolveEntitlement(null, 'admin@example.test', NOW.getTime());
     expect(e.effectivePlan).toBe('lifetime');
     expect(e.isAdmin).toBe(true);
     expect(isPro(e)).toBe(true);
@@ -99,7 +99,7 @@ describe('resolveEntitlement — admin override', () => {
   });
 
   it('admin email + free row → override lifetime', () => {
-    const e = resolveEntitlement(row({ plan: 'free' }), 'lebedevdo.one@gmail.com', NOW.getTime());
+    const e = resolveEntitlement(row({ plan: 'free' }), 'admin@example.test', NOW.getTime());
     expect(e.effectivePlan).toBe('lifetime');
     expect(e.isAdmin).toBe(true);
   });
@@ -110,8 +110,8 @@ describe('resolveEntitlement — admin override', () => {
     expect(e.effectivePlan).toBe('free');
   });
 
-  it('ADMIN_EMAILS содержит lebedevdo.one@gmail.com (защита от опечаток)', () => {
-    expect(ADMIN_EMAILS).toContain('lebedevdo.one@gmail.com');
+  it('ADMIN_EMAILS содержит admin@example.test (защита от опечаток)', () => {
+    expect(ADMIN_EMAILS).toContain('admin@example.test');
   });
 });
 
@@ -330,7 +330,7 @@ describe('daysLeftInTrial / daysLeftInSubscription', () => {
 
 describe('isAdmin helper', () => {
   it('true для email из списка', () => {
-    const e = resolveEntitlement(null, 'lebedevdo.one@gmail.com', NOW.getTime());
+    const e = resolveEntitlement(null, 'admin@example.test', NOW.getTime());
     expect(isAdmin(e)).toBe(true);
   });
   it('false для остальных', () => {
@@ -341,7 +341,7 @@ describe('isAdmin helper', () => {
     const future = new Date(NOW.getTime() + 86_400_000).toISOString();
     const e = resolveEntitlement(
       row({ plan: 'pro', valid_until: future }),
-      'lebedevdo.one@gmail.com',
+      'admin@example.test',
       NOW.getTime(),
     );
     expect(isAdmin(e)).toBe(true);

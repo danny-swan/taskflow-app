@@ -9,7 +9,7 @@
 // логика вынесена в Edge Function.
 //
 // Deploy:
-//   supabase functions deploy delete_account --project-ref sejpmzrmtgcvevukggkx
+//   supabase functions deploy delete_account --project-ref "$SUPABASE_PROJECT_REF"
 //
 // Клиент вызывает:
 //   const { error } = await supabase.functions.invoke('delete_account');

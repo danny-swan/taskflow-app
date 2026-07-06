@@ -56,8 +56,20 @@ import { logger } from './logger';
 
 // ─── Константы ────────────────────────────────────────────────────────────────
 
-/** Email-ы, которые всегда считаются lifetime (двойная страховка к БД seed). */
-export const ADMIN_EMAILS: readonly string[] = ['lebedevdo.one@gmail.com'];
+/**
+ * Email-ы, которые всегда считаются lifetime (двойная страховка к БД seed).
+ *
+ * Читается из `VITE_ADMIN_EMAILS` (comma-separated) на этапе сборки.
+ * По умолчанию пустой массив — никакого хардкода в исходниках.
+ *
+ * Пример `.env.local`: `VITE_ADMIN_EMAILS=admin@example.com,team@example.com`
+ */
+export const ADMIN_EMAILS: readonly string[] = (
+  (import.meta as unknown as { env?: { VITE_ADMIN_EMAILS?: string } }).env?.VITE_ADMIN_EMAILS ?? ''
+)
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter((s) => s.length > 0);
 
 /** Длительность trial (14 дней по продуктовому решению). */
 export const TRIAL_DAYS = 14;

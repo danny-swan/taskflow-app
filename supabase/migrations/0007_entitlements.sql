@@ -27,8 +27,8 @@
 -- Realtime: все три таблицы в publication supabase_realtime, чтобы
 -- клиент видел изменение плана мгновенно после аппрува.
 --
--- Grandfathered: seed lebedevdo.one@gmail.com → lifetime.
--- Маппинг email → user_id делаем через SELECT из auth.users.
+-- Seed админ/grandfathered-аккаунтов вынесён в отдельную миграцию
+-- (см. 0009_admin_seed.sql) — email-а в истории кода не храним.
 
 -- ============================================================================
 -- 1. user_entitlements
@@ -205,20 +205,8 @@ begin
 end $$;
 
 -- ============================================================================
--- 5. Grandfathered seed
+-- 5. Seed вынесён в 0009_admin_seed.sql
 -- ============================================================================
--- Даём lifetime админу и подстраховываем на случай если строка уже была.
-
-insert into public.user_entitlements (user_id, plan, valid_until, source, notes, trial_used)
-select u.id, 'lifetime'::public.plan_kind, null, 'seed'::public.entitlement_source,
-       'grandfathered admin (v0.9.35-dev.6)', true
-  from auth.users u
- where u.email = 'lebedevdo.one@gmail.com'
-on conflict (user_id) do update
-  set plan        = 'lifetime',
-      valid_until = null,
-      source      = 'seed',
-      notes       = coalesce(public.user_entitlements.notes, '')
-                    || case when public.user_entitlements.notes is null then '' else E'\n' end
-                    || 'grandfathered admin (v0.9.35-dev.6)',
-      trial_used  = true;
+-- Здесь был seed grandfathered админа по email. С v0.9.35-dev.6.1 email‘ы
+-- больше не хранятся в истории кода; seed теперь выполняется вручную
+-- через SQL editor по шаблону в 0009_admin_seed.sql.

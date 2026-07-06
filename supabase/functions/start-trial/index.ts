@@ -11,7 +11,7 @@
 //   2. Флаг trial_used — если true, отказываем (trial уже был).
 //
 // Deploy:
-//   supabase functions deploy start-trial --project-ref sejpmzrmtgcvevukggkx
+//   supabase functions deploy start-trial --project-ref "$SUPABASE_PROJECT_REF"
 //
 // Secrets (Dashboard → Edge Functions → start-trial → Secrets):
 //   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY  (Supabase проставит сама)
