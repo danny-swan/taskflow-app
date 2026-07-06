@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign } from 'lucide-react';
@@ -2471,9 +2472,12 @@ const PAYMENT_METHODS: PaymentMethodDef[] = (() => {
   return list;
 })();
 
-const PRICE_MONTHLY = _env.VITE_PAY_PRICE_MONTHLY?.trim() || '';
-const PRICE_ANNUAL = _env.VITE_PAY_PRICE_ANNUAL?.trim() || '';
-const PRICE_LIFETIME = _env.VITE_PAY_PRICE_LIFETIME?.trim() || '';
+// v0.9.35-dev.6.4.1: дефолтные цены вшиты (совпадают с i18n subscription_block_price_*).
+// Если CI подаёт VITE_PAY_PRICE_* — они переопределяют. Иначе UI всегда
+// показывает актуальную цену, без заглушки «цена скоро».
+const PRICE_MONTHLY = _env.VITE_PAY_PRICE_MONTHLY?.trim() || '299 ₽';
+const PRICE_ANNUAL = _env.VITE_PAY_PRICE_ANNUAL?.trim() || '2 990 ₽';
+const PRICE_LIFETIME = _env.VITE_PAY_PRICE_LIFETIME?.trim() || '4 990 ₽';
 
 /** Короткая строка цен, если хотя бы одна цена задана. */
 const PRICE_LINE = [PRICE_MONTHLY, PRICE_ANNUAL, PRICE_LIFETIME].filter(Boolean).join(' / ');
@@ -2483,6 +2487,7 @@ function SubscriptionSection() {
   const isRu = lang === 'ru';
   const pushToast = useStore(s => s.pushToast);
   const auth = useAuth();
+  const navigate = useNavigate();
   const t = (ru: string, en: string) => (isRu ? ru : en);
 
   const user = auth.session?.user;
@@ -2726,46 +2731,68 @@ function SubscriptionSection() {
         </div>
       )}
 
-      {/* ──── Оформить подписку (disabled) ──── */}
+      {/* ──── Оформить подписку (→ /checkout) ──── */}
+      {/* v0.9.35-dev.6.4.1: кнопка активна, каждый тариф — кликабельный ряд,
+          ведёт на /checkout?tier={monthly|annual|lifetime}. Cloud/YooKassa уже подключены (dev.6.4). */}
       <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
         <h4 className="text-[14px] font-semibold flex items-center gap-2">
           <Cloud size={14} />
           {t('Оформить подписку', 'Purchase subscription')}
         </h4>
-        <div className="space-y-2 text-[13px]">
-          <div className="flex justify-between items-center">
+        <div className="space-y-1.5 text-[13px]">
+          <button
+            type="button"
+            onClick={() => navigate('/checkout?tier=monthly')}
+            className="w-full flex justify-between items-center px-3 py-2 rounded-md border border-border-soft/60 hover:bg-surface transition-colors"
+          >
             <span>{t('Ежемесячно', 'Monthly')}</span>
             <span className="font-medium tabular-nums">
-              {PRICE_MONTHLY || t('цена скоро', 'price soon')}
-              {PRICE_MONTHLY && <> / {t('мес', 'mo')}</>}
+              {PRICE_MONTHLY} / {t('мес', 'mo')}
             </span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span>{t('Ежегодно', 'Annual')}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/checkout?tier=annual')}
+            className="w-full flex justify-between items-center px-3 py-2 rounded-md border transition-colors"
+            style={{
+              background: 'color-mix(in oklab, var(--accent, #01696F) 8%, transparent)',
+              borderColor: 'color-mix(in oklab, var(--accent, #01696F) 30%, transparent)',
+            }}
+          >
+            <span className="flex items-center gap-2">
+              {t('Ежегодно', 'Annual')}
+              <span className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium leading-none" style={{ background: 'var(--accent, #01696F)' }}>
+                {t('выгодно', 'best')}
+              </span>
+            </span>
             <span className="font-medium tabular-nums">
-              {PRICE_ANNUAL || t('цена скоро', 'price soon')}
-              {PRICE_ANNUAL && <> / {t('год', 'yr')}</>}
+              {PRICE_ANNUAL} / {t('год', 'yr')}
             </span>
-          </div>
-          <div className="flex justify-between items-center">
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/checkout?tier=lifetime')}
+            className="w-full flex justify-between items-center px-3 py-2 rounded-md border border-border-soft/60 hover:bg-surface transition-colors"
+          >
             <span>Lifetime</span>
             <span className="font-medium tabular-nums">
-              {PRICE_LIFETIME || t('цена скоро', 'price soon')}
+              {PRICE_LIFETIME}
             </span>
-          </div>
+          </button>
         </div>
         <button
-          disabled
-          title={t('Скоро — подключаем платёжного провайдера', 'Coming soon — connecting payment provider')}
-          className="w-full px-3 py-2 text-[13px] rounded-md border border-border-soft opacity-50 cursor-not-allowed"
+          type="button"
+          onClick={() => navigate('/checkout')}
+          style={{ background: 'var(--accent, #01696F)' }}
+          className="w-full px-3 py-2 text-[13px] rounded-md text-white font-medium hover:opacity-90 transition-opacity"
         >
-          {t('Оплатить картой — скоро', 'Pay by card — coming soon')}
+          {t('Оплатить картой', 'Pay by card')}
         </button>
         <p className="text-[11px] text-muted flex items-start gap-1">
           <Info size={11} className="mt-0.5 shrink-0" />
           {t(
-            'Автоматическая оплата картой появится в ближайшем dev-релизе. Пока — ручная активация ниже.',
-            'Automatic card payment will be available in an upcoming dev release. For now — use manual activation below.',
+            'Оплата через ЮKassa. Пока магазин в test-режиме (prod-модерация). Автопродление появится в ближайшем релизе.',
+            'Payment via YooKassa. Store is in test mode (prod moderation). Auto-renewal comes in the next release.',
           )}
         </p>
       </div>
