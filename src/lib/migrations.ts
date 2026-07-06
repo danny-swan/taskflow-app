@@ -359,6 +359,48 @@ export const MIGRATIONS: Migration[] = [
       );
     },
   },
+
+  // ================================================================
+  // v7 (v0.9.35-dev.3): Backfill sync_outbox для всех существующих строк.
+  //
+  // Проблема: в dev.2 мы включили enqueueOutbox в сеттерах стора, но все
+  // уже существующие задачи/теги/статусы/шаблоны (у любого пользователя
+  // с dev.1 бэкфиллом uuid) в outbox’е НЕ оказались. При включении реального
+  // push’а (dev.4) они не улетят в облако — потеря данных при смене устройства.
+  //
+  // Решение: одноразовый backfill — INSERT OR IGNORE в sync_outbox всех живых
+  // строк (deleted_at IS NULL) с op='upsert'. IGNORE — на случай, если в dev.2 между
+  // миграцией v6 и v7 пользователь успел что-то изменить — такая запись уже есть
+  // в outbox’е с актуальным op, запись backfill’а не должна её перезаписать.
+  //
+  // Удалённые строки (deleted_at IS NOT NULL) НЕ backfill’им — облако о них
+  // никогда не знало, так что delete-событие отправлять нечему. Они так и
+  // завершат свою жизнь только локально (в dev.4 вычистим через retention).
+  // ================================================================
+  {
+    version: 7,
+    description:
+      'Backfill sync_outbox for existing rows (v0.9.35-dev.3)',
+    up: async ({ exec }) => {
+      const backfillTables = ['tasks', 'tags', 'statuses', 'task_templates', 'overdue_events'];
+      for (const t of backfillTables) {
+        try {
+          await exec(
+            `INSERT OR IGNORE INTO sync_outbox
+               (entity_table, entity_uuid, op, queued_at, attempt_count)
+             SELECT ?, uuid, 'upsert', datetime('now'), 0
+             FROM ${t}
+             WHERE uuid IS NOT NULL AND deleted_at IS NULL`,
+            [t],
+          );
+        } catch (e) {
+          // task_templates / overdue_events могут отсутствовать в крайне старых базах
+          // (или в fresh install без seed'а) — не валим миграцию.
+          console.warn(`[migrate v7] backfill skipped for ${t}:`, e);
+        }
+      }
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */

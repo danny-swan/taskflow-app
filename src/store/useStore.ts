@@ -104,6 +104,7 @@ interface State {
   overdueMode: 'calendar' | 'business'; // v0.9.2 (№1): как считать просрочку и остаток дней
   overdueTick: number;             // v0.9.2 (№3): счётчик обновлений таблицы overdue_events (для перерисовки графика)
   autoUpdateEnabled: boolean;      // v0.9.8: автопроверка обновлений при старте (Tauri updater)
+  pendingSyncCount: number;        // v0.9.35-dev.3: кол-во записей в sync_outbox, ждущих push'а в облако
 
   // v0.9.28: автоочистка выполненных задач
   autocleanupEnabled: boolean;           // вкл/выкл автозапуска при старте
@@ -207,6 +208,7 @@ export const useStore = create<State>((set, get) => ({
   tasksView: 'list',
   overdueMode: 'calendar',
   overdueTick: 0,
+  pendingSyncCount: 0,
   autoUpdateEnabled: true,
   // v0.9.28: автоочистка выполненных — дефолты state (до чтения из БД).
   // v0.9.34: для новых установок autocleanup_enabled='1' пишется в seed таблицы settings.
@@ -363,6 +365,15 @@ export const useStore = create<State>((set, get) => ({
         'SELECT * FROM tasks WHERE deleted_at IS NULL ORDER BY sort_order'
       ),
       taskTemplates,
+      pendingSyncCount: (() => {
+        try {
+          const row = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sync_outbox');
+          return row?.n ?? 0;
+        } catch {
+          // sync_outbox ещё не существует (база старше v6) — вернём 0.
+          return 0;
+        }
+      })(),
     });
   },
 

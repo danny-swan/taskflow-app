@@ -1,9 +1,10 @@
 import { NavLink } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
+import { usePendingSyncCount } from '../lib/pendingSync';
 import {
   ListChecks, Plus, LayoutDashboard, BarChart3, Settings, HelpCircle,
-  Sun, Moon, Sparkles, Leaf, Palette, ChevronDown, CalendarDays,
+  Sun, Moon, Sparkles, Leaf, Palette, ChevronDown, CalendarDays, Cloud,
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 
@@ -56,6 +57,11 @@ export function Sidebar() {
         <div className="text-[11px] text-muted mt-0.5 ml-[2px] tracking-wide">{tr(lang, 'brand_sub')}</div>
         <div className="text-[10px] text-faint mt-0.5 ml-[2px] tracking-wider tabular mono">v{__APP_VERSION__}</div>
       </div>
+
+      {/* v0.9.35-dev.3: pending sync indicator.
+          Виден в dev-сборке всегда (для отладки sync-слоя), в prod — только если count > 0.
+          В dev.4 к этому чипу будет привязан realtime-статус push'а. */}
+      <PendingSyncChip />
 
       {/* Nav */}
       <nav className="flex-1 px-2.5 overflow-y-auto">
@@ -146,6 +152,31 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+  );
+}
+
+/**
+ * v0.9.35-dev.3: dev-only чип с количеством записей в sync_outbox.
+ * В prod-сборке показывается только если что-то реально ждёт push'а —
+ * в dev.4 тут будет realtime-индикатор (идёт отправка / ошибка / всё синк).
+ */
+function PendingSyncChip() {
+  const lang = useStore(s => s.language);
+  const count = usePendingSyncCount();
+  const isDev = import.meta.env.DEV;
+  if (!isDev && count === 0) return null;
+  const label = lang === 'ru' ? 'pending sync' : 'pending sync';
+  return (
+    <div
+      className="mx-3 mb-2 mt-1 px-2 py-1 rounded-md border border-border-soft bg-[var(--surface-alt)]/40 flex items-center gap-1.5 text-[10px] text-muted mono tracking-wide"
+      title={lang === 'ru'
+        ? `В очереди на отправку в облако: ${count}`
+        : `Queued for cloud push: ${count}`}
+    >
+      <Cloud size={11} className={count > 0 ? 'text-accent' : 'text-faint'} />
+      <span>{label}:</span>
+      <span className={count > 0 ? 'text-accent font-semibold tabular' : 'text-faint tabular'}>{count}</span>
+    </div>
   );
 }
 
