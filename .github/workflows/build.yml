@@ -105,6 +105,24 @@ jobs:
       # Typecheck + unit-тесты уже пройдены в job `test` (выше, needs: test),
       # поэтому здесь их не повторяем — экономим время Windows-раннера.
 
+      # Определяем канал релиза заранее — влияет на набор bundle'ов.
+      # MSI/WiX не умеет non-numeric pre-release (dev.N), поэтому для
+      # pre-release тегов собираем только NSIS + portable.
+      - name: Determine release channel
+        id: channel
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" =~ ^v.*-(dev|beta|rc|alpha)(\.[0-9]+)?$ ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "bundles=nsis" >> $GITHUB_OUTPUT
+            echo "Tag $TAG → pre-release channel (NSIS + portable only, MSI skipped)"
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "bundles=all" >> $GITHUB_OUTPUT
+            echo "Tag $TAG → stable channel (NSIS + MSI + portable)"
+          fi
+
       - name: Sync version from tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -122,7 +140,9 @@ jobs:
           # Cargo.toml — patch version field
           (Get-Content src-tauri/Cargo.toml) -replace '^version = ".*"', "version = `"$tag`"" | Set-Content src-tauri/Cargo.toml
 
-      - name: Build Tauri app (NSIS + MSI, signed for updater)
+      # Stable: NSIS + MSI + portable (default таури).
+      - name: Build Tauri app (stable — NSIS + MSI, signed for updater)
+        if: steps.channel.outputs.is_prerelease == 'false'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -139,6 +159,22 @@ jobs:
           # Секретный Secret Key лежит только в Supabase Attack Protection.
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc
+
+      # Pre-release: только NSIS + portable.
+      # WiX/MSI требует numeric-only pre-release identifier (наш тег v0.9.35-dev.1 вызывает
+      # "optional pre-release identifier ... must be numeric-only ... for msi target").
+      # От такой схемы отказались осознанно в пользу семантики -dev.N/-beta.N/-rc.N.
+      - name: Build Tauri app (pre-release — NSIS + portable only)
+        if: steps.channel.outputs.is_prerelease == 'true'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+        run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: List build artifacts
         shell: pwsh
@@ -175,8 +211,9 @@ jobs:
           path: src-tauri/target/x86_64-pc-windows-msvc/release/taskflow.exe
           if-no-files-found: warn
 
+      # Не генерируем latest.json для pre-release — всё равно не публикуется (см. release-джобу).
       - name: Generate updater manifest (latest.json)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && steps.channel.outputs.is_prerelease == 'false'
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
@@ -205,7 +242,7 @@ jobs:
           Get-Content latest.json
 
       - name: Upload latest.json (Windows part)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && steps.channel.outputs.is_prerelease == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: latest-windows
