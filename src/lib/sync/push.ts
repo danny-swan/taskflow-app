@@ -44,6 +44,40 @@ function isReadyForRetry(attemptCount: number, lastAttemptAt: string | null): bo
   return Date.now() - lastAttemptMs >= backoffSec * 1000;
 }
 
+/**
+ * Определяет, является ли ошибка от Supabase "permanent" — то есть
+ * её бессмысленно ретраить. Смотрим на:
+ *   - PostgREST/Postgres codes: 42501 (permission denied), 42P01 (undefined table),
+ *     42703 (undefined column), 22P02 (invalid text), 23503 (fk violation),
+ *     PGRST301 (JWT expired), PGRST116 (schema mismatch);
+ *   - HTTP-маркеры в тексте: "401", "403", "404", "422";
+ *   - RLS: "row-level security", "violates row-level security";
+ *   - schema: "column ... does not exist", "does not exist";
+ *   - malformed: "invalid input syntax".
+ *
+ * NB: 409 (conflict) и 429 (rate limit) — ТРАНЗИЕНТНЫЕ, ретраим.
+ * 5xx / сеть — тоже транзиентные.
+ */
+export function isPermanentError(errorMsg: string): boolean {
+  const m = errorMsg.toLowerCase();
+  // Postgres SQLSTATE codes
+  if (/\b42501\b|\b42p01\b|\b42703\b|\b22p02\b|\b23503\b/.test(m)) return true;
+  // PostgREST codes
+  if (/\bpgrst\d{3}\b/.test(m)) return true;
+  // RLS
+  if (m.includes('row-level security') || m.includes('row level security')) return true;
+  // Schema / column
+  if (m.includes('does not exist')) return true;
+  if (m.includes('invalid input syntax')) return true;
+  // Auth
+  if (m.includes('jwt') && (m.includes('expired') || m.includes('invalid'))) return true;
+  // Прямые HTTP-статусы (когда Supabase-js выкидывает голый fetch-error)
+  if (/\b(401|403|404|422)\b/.test(m)) return true;
+  // Mapper-ошибки (например task не имеет uuid) — permanent до overdue-цикла,
+  // но мы хотим их ретраить (task может появиться). Не маркируем.
+  return false;
+}
+
 interface OutboxRow {
   id: number;
   entity_table: string;
@@ -95,11 +129,25 @@ function markSuccess(ids: number[]): void {
   db.run(`DELETE FROM sync_outbox WHERE id IN (${placeholders})`, ids);
 }
 
-/** Помечает ошибку — увеличивает attempt_count, сохраняет last_error. */
+/**
+ * Помечает ошибку. Если ошибка permanent — сразу attempt_count=MAX_ATTEMPTS
+ * (больше в батч не попадёт). Иначе — attempt_count++.
+ */
 function markFailure(ids: number[], errorMsg: string): void {
   if (ids.length === 0) return;
   const now = new Date().toISOString();
   const placeholders = ids.map(() => '?').join(',');
+  if (isPermanentError(errorMsg)) {
+    db.run(
+      `UPDATE sync_outbox
+       SET attempt_count = ?,
+           last_attempt_at = ?,
+           last_error = ?
+       WHERE id IN (${placeholders})`,
+      [MAX_ATTEMPTS, now, `[permanent] ${errorMsg}`, ...ids],
+    );
+    return;
+  }
   db.run(
     `UPDATE sync_outbox
      SET attempt_count = attempt_count + 1,
@@ -209,6 +257,7 @@ export async function pushAll(userId: string, clientId: string): Promise<PushRes
 // Экспорт для тестов — чтобы можно было проверять внутреннюю логику.
 export const _internals = {
   isReadyForRetry,
+  isPermanentError,
   readReadyBatch,
   markSuccess,
   markFailure,

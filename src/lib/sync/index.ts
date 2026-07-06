@@ -36,6 +36,27 @@ import { getClientId } from '../clientId';
 import { logger } from '../logger';
 import { pushAll, type PushResult } from './push';
 import { pullAll, type PullResult } from './pull';
+import { subscribeRealtime, unsubscribeRealtime } from './realtime';
+
+/**
+ * v0.9.35-dev.5: вызываем useStore.refresh() после успешного pull, чтобы
+ * UI увидел пришедшие из облака данные без перезапуска. Lazy import,
+ * чтобы избежать цикла и чтобы в unit-тестах можно было не вызывать его.
+ * Ошибки refresh глотаем — они не должны ломать sync цикл.
+ */
+async function refreshStoreAfterPull(applied: number): Promise<void> {
+  if (applied <= 0) return;
+  try {
+    const mod = await import('../../store/useStore');
+    const state = mod.useStore.getState();
+    if (typeof state.refresh === 'function') {
+      state.refresh();
+      logger.info(`[sync/orchestrator] store refreshed (${applied} rows applied)`);
+    }
+  } catch (e) {
+    logger.warn('[sync/orchestrator] store refresh failed:', e);
+  }
+}
 
 /** Публичное состояние sync-цикла (для UI). */
 export type SyncState =
@@ -183,6 +204,8 @@ export async function syncNow(): Promise<SyncResult> {
         // Pull частично упал, но не фатально — идём дальше.
         logger.warn('[sync/orchestrator] pull had errors:', pullResult.firstError);
       }
+      // Если что-то реально применено — обновляем UI.
+      await refreshStoreAfterPull(pullResult.applied);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.warn('[sync/orchestrator] pull failed:', msg);
@@ -210,6 +233,7 @@ export async function syncNow(): Promise<SyncResult> {
     let finalPullResult: PullResult | null = null;
     try {
       finalPullResult = await pullAll(userId);
+      await refreshStoreAfterPull(finalPullResult.applied);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.warn('[sync/orchestrator] final pull failed:', msg);
@@ -307,6 +331,25 @@ export function initAutoSync(): void {
   // Первый sync при инициализации.
   syncNow().catch(e => logger.warn('[sync/auto] initial sync failed:', e));
 
+  // Realtime-подписка на текущую сессию + переподписка на смену auth-состояния.
+  //
+  // v0.9.35-dev.5: раньше синхронизация полагалась только на debounced
+  // авто-sync после enqueue + on-focus/on-online. Теперь при наличии сети
+  // изменения с других устройств прилетают почти мгновенно.
+  supabase.auth.getSession().then(({ data }) => {
+    const uid = data?.session?.user?.id;
+    if (uid) subscribeRealtime(uid);
+  }).catch(e => logger.warn('[sync/auto] realtime init failed:', e));
+
+  supabase.auth.onAuthStateChange((_event, session) => {
+    const uid = session?.user?.id;
+    if (uid) {
+      subscribeRealtime(uid);
+    } else {
+      unsubscribeRealtime();
+    }
+  });
+
   // On-focus триггер.
   if (typeof window !== 'undefined') {
     window.addEventListener('focus', () => {
@@ -329,11 +372,13 @@ export function _resetForTests(): void {
   autoSyncInitialized = false;
   inFlight = null;
   currentState = { status: 'idle', lastSyncedAt: null, lastError: null };
+  unsubscribeRealtime();
 }
 
 /** Экспорт для тестов. */
 export const _internals = {
   ensureDeviceRegistered,
+  refreshStoreAfterPull,
   AUTO_SYNC_ENABLED,
   AUTO_SYNC_DEBOUNCE_MS,
 };

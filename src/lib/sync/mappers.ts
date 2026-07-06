@@ -289,6 +289,83 @@ export function templateToCloudPayload(
   };
 }
 
+// ─── overdue_events ─────────────────────────────────────────────────────────
+//
+// Локальная строка ссылается на задачу через int task_id → tasks.id.
+// В облаке task_id — это uuid задачи (без FK, потому что overdue_events
+// append-only и задача может быть soft-deleted).
+//
+// Особенности:
+//   * НЕТ updated_at и version в облачной схеме — append-only
+//   * pull курсор идёт по id (uuidv7 монотонный, лексикографически = временной)
+//   * маппер требует, чтобы у task уже был uuid в облаке (значит task должен
+//     быть запушен до overdue_event) — гарантируется через PUSH_ORDER
+
+/** Локальная строка события просрочки. */
+export interface LocalOverdueEventRow {
+  id: number;
+  task_id: number;
+  deadline_snapshot: string;
+  event_date: string;
+  created_at: string;
+  updated_at: string;
+  uuid: string;
+  deleted_at: string | null;
+  version: number;
+  client_id: string | null;
+}
+
+/** Payload для sync_overdue_events. */
+export interface CloudOverdueEventPayload {
+  id: string;
+  user_id: string;
+  task_id: string;             // uuid задачи
+  deadline_snapshot: string;
+  event_date: string;
+  created_at: string;
+  deleted_at: string | null;
+  client_id: string;
+}
+
+/** Резолвит локальный task_id (int) → uuid задачи. Кидает Error если задача не найдена. */
+export function resolveTaskUuid(taskId: number): string {
+  const row = db.get<{ uuid: string | null }>(
+    'SELECT uuid FROM tasks WHERE id=?',
+    [taskId],
+  );
+  if (!row?.uuid) {
+    throw new Error(`task ${taskId} has no uuid (нельзя запушить overdue_event)`);
+  }
+  return row.uuid;
+}
+
+/** Резолвит uuid задачи → локальный id (для pull-side). NULL если не найден. */
+export function resolveTaskIdByUuid(uuid: string | null): number | null {
+  if (!uuid) return null;
+  const row = db.get<{ id: number }>(
+    'SELECT id FROM tasks WHERE uuid=?',
+    [uuid],
+  );
+  return row?.id ?? null;
+}
+
+export function overdueEventToCloudPayload(
+  row: LocalOverdueEventRow,
+  userId: string,
+  clientId: string,
+): CloudOverdueEventPayload {
+  return {
+    id: row.uuid,
+    user_id: userId,
+    task_id: resolveTaskUuid(row.task_id),
+    deadline_snapshot: row.deadline_snapshot,
+    event_date: row.event_date,
+    created_at: row.created_at,
+    deleted_at: row.deleted_at,
+    client_id: row.client_id ?? clientId,
+  };
+}
+
 /**
  * Табличная информация для push цикла — как читать локальную строку и
  * конвертировать её в payload. Порядок в PUSH_ORDER важен: сначала parent'ы
@@ -334,17 +411,25 @@ export const TEMPLATES_SPEC: TableSpec<LocalTemplateRow, CloudTemplatePayload> =
   toCloud: templateToCloudPayload,
 };
 
+export const OVERDUE_EVENTS_SPEC: TableSpec<LocalOverdueEventRow, CloudOverdueEventPayload> = {
+  outbox: 'overdue_events',
+  cloud: 'sync_overdue_events',
+  fetchLocal: (uuid) => db.get<LocalOverdueEventRow>('SELECT * FROM overdue_events WHERE uuid=?', [uuid]),
+  toCloud: overdueEventToCloudPayload,
+};
+
 /**
- * Порядок push'а: parent'ы первыми, чтобы FK-ссылки на облаке разрешились.
- * statuses → tags → tasks → task_templates.
- * overdue_events на текущей итерации не пушим — они append-only и требуют
- * task_id (uuid задачи) уже присутствующим в облаке. Отложим на dev.5.
+ * Порядок push'а: parent'ы первыми, чтобы ссылки на облаке разрешились.
+ * statuses → tags → tasks → task_templates → overdue_events.
+ * overdue_events идут ПОСЛЕ tasks — их маппер требует task.uuid, а task
+ * должен быть уже запушен и виден в облаке.
  */
 export const PUSH_ORDER: TableSpec[] = [
   STATUSES_SPEC,
   TAGS_SPEC,
   TASKS_SPEC,
   TEMPLATES_SPEC,
+  OVERDUE_EVENTS_SPEC,
 ];
 
 /** Возвращает spec по имени outbox таблицы. */

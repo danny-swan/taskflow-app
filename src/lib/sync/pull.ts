@@ -26,24 +26,31 @@ import {
   PUSH_ORDER,
   resolveStatusIdByUuid,
   resolveTagIdByUuid,
+  resolveTaskIdByUuid,
   type TableSpec,
 } from './mappers';
 
-/** Ключ в settings для хранения last_pulled_at per-table. */
+/** Ключ в settings для хранения last_pulled cursor per-table. */
 function lastPulledKey(cloudTable: string): string {
   return `sync_last_pulled_${cloudTable}`;
 }
 
-/** Читает last_pulled_at для таблицы из settings. */
-function getLastPulledAt(cloudTable: string): string {
+/**
+ * Читает last_pulled cursor для таблицы из settings.
+ * cursorCol определяет начальное значение (updated_at → '1970-01-01', id → zero uuid).
+ */
+function getLastPulledAt(cloudTable: string, cursorCol: 'updated_at' | 'id' = 'updated_at'): string {
   const row = db.get<{ value: string }>(
     'SELECT value FROM settings WHERE key=?',
     [lastPulledKey(cloudTable)],
   );
-  return row?.value ?? '1970-01-01T00:00:00Z';
+  if (row?.value) return row.value;
+  return cursorCol === 'id'
+    ? '00000000-0000-0000-0000-000000000000'
+    : '1970-01-01T00:00:00Z';
 }
 
-/** Обновляет last_pulled_at в settings. */
+/** Обновляет last_pulled cursor в settings. */
 function setLastPulledAt(cloudTable: string, value: string): void {
   db.run(
     `INSERT INTO settings (key, value) VALUES (?, ?)
@@ -204,6 +211,51 @@ function applyCloudRowTags(row: CloudRow): boolean {
   return true;
 }
 
+/**
+ * overdue_events: append-only, нет updated_at/version. LWW идёт по id
+ * (uuidv7 монотонный). Если локально есть — обновляем только deleted_at,
+ * остальное immutable. Если нет — INSERT (при условии что task уже локально).
+ */
+function applyCloudRowOverdueEvents(row: CloudRow): boolean {
+  const local = db.get<{ id: number; deleted_at: string | null }>(
+    'SELECT id, deleted_at FROM overdue_events WHERE uuid=?',
+    [row.id],
+  );
+  if (local) {
+    // Меняем только если deleted_at отличается (единственное mutable-поле).
+    if ((local.deleted_at ?? null) === (row.deleted_at ?? null)) return false;
+    db.run(
+      `UPDATE overdue_events SET deleted_at=?, updated_at=? WHERE uuid=?`,
+      [row.deleted_at, new Date().toISOString(), row.id],
+    );
+    return true;
+  }
+  // Новая строка. Нужна локальная task_id (int).
+  const taskId = resolveTaskIdByUuid(row.task_id);
+  if (taskId === null) {
+    logger.warn(`[sync/pull] overdue_event ${row.id}: task ${row.task_id} не локально, deferred`);
+    return false;
+  }
+  db.run(
+    `INSERT INTO overdue_events
+      (uuid, task_id, deadline_snapshot, event_date, created_at, updated_at,
+       deleted_at, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [
+      row.id,
+      taskId,
+      row.deadline_snapshot,
+      row.event_date,
+      row.created_at,
+      row.created_at,           // updated_at = created_at у append-only
+      row.deleted_at,
+      1,                        // version — локально всегда 1 для overdue
+      row.client_id,
+    ],
+  );
+  return true;
+}
+
 function applyCloudRowTemplates(row: CloudRow): boolean {
   const local = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM task_templates WHERE uuid=?',
@@ -245,7 +297,28 @@ const APPLIERS: Record<string, (row: CloudRow) => boolean> = {
   sync_statuses: applyCloudRowStatuses,
   sync_tags: applyCloudRowTags,
   sync_task_templates: applyCloudRowTemplates,
+  sync_overdue_events: applyCloudRowOverdueEvents,
 };
+
+/**
+ * Описание курсора для pull. Большинство таблиц пуллятся по updated_at,
+ * а overdue_events — по id (uuidv7 монотонный).
+ */
+function cursorColumnFor(cloudTable: string): 'updated_at' | 'id' {
+  return cloudTable === 'sync_overdue_events' ? 'id' : 'updated_at';
+}
+
+/** Ключ settings для last_pulled cursor value. */
+function lastPulledCursorKey(cloudTable: string): string {
+  return `sync_last_pulled_${cloudTable}`;
+}
+
+/** Начальное значение курсора — чтобы вычитать всё при первом pull. */
+function initialCursorValue(cloudTable: string): string {
+  return cloudTable === 'sync_overdue_events'
+    ? '00000000-0000-0000-0000-000000000000'
+    : '1970-01-01T00:00:00Z';
+}
 
 export interface PullResult {
   /** Сколько строк применено. */
@@ -269,25 +342,27 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
     return result;
   }
 
-  const lastPulled = getLastPulledAt(spec.cloud);
+  const cursorCol = cursorColumnFor(spec.cloud);
+  const lastPulled = getLastPulledAt(spec.cloud, cursorCol);
   try {
     const { data, error } = await supabase
       .from(spec.cloud)
       .select('*')
       .eq('user_id', userId)
-      .gt('updated_at', lastPulled)
-      .order('updated_at', { ascending: true })
+      .gt(cursorCol, lastPulled)
+      .order(cursorCol, { ascending: true })
       .limit(PULL_BATCH_SIZE);
     if (error) throw new Error(error.message);
     if (!data || data.length === 0) return result;
 
-    let maxUpdatedAt = lastPulled;
+    let maxCursor = lastPulled;
     for (const raw of data as CloudRow[]) {
       try {
         const changed = applier(raw);
         if (changed) result.applied++;
         else result.skipped++;
-        if (raw.updated_at > maxUpdatedAt) maxUpdatedAt = raw.updated_at;
+        const rowCursor = String((raw as any)[cursorCol] ?? '');
+        if (rowCursor > maxCursor) maxCursor = rowCursor;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         logger.warn(`[sync/pull] ${spec.cloud} apply failed for ${raw.id}:`, msg);
@@ -298,7 +373,7 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
 
     // Сохраняем прогресс. Если applied+skipped == батч, возможно есть ещё —
     // orchestrator позовёт нас снова.
-    setLastPulledAt(spec.cloud, maxUpdatedAt);
+    setLastPulledAt(spec.cloud, maxCursor);
     logger.info(
       `[sync/pull] ${spec.cloud}: +${result.applied} applied, ${result.skipped} skipped, ${result.deferred} deferred`,
     );
@@ -340,6 +415,10 @@ export const _internals = {
   applyCloudRowStatuses,
   applyCloudRowTags,
   applyCloudRowTemplates,
+  applyCloudRowOverdueEvents,
+  cursorColumnFor,
+  initialCursorValue,
+  lastPulledCursorKey,
   APPLIERS,
   PULL_BATCH_SIZE,
 };
