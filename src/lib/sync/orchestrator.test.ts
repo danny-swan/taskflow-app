@@ -116,6 +116,26 @@ vi.mock('../clientId', () => ({
   resetClientIdCache: vi.fn(),
 }));
 
+// v0.9.35-dev.6: мок entitlements — syncNow теперь gate'ится по Pro/Trial.
+// В тестах orchestrator отдельно проверяем механику синка — гейт открываем.
+vi.mock('../entitlements', () => ({
+  getEntitlement: async () => ({
+    effectivePlan: 'pro',
+    rawPlan: 'pro',
+    validUntil: new Date('2099-01-01'),
+    source: 'test',
+    trialUsed: false,
+    isAdmin: false,
+    msLeft: 999_999_999,
+    isTrialActive: false,
+    isPaidPro: true,
+  }),
+  isProOrTrial: () => true,
+  isPro: () => true,
+  readCachedRow: () => null,
+  writeCachedRow: () => {},
+}));
+
 async function setupDb(): Promise<Database> {
   const SQL = await initSqlJs({ wasmBinary: WASM_BYTES });
   const d = new SQL.Database();

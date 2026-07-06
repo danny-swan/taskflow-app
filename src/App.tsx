@@ -16,6 +16,7 @@ import { OnboardingErrorBoundary } from './components/OnboardingErrorBoundary';
 import { AuthScreen } from './components/AuthScreen';
 import { PasswordResetModal } from './components/PasswordResetModal';
 import { CommandPalette } from './components/CommandPalette';
+import { PaywallGate } from './components/PaywallModal';
 import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { pingSupabaseKeepAlive } from './lib/supabase';
@@ -240,7 +241,8 @@ function App() {
               <Route path="/tasks" element={<TasksPage />} />
               {/* v0.8.6: старый путь /add редиректит на /tasks — бывшие bookmark не приводят к 404 */}
               <Route path="/add" element={<Navigate to="/tasks" replace />} />
-              <Route path="/calendar" element={<CalendarPage />} />
+              {/* v0.9.35-dev.6: Calendar — платный раздел, обёрнут в PaywallGate. */}
+              <Route path="/calendar" element={<PaywallGate><CalendarPage /></PaywallGate>} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/stats" element={statsEnabled ? <StatsPage /> : <Navigate to="/tasks" replace />} />
               <Route path="/settings" element={<SettingsPage />} />

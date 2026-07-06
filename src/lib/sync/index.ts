@@ -37,6 +37,7 @@ import { logger } from '../logger';
 import { pushAll, type PushResult } from './push';
 import { pullAll, type PullResult } from './pull';
 import { subscribeRealtime, unsubscribeRealtime } from './realtime';
+import { getEntitlement, isProOrTrial } from '../entitlements';
 
 /**
  * v0.9.35-dev.5: вызываем useStore.refresh() после успешного pull, чтобы
@@ -58,14 +59,20 @@ async function refreshStoreAfterPull(applied: number): Promise<void> {
   }
 }
 
-/** Публичное состояние sync-цикла (для UI). */
+/**
+ * Публичное состояние sync-цикла (для UI).
+ *
+ * v0.9.35-dev.6: добавлен статус 'paywalled' — free-план (или истёкший trial),
+ * sync полностью выключен на клиенте. UI показывает Pro CTA вместо статуса.
+ */
 export type SyncState =
   | { status: 'idle'; lastSyncedAt: string | null; lastError: string | null }
   | { status: 'pulling'; lastSyncedAt: string | null; lastError: string | null }
   | { status: 'pushing'; lastSyncedAt: string | null; lastError: string | null }
   | { status: 'synced'; lastSyncedAt: string; lastError: null }
   | { status: 'error'; lastSyncedAt: string | null; lastError: string }
-  | { status: 'skipped'; lastSyncedAt: string | null; lastError: null };
+  | { status: 'skipped'; lastSyncedAt: string | null; lastError: null }
+  | { status: 'paywalled'; lastSyncedAt: string | null; lastError: null };
 
 let currentState: SyncState = {
   status: 'idle',
@@ -190,6 +197,24 @@ export async function syncNow(): Promise<SyncResult> {
       logger.warn('[sync/orchestrator]', err);
       setState({ status: 'error', lastSyncedAt: currentState.lastSyncedAt, lastError: err });
       return { ...emptyResult, error: err };
+    }
+
+    // 2.5. Entitlement-гейт (v0.9.35-dev.6).
+    //
+    // Sync — платная фича. Free-план и истёкший trial блокируются здесь,
+    // до всяких сетевых операций. Если кэш пуст (первый запуск, БД недоступна) —
+    // тоже считаем free (безопасный дефолт: пропустить sync проще, чем потом
+    // объяснять пользователю, почему он видит чужие данные).
+    //
+    // На сервере всё дополнительно защищено RLS: даже если клиент попытается
+    // пушить с free, INSERT/UPDATE в sync_* пройдёт (RLS не отличает планы),
+    // но UI гейт даёт пользователю понятный CTA вместо тихой траты трафика.
+    const userEmail = sessionData?.session?.user?.email ?? null;
+    const ent = await getEntitlement(userId, userEmail);
+    if (!isProOrTrial(ent)) {
+      logger.info('[sync/orchestrator] paywalled (plan=' + ent.effectivePlan + '), skipping');
+      setState({ status: 'paywalled', lastSyncedAt: currentState.lastSyncedAt, lastError: null });
+      return emptyResult;
     }
 
     // 3. Регистрируем устройство (idempotent).
@@ -336,15 +361,35 @@ export function initAutoSync(): void {
   // v0.9.35-dev.5: раньше синхронизация полагалась только на debounced
   // авто-sync после enqueue + on-focus/on-online. Теперь при наличии сети
   // изменения с других устройств прилетают почти мгновенно.
+  //
+  // v0.9.35-dev.6: гейт по entitlement — free-план не подписывается на
+  // sync-таблицы (Realtime канал стоит ~денег на стороне Supabase, да и
+  // смысла нет — sync всё равно paywalled).
+  const maybeSubscribe = async (uid: string, email: string | null) => {
+    try {
+      const ent = await getEntitlement(uid, email);
+      if (isProOrTrial(ent)) {
+        subscribeRealtime(uid);
+      } else {
+        // На случай если раньше был подписан, а потом trial истёк — снимем.
+        unsubscribeRealtime();
+      }
+    } catch (e) {
+      logger.warn('[sync/auto] entitlement check failed, skipping realtime:', e);
+    }
+  };
+
   supabase.auth.getSession().then(({ data }) => {
     const uid = data?.session?.user?.id;
-    if (uid) subscribeRealtime(uid);
+    const email = data?.session?.user?.email ?? null;
+    if (uid) void maybeSubscribe(uid, email);
   }).catch(e => logger.warn('[sync/auto] realtime init failed:', e));
 
   supabase.auth.onAuthStateChange((_event, session) => {
     const uid = session?.user?.id;
+    const email = session?.user?.email ?? null;
     if (uid) {
-      subscribeRealtime(uid);
+      void maybeSubscribe(uid, email);
     } else {
       unsubscribeRealtime();
     }

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
 import { useAuth, signOut, deleteAccount, updateEmail } from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
@@ -15,16 +15,37 @@ import { logger } from '../lib/logger';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
+import { useEntitlement, startTrial, submitActivationRequest } from '../lib/entitlements';
+import { supabase } from '../lib/supabase';
 
-type Sub = 'general' | 'account' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
+type Sub = 'general' | 'account' | 'subscription' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
 
 export function SettingsPage() {
   const lang = useStore(s => s.language);
-  const [sub, setSub] = useState<Sub>('general');
+  // v0.9.35-dev.6: если в URL есть #subscription — сразу открываем этот таб.
+  // (Ссылка из Sidebar-баннера / PaywallGate.)
+  const [sub, setSub] = useState<Sub>(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#subscription') {
+      return 'subscription';
+    }
+    return 'general';
+  });
+
+  // Реагируем на hashchange — если уже на /settings и кто-то навигатит на
+  // /settings#subscription, переключаем вкладку.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onHash = () => {
+      if (window.location.hash === '#subscription') setSub('subscription');
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const subs: { key: Sub; label: string }[] = [
     { key: 'general', label: tr(lang, 'settings_general') },
     { key: 'account', label: lang === 'ru' ? 'Аккаунт' : 'Account' },
+    { key: 'subscription', label: lang === 'ru' ? 'Подписка' : 'Subscription' },
     { key: 'tags', label: tr(lang, 'settings_tags') },
     { key: 'statuses', label: tr(lang, 'settings_statuses') },
     { key: 'stats', label: tr(lang, 'settings_stats') },
@@ -51,6 +72,7 @@ export function SettingsPage() {
       <div className="flex-1 overflow-y-auto px-6 py-5">
         {sub === 'general' && <GeneralSection />}
         {sub === 'account' && <AccountSection />}
+        {sub === 'subscription' && <SubscriptionSection />}
         {sub === 'tags' && <TagsSection />}
         {sub === 'statuses' && <StatusesSection />}
         {sub === 'stats' && <StatsToggleSection />}
@@ -2407,5 +2429,608 @@ function SyncSection() {
         </div>
       </details>
     </div>
+  );
+}
+
+// ============================================================================
+// v0.9.35-dev.6: SubscriptionSection — статус плана, trial, ручная активация,
+// крипто-адреса, история заявок.
+// ============================================================================
+function SubscriptionSection() {
+  const lang = useStore(s => s.language);
+  const isRu = lang === 'ru';
+  const pushToast = useStore(s => s.pushToast);
+  const auth = useAuth();
+  const t = (ru: string, en: string) => (isRu ? ru : en);
+
+  const user = auth.session?.user;
+  const userId = user?.id ?? null;
+  const userEmail = user?.email ?? null;
+
+  // Используем hook: он даёт realtime-обновляемый entitlement.
+  // Ленивый импорт — hook уже импортирован в App через PaywallGate; здесь
+  // достаточно прямого import из lib/entitlements.
+  const { entitlement, loading: entLoading } = useEntitlement(userId, userEmail);
+
+  // Локальный state для формы ручной активации.
+  const [txRef, setTxRef] = useState('');
+  const [planRequested, setPlanRequested] = useState<'monthly' | 'annual' | 'lifetime'>('monthly');
+  const [providerHint, setProviderHint] = useState<'cloudtips' | 'ton' | 'usdt-trc20' | 'usdt-erc20' | 'other'>('cloudtips');
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [trialBusy, setTrialBusy] = useState(false);
+
+  // История заявок пользователя.
+  const [requests, setRequests] = useState<ActivationRequestRow[]>([]);
+  const [reqLoading, setReqLoading] = useState(false);
+
+  // Загружаем заявки при монтировании и после submit.
+  const reloadRequests = async () => {
+    if (!userId) {
+      setRequests([]);
+      return;
+    }
+    setReqLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('activation_requests')
+        .select('id, created_at, plan_requested, provider_hint, tx_ref, status, admin_notes')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      setRequests((data ?? []) as ActivationRequestRow[]);
+    } catch (e: any) {
+      logger.warn('[SubscriptionSection] loadRequests failed:', e?.message ?? e);
+    } finally {
+      setReqLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void reloadRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // Guard: если не залогинен — показываем плейсхолдер.
+  if (!user) {
+    return (
+      <div className="max-w-xl space-y-4">
+        <h3 className="font-display text-[16px] font-semibold flex items-center gap-2">
+          <CircleDollarSign size={16} />
+          {t('Подписка', 'Subscription')}
+        </h3>
+        <p className="text-[13px] text-muted">
+          {t('Войдите в аккаунт, чтобы управлять подпиской.', 'Sign in to manage your subscription.')}
+        </p>
+      </div>
+    );
+  }
+
+  // Бейдж + русская метка плана.
+  const planLabel = (() => {
+    if (entitlement.isAdmin) return t('Lifetime (админ)', 'Lifetime (admin)');
+    switch (entitlement.effectivePlan) {
+      case 'lifetime': return 'Lifetime';
+      case 'pro': return 'Pro';
+      case 'trial': return t('Trial (14 дней)', 'Trial (14 days)');
+      case 'free': return 'Free';
+    }
+  })();
+
+  const planBadgeColor = (() => {
+    switch (entitlement.effectivePlan) {
+      case 'lifetime': return 'var(--accent, #01696F)';
+      case 'pro': return 'var(--accent, #01696F)';
+      case 'trial': return '#DA7101'; // orange
+      case 'free': return 'var(--text-muted, #7A7974)';
+    }
+  })();
+
+  const validUntilStr = (() => {
+    if (!entitlement.validUntil) return null;
+    return entitlement.validUntil.toLocaleDateString(isRu ? 'ru-RU' : 'en-US', {
+      year: 'numeric', month: 'long', day: 'numeric',
+    });
+  })();
+
+  const daysLeft = (() => {
+    if (entitlement.msLeft == null) return null;
+    return Math.max(0, Math.ceil(entitlement.msLeft / 86_400_000));
+  })();
+
+  // Показывать кнопку «Начать trial» только если free и trial ни разу не был.
+  const canStartTrial = entitlement.effectivePlan === 'free' && !entitlement.trialUsed;
+
+  const handleStartTrial = async () => {
+    setTrialBusy(true);
+    try {
+      const res = await startTrial();
+      if (res.ok) {
+        pushToast(t('Trial активирован на 14 дней', 'Trial activated for 14 days'));
+        // Refetch произойдёт через realtime; но на всякий случай форсим.
+      } else {
+        pushToast(t('Не удалось запустить trial: ', 'Failed to start trial: ') + (res.error ?? '?'));
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка запуска trial', 'Trial start error'));
+    } finally {
+      setTrialBusy(false);
+    }
+  };
+
+  const handleSubmitActivation = async () => {
+    if (!txRef.trim()) {
+      pushToast(t('Укажите ID транзакции / хэш перевода', 'Please provide transaction ID / transfer hash'));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await submitActivationRequest({
+        txRef: txRef.trim(),
+        planRequested,
+        providerHint,
+        notes: notes.trim() || undefined,
+      });
+      if (res.ok) {
+        pushToast(t('Заявка отправлена. Мы проверим в течение 24 часов.', 'Request submitted. We will review within 24 hours.'));
+        setTxRef('');
+        setNotes('');
+        void reloadRequests();
+      } else {
+        pushToast(t('Ошибка: ', 'Error: ') + (res.error ?? '?'));
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка отправки', 'Submit error'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      pushToast(t(`${label} скопирован`, `${label} copied`));
+    } catch {
+      pushToast(t('Не удалось скопировать', 'Copy failed'));
+    }
+  };
+
+  return (
+    <div className="max-w-xl space-y-6">
+      <h3 className="font-display text-[16px] font-semibold flex items-center gap-2">
+        <CircleDollarSign size={16} />
+        {t('Подписка', 'Subscription')}
+      </h3>
+
+      {/* ──── Текущий план ──── */}
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] text-muted uppercase tracking-wide">
+            {t('Текущий план', 'Current plan')}
+          </span>
+          <span
+            className="text-[11px] font-semibold px-2 py-0.5 rounded"
+            style={{ background: planBadgeColor, color: '#fff' }}
+          >
+            {planLabel}
+          </span>
+        </div>
+        {entLoading && (
+          <p className="text-[12px] text-muted">{t('Загрузка…', 'Loading…')}</p>
+        )}
+        {validUntilStr && (
+          <div className="flex justify-between items-center">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {entitlement.effectivePlan === 'trial'
+                ? t('Trial до', 'Trial until')
+                : t('Действует до', 'Valid until')}
+            </span>
+            <span className="text-[13px] font-medium tabular-nums">
+              {validUntilStr}
+              {daysLeft != null && (
+                <span className="text-muted ml-1.5">
+                  ({t(`${daysLeft} дн.`, `${daysLeft} d`)})
+                </span>
+              )}
+            </span>
+          </div>
+        )}
+        {entitlement.effectivePlan === 'lifetime' && (
+          <p className="text-[12px] text-muted">
+            {entitlement.isAdmin
+              ? t('Grandfathered админ-доступ.', 'Grandfathered admin access.')
+              : t('Оплачено единоразово, продлевать не нужно.', 'One-time payment, no renewal needed.')}
+          </p>
+        )}
+        {entitlement.effectivePlan === 'free' && entitlement.trialUsed && (
+          <p className="text-[12px] text-muted">
+            {t('Trial уже был использован. Оформите подписку для облачных функций.', 'Trial already used. Purchase a subscription for cloud features.')}
+          </p>
+        )}
+      </div>
+
+      {/* ──── Trial CTA ──── */}
+      {canStartTrial && (
+        <div
+          className="rounded-lg p-4 space-y-3 border"
+          style={{
+            background: 'color-mix(in oklab, var(--accent, #01696F) 8%, transparent)',
+            borderColor: 'color-mix(in oklab, var(--accent, #01696F) 30%, transparent)',
+          }}
+        >
+          <div className="flex items-start gap-2">
+            <Sparkles size={16} className="mt-0.5 shrink-0" style={{ color: 'var(--accent, #01696F)' }} />
+            <div className="flex-1">
+              <h4 className="text-[14px] font-semibold">{t('Попробуйте Pro бесплатно', 'Try Pro for free')}</h4>
+              <p className="text-[12px] text-muted mt-1">
+                {t(
+                  '14 дней всех облачных функций: синхронизация, календарь, realtime. Без карты, без автосписания.',
+                  '14 days of all cloud features: sync, calendar, realtime. No card, no auto-charge.',
+                )}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleStartTrial}
+            disabled={trialBusy}
+            style={{ background: 'var(--accent, #01696F)' }}
+            className="text-white px-3 py-1.5 text-[13px] rounded-md disabled:opacity-60"
+          >
+            {trialBusy ? t('Активируем…', 'Activating…') : t('Начать 14-дневный trial', 'Start 14-day trial')}
+          </button>
+        </div>
+      )}
+
+      {/* ──── Оформить подписку (disabled) ──── */}
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+        <h4 className="text-[14px] font-semibold flex items-center gap-2">
+          <Cloud size={14} />
+          {t('Оформить подписку', 'Purchase subscription')}
+        </h4>
+        <div className="space-y-2 text-[13px]">
+          <div className="flex justify-between items-center">
+            <span>{t('Ежемесячно', 'Monthly')}</span>
+            <span className="font-medium tabular-nums">299 ₽ / {t('мес', 'mo')}</span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span>{t('Ежегодно', 'Annual')}</span>
+            <span className="font-medium tabular-nums">
+              2 990 ₽ / {t('год', 'yr')}
+              <span className="text-muted ml-1.5 text-[11px]">
+                (−16%)
+              </span>
+            </span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span>Lifetime</span>
+            <span className="font-medium tabular-nums">4 990 ₽</span>
+          </div>
+        </div>
+        <button
+          disabled
+          title={t('Скоро — подключаем провайдера (ЮKassa / CloudPayments)', 'Coming soon — connecting provider (YuKassa / CloudPayments)')}
+          className="w-full px-3 py-2 text-[13px] rounded-md border border-border-soft opacity-50 cursor-not-allowed"
+        >
+          {t('Оплатить картой — скоро', 'Pay by card — coming soon')}
+        </button>
+        <p className="text-[11px] text-muted flex items-start gap-1">
+          <Info size={11} className="mt-0.5 shrink-0" />
+          {t(
+            'Автоматическая оплата картой появится в dev.6.1. Пока — ручная активация ниже.',
+            'Automatic card payment will be available in dev.6.1. For now — use manual activation below.',
+          )}
+        </p>
+      </div>
+
+      {/* ──── Альтернативные способы оплаты ──── */}
+      <details className="bg-surface-alt border border-border-soft rounded-lg">
+        <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2">
+          <ExternalLink size={14} />
+          {t('Альтернативные способы оплаты', 'Alternative payment methods')}
+        </summary>
+        <div className="px-4 pb-4 space-y-3">
+          <p className="text-[12px] text-muted">
+            {t(
+              'Переведите нужную сумму (299 / 2990 / 4990 ₽) любым способом, скопируйте ID транзакции или хэш перевода и вставьте в форму ниже. Проверка занимает до 24 часов.',
+              'Transfer the required amount (299 / 2990 / 4990 ₽) by any method, copy the transaction ID or transfer hash, and paste it in the form below. Review takes up to 24 hours.',
+            )}
+          </p>
+
+          {/* CloudTips */}
+          <div className="border border-border-soft rounded-md p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[12px] font-semibold uppercase tracking-wide">CloudTips (RUB)</span>
+              <a
+                href="https://pay.cloudtips.ru/p/83f4d553"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[12px] flex items-center gap-1"
+                style={{ color: 'var(--accent, #01696F)' }}
+              >
+                {t('Открыть', 'Open')} <ExternalLink size={11} />
+              </a>
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
+                pay.cloudtips.ru/p/83f4d553
+              </code>
+              <button
+                onClick={() => copyToClipboard('https://pay.cloudtips.ru/p/83f4d553', 'CloudTips')}
+                className="p-1.5 rounded hover:bg-surface"
+                title={t('Скопировать', 'Copy')}
+              >
+                <Copy size={12} />
+              </button>
+            </div>
+          </div>
+
+          {/* TON */}
+          <div className="border border-border-soft rounded-md p-3 space-y-2">
+            <span className="text-[12px] font-semibold uppercase tracking-wide">TON</span>
+            <div className="flex items-center gap-2">
+              <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
+                UQDphkFo74Ff8yG92mYZk7wpclgdpjs666Qn9m1HvJ51becx
+              </code>
+              <button
+                onClick={() => copyToClipboard('UQDphkFo74Ff8yG92mYZk7wpclgdpjs666Qn9m1HvJ51becx', 'TON')}
+                className="p-1.5 rounded hover:bg-surface"
+                title={t('Скопировать', 'Copy')}
+              >
+                <Copy size={12} />
+              </button>
+            </div>
+          </div>
+
+          {/* USDT-TRC20 */}
+          <div className="border border-border-soft rounded-md p-3 space-y-2">
+            <span className="text-[12px] font-semibold uppercase tracking-wide">USDT (TRC-20)</span>
+            <div className="flex items-center gap-2">
+              <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
+                TJv97nWcARwvNTR6N62SW3TM2goo6gTpUZ
+              </code>
+              <button
+                onClick={() => copyToClipboard('TJv97nWcARwvNTR6N62SW3TM2goo6gTpUZ', 'USDT-TRC20')}
+                className="p-1.5 rounded hover:bg-surface"
+                title={t('Скопировать', 'Copy')}
+              >
+                <Copy size={12} />
+              </button>
+            </div>
+          </div>
+
+          {/* USDT-ERC20 */}
+          <div className="border border-border-soft rounded-md p-3 space-y-2">
+            <span className="text-[12px] font-semibold uppercase tracking-wide">USDT (ERC-20)</span>
+            <div className="flex items-center gap-2">
+              <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
+                0x316Da7F3930Cc8c45Ff689181f8053e5d45C9300
+              </code>
+              <button
+                onClick={() => copyToClipboard('0x316Da7F3930Cc8c45Ff689181f8053e5d45C9300', 'USDT-ERC20')}
+                className="p-1.5 rounded hover:bg-surface"
+                title={t('Скопировать', 'Copy')}
+              >
+                <Copy size={12} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      {/* ──── Форма ручной активации ──── */}
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+        <h4 className="text-[14px] font-semibold flex items-center gap-2">
+          <KeyRound size={14} />
+          {t('Ручная активация', 'Manual activation')}
+        </h4>
+        <p className="text-[12px] text-muted">
+          {t(
+            'Отправили платёж? Оставьте заявку — админ проверит и активирует подписку.',
+            'Made a payment? Submit a request — admin will verify and activate your subscription.',
+          )}
+        </p>
+
+        <div className="space-y-2">
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('Email аккаунта', 'Account email')}
+            </span>
+            <input
+              type="text"
+              value={userEmail ?? ''}
+              disabled
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface opacity-70"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('Тариф', 'Plan')}
+            </span>
+            <select
+              value={planRequested}
+              onChange={e => setPlanRequested(e.target.value as 'monthly' | 'annual' | 'lifetime')}
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface"
+            >
+              <option value="monthly">{t('Ежемесячно — 299 ₽', 'Monthly — 299 ₽')}</option>
+              <option value="annual">{t('Ежегодно — 2 990 ₽', 'Annual — 2 990 ₽')}</option>
+              <option value="lifetime">Lifetime — 4 990 ₽</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('Способ оплаты', 'Payment method')}
+            </span>
+            <select
+              value={providerHint}
+              onChange={e => setProviderHint(e.target.value as any)}
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface"
+            >
+              <option value="cloudtips">CloudTips (RUB)</option>
+              <option value="ton">TON</option>
+              <option value="usdt-trc20">USDT (TRC-20)</option>
+              <option value="usdt-erc20">USDT (ERC-20)</option>
+              <option value="other">{t('Другой', 'Other')}</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('ID транзакции / хэш перевода', 'Transaction ID / transfer hash')} *
+            </span>
+            <input
+              type="text"
+              value={txRef}
+              onChange={e => setTxRef(e.target.value)}
+              placeholder={t('например, 0xabc… или ID платежа CloudTips', 'e.g. 0xabc… or CloudTips payment ID')}
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface font-mono"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('Комментарий (необязательно)', 'Notes (optional)')}
+            </span>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={2}
+              placeholder={t('дата, сумма, время перевода…', 'date, amount, transfer time…')}
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface"
+            />
+          </label>
+        </div>
+
+        <button
+          onClick={handleSubmitActivation}
+          disabled={submitting || !txRef.trim()}
+          style={{ background: 'var(--accent, #01696F)' }}
+          className="text-white px-3 py-1.5 text-[13px] rounded-md disabled:opacity-60"
+        >
+          {submitting ? t('Отправляем…', 'Submitting…') : t('Отправить заявку', 'Submit request')}
+        </button>
+      </div>
+
+      {/* ──── История заявок ──── */}
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="text-[14px] font-semibold flex items-center gap-2">
+            <Clock size={14} />
+            {t('Мои заявки', 'My requests')}
+          </h4>
+          <button
+            onClick={() => void reloadRequests()}
+            disabled={reqLoading}
+            className="p-1 rounded hover:bg-surface"
+            title={t('Обновить', 'Refresh')}
+          >
+            <RefreshCw size={12} className={reqLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+        {requests.length === 0 && !reqLoading && (
+          <p className="text-[12px] text-muted">
+            {t('Заявок ещё нет.', 'No requests yet.')}
+          </p>
+        )}
+        {reqLoading && requests.length === 0 && (
+          <p className="text-[12px] text-muted">{t('Загрузка…', 'Loading…')}</p>
+        )}
+        {requests.length > 0 && (
+          <ul className="space-y-2">
+            {requests.map(r => (
+              <li key={r.id} className="border border-border-soft rounded-md p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-medium">
+                    {planLabelForRequest(r.plan_requested, isRu)}
+                    <span className="text-muted ml-1.5">· {r.provider_hint}</span>
+                  </span>
+                  <RequestStatusBadge status={r.status} isRu={isRu} />
+                </div>
+                <div className="text-[11px] text-muted font-mono break-all">
+                  tx: {r.tx_ref}
+                </div>
+                <div className="text-[11px] text-muted">
+                  {new Date(r.created_at).toLocaleString(isRu ? 'ru-RU' : 'en-US')}
+                </div>
+                {r.admin_notes && (
+                  <div className="text-[11px] italic pt-1 border-t border-border-soft">
+                    {r.admin_notes}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* ──── Footer info ──── */}
+      <details className="text-[12px] text-muted">
+        <summary className="cursor-pointer">{t('Что даёт подписка?', 'What does the subscription include?')}</summary>
+        <ul className="mt-2 space-y-1 pl-4 list-disc">
+          <li>{t('Синхронизация задач между устройствами', 'Task sync across devices')}</li>
+          <li>{t('Календарь и напоминания', 'Calendar and reminders')}</li>
+          <li>{t('Real-time обновления', 'Real-time updates')}</li>
+          <li>{t('Приоритет в поддержке', 'Priority support')}</li>
+        </ul>
+      </details>
+    </div>
+  );
+}
+
+// Строка из таблицы activation_requests, ограниченная теми колонками,
+// что нужны UI. См. миграцию 0007_entitlements.sql.
+interface ActivationRequestRow {
+  id: string;
+  created_at: string;
+  plan_requested: 'monthly' | 'annual' | 'lifetime';
+  provider_hint: string;
+  tx_ref: string;
+  status: 'pending' | 'approved' | 'rejected';
+  admin_notes: string | null;
+}
+
+function planLabelForRequest(plan: 'monthly' | 'annual' | 'lifetime', isRu: boolean): string {
+  switch (plan) {
+    case 'monthly': return isRu ? 'Ежемесячно' : 'Monthly';
+    case 'annual': return isRu ? 'Ежегодно' : 'Annual';
+    case 'lifetime': return 'Lifetime';
+  }
+}
+
+function RequestStatusBadge({ status, isRu }: { status: 'pending' | 'approved' | 'rejected'; isRu: boolean }) {
+  const cfg = (() => {
+    switch (status) {
+      case 'pending':
+        return {
+          icon: <Clock size={11} />,
+          label: isRu ? 'На проверке' : 'Pending',
+          color: '#DA7101',
+        };
+      case 'approved':
+        return {
+          icon: <CheckCircle2 size={11} />,
+          label: isRu ? 'Одобрена' : 'Approved',
+          color: '#437A22',
+        };
+      case 'rejected':
+        return {
+          icon: <XCircle size={11} />,
+          label: isRu ? 'Отклонена' : 'Rejected',
+          color: '#A12C7B',
+        };
+    }
+  })();
+  return (
+    <span
+      className="text-[11px] font-medium px-1.5 py-0.5 rounded flex items-center gap-1"
+      style={{
+        background: `color-mix(in oklab, ${cfg.color} 15%, transparent)`,
+        color: cfg.color,
+      }}
+    >
+      {cfg.icon} {cfg.label}
+    </span>
   );
 }
