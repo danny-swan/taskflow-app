@@ -164,18 +164,71 @@ function PendingSyncChip() {
   const lang = useStore(s => s.language);
   const count = usePendingSyncCount();
   const isDev = import.meta.env.DEV;
-  if (!isDev && count === 0) return null;
-  const label = lang === 'ru' ? 'pending sync' : 'pending sync';
+
+  // v0.9.35-dev.4: подписываемся на sync-состояние через lazy import (чтобы
+  // чанк sync/index не вошёл в initial bundle Sidebar'а).
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'pulling' | 'pushing' | 'synced' | 'error' | 'skipped'>('idle');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    let mounted = true;
+    void import('../lib/sync').then(m => {
+      if (!mounted) return;
+      const initial = m.getSyncState();
+      setSyncStatus(initial.status);
+      setSyncError(initial.lastError);
+      unsubscribe = m.subscribeSyncState(s => {
+        setSyncStatus(s.status);
+        setSyncError(s.lastError);
+      });
+    }).catch(() => {});
+    return () => {
+      mounted = false;
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  // Скрываем chip в prod, когда всё тихо (в dev всегда показываем).
+  const isBusy = syncStatus === 'pulling' || syncStatus === 'pushing';
+  const isError = syncStatus === 'error';
+  if (!isDev && count === 0 && !isBusy && !isError) return null;
+
+  // Формируем label + цвет.
+  let label: string;
+  let iconColor = 'text-faint';
+  let valueColor = 'text-faint tabular';
+  if (isBusy) {
+    label = lang === 'ru'
+      ? (syncStatus === 'pulling' ? 'скачивание' : 'отправка')
+      : syncStatus;
+    iconColor = 'text-accent animate-pulse';
+    valueColor = 'text-accent font-semibold tabular';
+  } else if (isError) {
+    label = lang === 'ru' ? 'ошибка sync' : 'sync error';
+    iconColor = 'text-[var(--error,#c33)]';
+    valueColor = 'text-[var(--error,#c33)] font-semibold tabular';
+  } else if (syncStatus === 'synced' && count === 0) {
+    label = lang === 'ru' ? 'синхронизировано' : 'synced';
+    iconColor = 'text-[var(--success,#7a3)]';
+    valueColor = 'text-faint tabular';
+  } else {
+    label = lang === 'ru' ? 'pending sync' : 'pending sync';
+    iconColor = count > 0 ? 'text-accent' : 'text-faint';
+    valueColor = count > 0 ? 'text-accent font-semibold tabular' : 'text-faint tabular';
+  }
+
+  const title = lang === 'ru'
+    ? (isError ? `Ошибка: ${syncError ?? 'неизвестно'}` : `В очереди: ${count}, статус: ${syncStatus}`)
+    : (isError ? `Error: ${syncError ?? 'unknown'}` : `Queued: ${count}, status: ${syncStatus}`);
+
   return (
     <div
       className="mx-3 mb-2 mt-1 px-2 py-1 rounded-md border border-border-soft bg-[var(--surface-alt)]/40 flex items-center gap-1.5 text-[10px] text-muted mono tracking-wide"
-      title={lang === 'ru'
-        ? `В очереди на отправку в облако: ${count}`
-        : `Queued for cloud push: ${count}`}
+      title={title}
     >
-      <Cloud size={11} className={count > 0 ? 'text-accent' : 'text-faint'} />
+      <Cloud size={11} className={iconColor} />
       <span>{label}:</span>
-      <span className={count > 0 ? 'text-accent font-semibold tabular' : 'text-faint tabular'}>{count}</span>
+      <span className={valueColor}>{isBusy ? '…' : count}</span>
     </div>
   );
 }

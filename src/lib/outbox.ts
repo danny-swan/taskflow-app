@@ -67,6 +67,16 @@ export function enqueueOutbox(
        last_error = NULL`,
     [entityTable, entityUuid, op],
   );
+
+  // v0.9.35-dev.4: планируем debounced авто-sync (в prod). В dev-сборке no-op.
+  // Ленивый import через then-callback чтобы не создавать циклическую зависимость
+  // на этапе module init (sync/index → push/pull → mappers → db).
+  // Ошибки в auto-sync не должны валить операцию enqueueOutbox.
+  try {
+    void import('./sync').then(m => m.scheduleAutoSync()).catch(() => {});
+  } catch {
+    // ignore — если sync module недоступен (например, в тесте с моками), не мешаем.
+  }
 }
 
 /**

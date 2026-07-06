@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
 import { useAuth, signOut, deleteAccount, updateEmail } from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
@@ -16,7 +16,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 
-type Sub = 'general' | 'account' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'updates';
+type Sub = 'general' | 'account' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
 
 export function SettingsPage() {
   const lang = useStore(s => s.language);
@@ -32,6 +32,7 @@ export function SettingsPage() {
     { key: 'templates', label: lang === 'ru' ? 'Шаблоны задач' : 'Task templates' },
     { key: 'io', label: tr(lang, 'settings_io') },
     { key: 'storage', label: tr(lang, 'storage_section') },
+    { key: 'sync', label: lang === 'ru' ? 'Синхронизация' : 'Sync' },
     { key: 'updates', label: lang === 'ru' ? 'Обновления' : 'Updates' },
   ];
 
@@ -57,6 +58,7 @@ export function SettingsPage() {
         {sub === 'templates' && <TemplatesSection lang={lang} />}
         {sub === 'io' && <IOSection />}
         {sub === 'storage' && <StorageSection />}
+        {sub === 'sync' && <SyncSection />}
         {sub === 'updates' && <UpdatesSection />}
       </div>
     </div>
@@ -2200,6 +2202,210 @@ function AccountSection() {
         onConfirm={handleDelete}
         onCancel={() => setConfirmDelete(false)}
       />
+    </div>
+  );
+}
+
+// ─── SyncSection (v0.9.35-dev.4) ────────────────────────────────────────────
+/**
+ * Раздел настроек «Синхронизация».
+ *   - Показывает текущий статус (idle/pulling/pushing/synced/error/skipped).
+ *   - Показывает last synced at (человекочитаемо).
+ *   - Кнопка «Синхронизировать сейчас» — вызывает syncNow() вручную. В dev-сборке
+ *     это единственный триггер (авто-sync отключён). В prod — вспомогательный.
+ *   - Ссылка на sync_devices (для отладки, показывает client_id).
+ *
+ * Реализация: lazy import модуля sync/index через useEffect. Это позволяет
+ * держать чанк sync/* вне initial bundle Settings-страницы.
+ */
+function SyncSection() {
+  const lang = useStore(s => s.language);
+  const auth = useAuth();
+  const t = (ru: string, en: string) => (lang === 'ru' ? ru : en);
+  const isDev = import.meta.env.DEV;
+
+  const [status, setStatus] = useState<string>('idle');
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const syncModuleRef = useRef<any>(null);
+
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    let mounted = true;
+    void import('../lib/sync').then(m => {
+      if (!mounted) return;
+      syncModuleRef.current = m;
+      const initial = m.getSyncState();
+      setStatus(initial.status);
+      setLastSyncedAt(initial.lastSyncedAt);
+      setLastError(initial.lastError);
+      unsubscribe = m.subscribeSyncState(s => {
+        setStatus(s.status);
+        setLastSyncedAt(s.lastSyncedAt);
+        setLastError(s.lastError);
+      });
+    }).catch(err => {
+      // eslint-disable-next-line no-console
+      console.warn('[sync/settings] module load failed:', err);
+    });
+    return () => {
+      mounted = false;
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  const runNow = async () => {
+    if (!syncModuleRef.current || syncing) return;
+    setSyncing(true);
+    try {
+      await syncModuleRef.current.syncNow();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[sync/settings] syncNow failed:', e);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const clientId = (typeof window !== 'undefined')
+    ? (() => {
+        try {
+          // Не тащим импорт сюда — читаем напрямую через localStorage если хотим,
+          // но проще через lazy-модуль. Пока показываем '—', детали в UI не нужны.
+          return null;
+        } catch { return null; }
+      })()
+    : null;
+
+  const statusLabel = (() => {
+    if (status === 'idle') return t('Ожидание', 'Idle');
+    if (status === 'pulling') return t('Скачивание изменений…', 'Pulling changes…');
+    if (status === 'pushing') return t('Отправка изменений…', 'Pushing changes…');
+    if (status === 'synced') return t('Синхронизировано', 'Synced');
+    if (status === 'error') return t('Ошибка', 'Error');
+    if (status === 'skipped') return t('Не выполнена (нет сессии)', 'Skipped (no session)');
+    return status;
+  })();
+
+  const statusColor = (() => {
+    if (status === 'error') return 'text-[var(--error,#c33)]';
+    if (status === 'synced') return 'text-[var(--success,#7a3)]';
+    if (status === 'pulling' || status === 'pushing') return 'text-accent';
+    return 'text-muted';
+  })();
+
+  const formatLastSynced = (): string => {
+    if (!lastSyncedAt) return t('никогда', 'never');
+    try {
+      const d = new Date(lastSyncedAt);
+      const diffMs = Date.now() - d.getTime();
+      const diffSec = Math.floor(diffMs / 1000);
+      if (diffSec < 5) return t('только что', 'just now');
+      if (diffSec < 60) return t(`${diffSec} сек назад`, `${diffSec}s ago`);
+      const diffMin = Math.floor(diffSec / 60);
+      if (diffMin < 60) return t(`${diffMin} мин назад`, `${diffMin}m ago`);
+      const diffH = Math.floor(diffMin / 60);
+      if (diffH < 24) return t(`${diffH} ч назад`, `${diffH}h ago`);
+      return d.toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US');
+    } catch { return lastSyncedAt; }
+  };
+
+  const _clientIdUnused = clientId; // подавляем warning про unused (пока не показываем)
+  void _clientIdUnused;
+
+  return (
+    <div className="max-w-2xl">
+      <h2 className="text-[15px] font-semibold mb-1">
+        {t('Синхронизация с облаком', 'Cloud sync')}
+      </h2>
+      <p className="text-[12px] text-muted mb-4">
+        {t(
+          'Ваши задачи автоматически синхронизируются между устройствами, если вы вошли в аккаунт. Полностью локальная работа тоже поддерживается — вы всегда владеете своими данными.',
+          'Your tasks sync automatically across devices when you\'re signed in. Local-only workflow is also supported — you always own your data.',
+        )}
+      </p>
+
+      {!auth.session?.user && (
+        <div className="mb-4 px-3 py-2 rounded-md border border-border-soft bg-[var(--surface-alt)]/40 text-[12px] text-muted">
+          {t(
+            'Вы не вошли в аккаунт. Синхронизация недоступна — все задачи остаются локальными.',
+            'You\'re not signed in. Sync is unavailable — all tasks stay local.',
+          )}
+        </div>
+      )}
+
+      {/* Статус */}
+      <div className="mb-3 px-3 py-2.5 rounded-md border border-border-soft bg-surface">
+        <div className="flex items-center gap-2 mb-1">
+          <Cloud size={14} className={statusColor} />
+          <span className="text-[13px] font-medium">
+            {t('Статус:', 'Status:')} <span className={statusColor}>{statusLabel}</span>
+          </span>
+        </div>
+        <div className="text-[11px] text-muted">
+          {t('Последняя синхронизация:', 'Last synced:')} {formatLastSynced()}
+        </div>
+        {lastError && (
+          <div className="text-[11px] text-[var(--error,#c33)] mt-1 truncate" title={lastError}>
+            {t('Ошибка:', 'Error:')} {lastError}
+          </div>
+        )}
+      </div>
+
+      {/* Кнопка запуска */}
+      <div className="flex items-center gap-3 mb-3">
+        <button
+          onClick={runNow}
+          disabled={syncing || !auth.session?.user || status === 'pulling' || status === 'pushing'}
+          className="px-3.5 py-1.5 rounded-md bg-accent text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {syncing ? t('Синхронизация…', 'Syncing…') : t('Синхронизировать сейчас', 'Sync now')}
+        </button>
+        {isDev && (
+          <span className="text-[11px] text-muted">
+            {t('Dev-сборка: авто-sync отключён.', 'Dev build: auto-sync disabled.')}
+          </span>
+        )}
+      </div>
+
+      {/* Инфо о feature flag */}
+      <details className="text-[11px] text-muted">
+        <summary className="cursor-pointer hover:text-text">
+          {t('Как работает синхронизация?', 'How does sync work?')}
+        </summary>
+        <div className="mt-2 pl-2 space-y-1.5">
+          <p>
+            {t(
+              '• Конфликт-резолюшн: last-write-wins по updated_at (server-side).',
+              '• Conflict resolution: last-write-wins by updated_at (server-side).',
+            )}
+          </p>
+          <p>
+            {t(
+              '• Удаление: soft-delete (deleted_at), запись остаётся в облаке для истории.',
+              '• Deletion: soft-delete (deleted_at), row stays in cloud for history.',
+            )}
+          </p>
+          <p>
+            {t(
+              '• Retry: экспоненциальный backoff (1→2→4→8→16 сек), максимум 5 попыток.',
+              '• Retry: exponential backoff (1→2→4→8→16s), max 5 attempts.',
+            )}
+          </p>
+          <p>
+            {isDev
+              ? t(
+                  '• В prod-сборке синхронизация запускается автоматически: при старте, возврате фокуса и через 2с после любого изменения.',
+                  '• In prod builds sync runs automatically: on startup, focus return, and 2s after any change.',
+                )
+              : t(
+                  '• Автоматическая синхронизация: при старте, возврате фокуса и через 2с после любого изменения.',
+                  '• Automatic sync: on startup, focus return, and 2s after any change.',
+                )}
+          </p>
+        </div>
+      </details>
     </div>
   );
 }

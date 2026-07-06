@@ -148,6 +148,17 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
+  // v0.9.35-dev.4: инициализация авто-sync триггеров (on-init + on-focus + on-online).
+  // В dev-сборке это no-op (см. sync/index → AUTO_SYNC_ENABLED).
+  // Запускаем один раз после того, как БД инициализирована и есть сессия.
+  useEffect(() => {
+    if (!ready) return;
+    if (!auth.session?.user) return;
+    void import('./lib/sync').then(m => m.initAutoSync()).catch(err => {
+      console.warn('[sync] initAutoSync failed:', err);
+    });
+  }, [ready, auth.session?.user]);
+
   // v0.9.9: телеметрия старта приложения (один раз на логин)
   useEffect(() => {
     if (auth.session?.user && ready) {
