@@ -30,6 +30,8 @@ const CalendarPage = lazy(() => import('./pages/Calendar').then(m => ({ default:
 const StatsPage = lazy(() => import('./pages/Stats').then(m => ({ default: m.StatsPage })));
 const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })));
 const HelpPage = lazy(() => import('./pages/Help').then(m => ({ default: m.HelpPage })));
+// v0.9.35-dev.6.4: страница подписки для оплаты через ЮKassa.
+const CheckoutPage = lazy(() => import('./pages/Checkout').then(m => ({ default: m.CheckoutPage })));
 
 function App() {
   const ready = useStore(s => s.ready);
@@ -80,6 +82,23 @@ function App() {
         unlisten = await listen<string[]>('deep-link://auth-callback', async (event) => {
           const urls = event.payload ?? [];
           for (const u of urls) {
+            // v0.9.35-dev.6.4: ветка для возврата с оплаты (taskflow://pay/success и taskflow://pay/fail).
+            // Самая активация подписки идёт через webhook + Supabase realtime,
+            // здесь только UX: показать toast и перевести на /settings.
+            try {
+              const parsed = new URL(u);
+              if (parsed.protocol === 'taskflow:' && parsed.host === 'pay') {
+                if (parsed.pathname === '/success') {
+                  pushToast(lang === 'ru' ? 'Оплата прошла. Подписка активируется в течение минуты.' : 'Payment successful. Subscription will activate within a minute.');
+                  navigate('/settings');
+                } else if (parsed.pathname === '/fail') {
+                  pushToast(lang === 'ru' ? 'Оплата отменена.' : 'Payment cancelled.');
+                  navigate('/checkout');
+                }
+                continue;
+              }
+            } catch { /* не URL — падаем в авторизационную ветку */ }
+
             const result = await handleAuthCallback(u);
             if (result.ok) {
               if (result.type === 'recovery') {
@@ -98,7 +117,7 @@ function App() {
       }
     })();
     return () => { if (unlisten) unlisten(); };
-  }, [lang, pushToast]);
+  }, [lang, pushToast, navigate]);
 
   useEffect(() => {
     init().catch(err => console.error('DB init failed', err));
@@ -247,6 +266,8 @@ function App() {
               <Route path="/stats" element={statsEnabled ? <StatsPage /> : <Navigate to="/tasks" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/help" element={<HelpPage />} />
+              {/* v0.9.35-dev.6.4: Checkout — открытая страница оплаты подписки. */}
+              <Route path="/checkout" element={<CheckoutPage />} />
               <Route path="*" element={<Navigate to={`/${defaultTab}`} replace />} />
             </Routes>
           </Suspense>

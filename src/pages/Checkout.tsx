@@ -1,0 +1,278 @@
+/*
+ * TaskFlow — personal task manager
+ * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+ * Copyright (c) 2026 Daniil Lebedev (danny-swan)
+ *
+ * v0.9.35-dev.6.4 — страница /checkout: три тарифа TaskFlow Pro.
+ *
+ * Flow:
+ *   1. Пользователь выбирает тариф (monthly / annual / lifetime).
+ *   2. Клик → вызов Edge Function `create-payment` (передаём tier).
+ *   3. Функция возвращает confirmation_url ЮKassa.
+ *   4. Открываем URL в системном браузере (tauri-plugin-shell).
+ *   5. После оплаты юзер вернётся на yourtaskflow.app/pay/success —
+ *      там на лендинге есть deep-link `taskflow://pay/success?tier=...` обратно
+ *      в приложение. Активация entitlement идёт через webhook (см.
+ *      supabase/functions/payment-webhook), поэтому пользователь просто
+ *      обновляет страницу подписки — данные подтянутся через realtime-sync.
+ */
+
+import { useState } from 'react';
+import { useStore } from '../store/useStore';
+import { useAuth } from '../lib/auth';
+import { supabase } from '../lib/supabase';
+import { useEntitlement } from '../lib/entitlements';
+import { Check, Loader2, ExternalLink } from 'lucide-react';
+
+interface Tier {
+  id: 'monthly' | 'annual' | 'lifetime';
+  labelRu: string;
+  labelEn: string;
+  priceRu: string;
+  priceEn: string;
+  periodRu: string;
+  periodEn: string;
+  descriptionRu: string;
+  descriptionEn: string;
+  highlight?: boolean;
+}
+
+const TIERS: Tier[] = [
+  {
+    id: 'monthly',
+    labelRu: 'Ежемесячно',
+    labelEn: 'Monthly',
+    priceRu: '299 ₽',
+    priceEn: '299 ₽',
+    periodRu: 'в месяц',
+    periodEn: 'per month',
+    descriptionRu: 'Полный доступ ко всем функциям. Отмена в любой момент.',
+    descriptionEn: 'Full access to all features. Cancel anytime.',
+  },
+  {
+    id: 'annual',
+    labelRu: 'Ежегодно',
+    labelEn: 'Annual',
+    priceRu: '2 990 ₽',
+    priceEn: '2 990 ₽',
+    periodRu: 'в год · экономия 17%',
+    periodEn: 'per year · save 17%',
+    descriptionRu: 'Один платёж на год. Наш самый популярный тариф.',
+    descriptionEn: 'One payment for a year. Our most popular tier.',
+    highlight: true,
+  },
+  {
+    id: 'lifetime',
+    labelRu: 'Пожизненно',
+    labelEn: 'Lifetime',
+    priceRu: '4 990 ₽',
+    priceEn: '4 990 ₽',
+    periodRu: 'единоразово · навсегда',
+    periodEn: 'one-time · forever',
+    descriptionRu: 'Один платёж — все будущие обновления входят.',
+    descriptionEn: 'One payment — all future updates included.',
+  },
+];
+
+const FEATURES_RU = [
+  'Синхронизация между устройствами',
+  'Календарь и планирование',
+  'Расширенная статистика',
+  'Приоритет в поддержке',
+  'Все будущие фичи Pro',
+];
+const FEATURES_EN = [
+  'Cross-device sync',
+  'Calendar and planning',
+  'Advanced statistics',
+  'Priority support',
+  'All future Pro features',
+];
+
+export function CheckoutPage() {
+  const lang = useStore(s => s.language);
+  const isRu = lang === 'ru';
+  const t = (ru: string, en: string) => (isRu ? ru : en);
+  const pushToast = useStore(s => s.pushToast);
+
+  const auth = useAuth();
+  const userId = auth.user?.id ?? null;
+  const userEmail = auth.user?.email ?? null;
+  const { entitlement } = useEntitlement(userId, userEmail);
+
+  const [loadingTier, setLoadingTier] = useState<Tier['id'] | null>(null);
+
+  async function handleBuy(tier: Tier) {
+    if (!auth.user) {
+      pushToast(t('Войдите в аккаунт для оплаты', 'Sign in to purchase'));
+      return;
+    }
+    setLoadingTier(tier.id);
+    try {
+      const { data, error } = await supabase.functions.invoke('create-payment', {
+        body: { tier: tier.id },
+      });
+      if (error) throw error;
+      if (!data?.confirmation_url) {
+        throw new Error(data?.error ?? 'No confirmation_url from server');
+      }
+      // Открываем в системном браузере (внутри Tauri) или новом окне (web-режим).
+      try {
+        const { open } = await import('@tauri-apps/plugin-shell');
+        await open(data.confirmation_url);
+      } catch {
+        window.open(data.confirmation_url, '_blank', 'noopener,noreferrer');
+      }
+      pushToast(
+        t(
+          'Открыто окно оплаты в браузере. После оплаты подписка активируется автоматически.',
+          'Payment page opened in browser. Your subscription will activate automatically after payment.',
+        ),
+      );
+    } catch (e) {
+      const msg = (e as Error).message ?? 'Unknown error';
+      pushToast(t(`Ошибка: ${msg}`, `Error: ${msg}`));
+    } finally {
+      setLoadingTier(null);
+    }
+  }
+
+  const currentPlan = entitlement?.effectivePlan ?? 'free';
+  const hasLifetime = currentPlan === 'lifetime';
+
+  return (
+    <div className="flex-1 overflow-y-auto p-6 max-w-6xl mx-auto w-full">
+      {/* Header */}
+      <div className="text-center mb-10">
+        <h1 className="text-[28px] font-semibold mb-2">
+          {t('Оформить подписку', 'Choose your plan')}
+        </h1>
+        <p className="text-muted text-[14px] max-w-xl mx-auto">
+          {t(
+            'Выберите тариф ниже. После клика вы перейдёте на защищённую страницу оплаты ЮKassa.',
+            'Choose a tier below. You will be redirected to the secure ЮKassa payment page.',
+          )}
+        </p>
+        {hasLifetime && (
+          <div className="mt-4 inline-block px-4 py-2 rounded-lg bg-success/10 border border-success/30 text-success text-[13px]">
+            {t(
+              'У вас уже есть Lifetime — новых покупок не требуется.',
+              'You already have Lifetime — no new purchase needed.',
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Tier cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10">
+        {TIERS.map((tier) => (
+          <div
+            key={tier.id}
+            className={
+              'relative rounded-xl border p-6 flex flex-col ' +
+              (tier.highlight
+                ? 'border-primary/50 bg-primary/[0.03]'
+                : 'border-border bg-surface')
+            }
+          >
+            {tier.highlight && (
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-primary text-white text-[11px] font-medium">
+                {t('Популярное', 'Most popular')}
+              </div>
+            )}
+            <div className="text-[14px] text-muted uppercase tracking-wide mb-2">
+              {isRu ? tier.labelRu : tier.labelEn}
+            </div>
+            <div className="text-[32px] font-semibold mb-1">
+              {isRu ? tier.priceRu : tier.priceEn}
+            </div>
+            <div className="text-[13px] text-muted mb-4">
+              {isRu ? tier.periodRu : tier.periodEn}
+            </div>
+            <p className="text-[13px] text-muted mb-6 flex-1">
+              {isRu ? tier.descriptionRu : tier.descriptionEn}
+            </p>
+            <button
+              onClick={() => handleBuy(tier)}
+              disabled={loadingTier !== null || hasLifetime}
+              className={
+                'w-full py-2.5 rounded-lg text-[14px] font-medium transition ' +
+                (tier.highlight
+                  ? 'bg-primary text-white hover:bg-primary/90'
+                  : 'bg-surface-alt border border-border hover:border-primary/50') +
+                ' disabled:opacity-50 disabled:cursor-not-allowed'
+              }
+            >
+              {loadingTier === tier.id ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {t('Открываем оплату…', 'Opening checkout…')}
+                </span>
+              ) : (
+                <span className="flex items-center justify-center gap-2">
+                  {t('Оплатить', 'Buy now')}
+                  <ExternalLink className="w-4 h-4" />
+                </span>
+              )}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Features list */}
+      <div className="border-t border-border pt-8">
+        <h2 className="text-[16px] font-semibold mb-4 text-center">
+          {t('Что входит в любой Pro-тариф', 'Included in every Pro tier')}
+        </h2>
+        <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 max-w-2xl mx-auto text-[14px]">
+          {(isRu ? FEATURES_RU : FEATURES_EN).map((f, i) => (
+            <li key={i} className="flex items-center gap-2">
+              <Check className="w-4 h-4 text-primary shrink-0" />
+              <span>{f}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Legal + FAQ */}
+      <div className="mt-10 pt-6 border-t border-border text-[12px] text-muted text-center space-y-2">
+        <p>
+          {t(
+            'Оплата защищена ЮKassa. Мы принимаем банковские карты, СБП, ЮMoney.',
+            'Payments processed by ЮKassa. Cards, SBP, ЮMoney accepted.',
+          )}
+        </p>
+        <p>
+          {t('Совершая покупку, вы принимаете ', 'By purchasing you accept ')}
+          <a
+            href="https://yourtaskflow.app/legal/offer.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            {t('Оферту', 'the Offer')}
+          </a>
+          {t(', ', ', ')}
+          <a
+            href="https://yourtaskflow.app/legal/privacy.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            {t('Политику конфиденциальности', 'Privacy Policy')}
+          </a>
+          {t(' и ', ' and ')}
+          <a
+            href="https://yourtaskflow.app/legal/return.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            {t('Политику возврата', 'Refund Policy')}
+          </a>
+          .
+        </p>
+      </div>
+    </div>
+  );
+}
