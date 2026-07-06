@@ -7,6 +7,9 @@ import { detectOverdueEvents, detectOverdueEventForTask } from '../lib/overdue';
 import { todayISO } from '../lib/utils';
 import { pickQuote, quoteSetFor } from '../lib/quotes';
 import { logger } from '../lib/logger';
+import { uuidv7 } from '../lib/uuid';
+import { getClientId } from '../lib/clientId';
+import { enqueueOutbox } from '../lib/outbox';
 
 export type ThemeName = 'light' | 'dark' | 'akatsuki' | 'konoha' | 'custom';
 
@@ -22,12 +25,24 @@ export interface Status {
   hidden: number;
   /** v0.8.2: defaultCollapsed=true means the status section is collapsed by default on the board */
   default_collapsed: number;
+  // v0.9.35-dev.1+: sync-колонки (optional).
+  uuid?: string | null;
+  deleted_at?: string | null;
+  version?: number;
+  client_id?: string | null;
+  updated_at?: string | null;
 }
 export interface Tag {
   id: number;
   name: string;
   color: string;
   sort_order: number;
+  // v0.9.35-dev.1+: sync-колонки (optional).
+  uuid?: string | null;
+  deleted_at?: string | null;
+  version?: number;
+  client_id?: string | null;
+  updated_at?: string | null;
 }
 export interface Task {
   id: number;
@@ -42,6 +57,12 @@ export interface Task {
   updated_at: string;
   sort_order: number;
   archived: number;
+  // v0.9.35-dev.1+: sync-колонки. Optional в типе, т.к. миграция
+  // проставляет их backfill'ом, а refresh() не всегда выбирает SELECT *.
+  uuid?: string | null;
+  deleted_at?: string | null;
+  version?: number;
+  client_id?: string | null;
 }
 
 // v0.8.13: шаблон задачи — образец, из которого одним кликом создаётся новая задача.
@@ -56,6 +77,11 @@ export interface TaskTemplate {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  // v0.9.35-dev.1+: sync-колонки (optional).
+  uuid?: string | null;
+  deleted_at?: string | null;
+  version?: number;
+  client_id?: string | null;
 }
 
 interface State {
@@ -536,12 +562,16 @@ export const useStore = create<State>((set, get) => ({
     const status = get().statuses.find(s => s.id === p.status_id);
     let finishDate = p.finish_date ?? null;
     if (status?.behavior === 'archive' && !finishDate) finishDate = today;
+    // v0.9.35-dev.2: sync-колонки на INSERT'е.
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
     const r = db.run(
-      `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
-       VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
+      `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, client_id, version)
+       VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,1)`,
       [p.title || '', p.comment || '', p.tag_id ?? null, p.status_id ?? 1,
-       startDate, p.deadline ?? null, finishDate, now, now, order]
+       startDate, p.deadline ?? null, finishDate, now, now, order, rowUuid, clientId]
     );
+    enqueueOutbox('tasks', rowUuid, 'upsert');
     get().refresh();
 
     // v0.9.2 (№3): если создали задачу с уже прошедшим дедлайном — тоже фиксируем как пересечение.
@@ -581,8 +611,15 @@ export const useStore = create<State>((set, get) => ({
       vals.push(v);
     });
     fields.push('updated_at=?');
-    vals.push(now, id);
+    vals.push(now);
+    // v0.9.35-dev.2: version++, чтобы sync-слой видел, что строка изменилась.
+    fields.push('version=version+1');
+    vals.push(id);
     db.run(`UPDATE tasks SET ${fields.join(',')} WHERE id=?`, vals);
+    // Outbox enqueue за uuid’ом — берём текущий из строки (мог быть NULL
+    // для старых строк — enqueueOutbox тихо пропустит).
+    const row = db.get<{ uuid: string | null }>('SELECT uuid FROM tasks WHERE id=?', [id]);
+    enqueueOutbox('tasks', row?.uuid, 'upsert');
     get().refresh();
 
     // v0.9.2 (№3): если изменился дедлайн или статус — перепроверяем пересечение
@@ -602,10 +639,13 @@ export const useStore = create<State>((set, get) => ({
     // и скрыть у себя, а не считать «нету — стало быть не было и вовсе»).
     // Полное hard-delete делает сервисный воркер через N дней (не в этой версии).
     const now = new Date().toISOString();
+    // v0.9.35-dev.2: enqueue до UPDATE — чтобы взять uuid пока строка ещё видима.
+    const row = db.get<{ uuid: string | null }>('SELECT uuid FROM tasks WHERE id=?', [id]);
     db.run(
       'UPDATE tasks SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
       [now, now, id]
     );
+    enqueueOutbox('tasks', row?.uuid, 'delete');
     get().refresh();
   },
   softDeleteTask(id) {
@@ -615,22 +655,50 @@ export const useStore = create<State>((set, get) => ({
     const curStatus = get().statuses.find(s => s.id === cur.status_id);
     const deletedId = get().getDeletedStatusId();
     const isArchiveBehavior = curStatus?.behavior === 'archive' && curStatus?.is_technical !== 1;
+    // v0.9.35-dev.2: version++ + enqueue в sync-варианте (это не удаление,
+    // а обычное изменение archived/status_id — op = 'upsert').
     if (isArchiveBehavior) {
-      db.run(`UPDATE tasks SET archived=1, updated_at=? WHERE id=?`, [now, id]);
+      db.run(
+        `UPDATE tasks SET archived=1, updated_at=?, version=version+1 WHERE id=?`,
+        [now, id],
+      );
     } else {
       const targetId = deletedId ?? cur.status_id;
-      db.run(`UPDATE tasks SET status_id=?, archived=1, updated_at=? WHERE id=?`, [targetId, now, id]);
+      db.run(
+        `UPDATE tasks SET status_id=?, archived=1, updated_at=?, version=version+1 WHERE id=?`,
+        [targetId, now, id],
+      );
     }
+    enqueueOutbox('tasks', cur.uuid ?? null, 'upsert');
     get().refresh();
   },
   reorderTasks(_statusId, ids) {
-    ids.forEach((id, i) => db.run('UPDATE tasks SET sort_order=? WHERE id=?', [i, id]));
+    // v0.9.35-dev.2: reorder — тоже мутация. Бампаем version + updated_at,
+    // enqueue каждую изменённую строку. Случай массовый (drag'n'drop всей
+    // колонки) — outbox dedup по uuid гарантирует одну запись на задачу.
+    const now = new Date().toISOString();
+    ids.forEach((id, i) => {
+      db.run(
+        'UPDATE tasks SET sort_order=?, updated_at=?, version=version+1 WHERE id=?',
+        [i, now, id],
+      );
+      const row = db.get<{ uuid: string | null }>('SELECT uuid FROM tasks WHERE id=?', [id]);
+      enqueueOutbox('tasks', row?.uuid, 'upsert');
+    });
     get().refresh();
   },
 
   addTag(name, color) {
     const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM tags')?.m) ?? 0;
-    const r = db.run('INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)', [name, color, order]);
+    // v0.9.35-dev.2: sync-колонки.
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
+    const now = new Date().toISOString();
+    const r = db.run(
+      'INSERT INTO tags (name, color, sort_order, uuid, client_id, version, updated_at) VALUES (?,?,?,?,?,1,?)',
+      [name, color, order, rowUuid, clientId, now],
+    );
+    enqueueOutbox('tags', rowUuid, 'upsert');
     get().refresh();
     return r.lastInsertRowid;
   },
@@ -638,8 +706,15 @@ export const useStore = create<State>((set, get) => ({
     const fields: string[] = [];
     const vals: any[] = [];
     Object.entries(p).forEach(([k, v]) => { if (k === 'id') return; fields.push(`${k}=?`); vals.push(v); });
+    // v0.9.35-dev.2: version++ + updated_at.
+    const now = new Date().toISOString();
+    fields.push('updated_at=?');
+    vals.push(now);
+    fields.push('version=version+1');
     vals.push(id);
     db.run(`UPDATE tags SET ${fields.join(',')} WHERE id=?`, vals);
+    const row = db.get<{ uuid: string | null }>('SELECT uuid FROM tags WHERE id=?', [id]);
+    enqueueOutbox('tags', row?.uuid, 'upsert');
     get().refresh();
   },
   deleteTag(id) {
@@ -647,6 +722,12 @@ export const useStore = create<State>((set, get) => ({
     // (бампая version, чтобы sync подхватил это изменение), затем тег помечаем
     // как удалённый.
     const now = new Date().toISOString();
+    // v0.9.35-dev.2: взять uuid тега до удаления + аффектед задачи.
+    const tagRow = db.get<{ uuid: string | null }>('SELECT uuid FROM tags WHERE id=?', [id]);
+    const affectedTasks = db.all<{ uuid: string | null }>(
+      'SELECT uuid FROM tasks WHERE tag_id=? AND deleted_at IS NULL',
+      [id],
+    );
     db.run(
       'UPDATE tasks SET tag_id=NULL, updated_at=?, version=version+1 WHERE tag_id=?',
       [now, id]
@@ -655,13 +736,24 @@ export const useStore = create<State>((set, get) => ({
       'UPDATE tags SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
       [now, now, id]
     );
+    enqueueOutbox('tags', tagRow?.uuid, 'delete');
+    for (const t of affectedTasks) enqueueOutbox('tasks', t.uuid, 'upsert');
     get().refresh();
   },
 
   addStatus(name, color, behavior) {
+    // v0.9.35-dev.2: uuid/client_id/version=1 + enqueue в sync_outbox.
     const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses')?.m) ?? 0;
-    const r = db.run('INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,0,0,0,0)',
-      [name, color, behavior, order]);
+    const now = new Date().toISOString();
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
+    const r = db.run(
+      `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed,
+                             uuid, client_id, version, updated_at)
+       VALUES (?,?,?,?,0,0,0,0,?,?,1,?)`,
+      [name, color, behavior, order, rowUuid, clientId, now]
+    );
+    enqueueOutbox('statuses', rowUuid, 'upsert');
     get().refresh();
     return r.lastInsertRowid;
   },
@@ -669,8 +761,13 @@ export const useStore = create<State>((set, get) => ({
     const fields: string[] = [];
     const vals: any[] = [];
     Object.entries(p).forEach(([k, v]) => { if (k === 'id') return; fields.push(`${k}=?`); vals.push(v); });
-    vals.push(id);
+    // v0.9.35-dev.2: автобамп version + updated_at + enqueue.
+    const now = new Date().toISOString();
+    fields.push('updated_at=?', 'version=COALESCE(version,0)+1');
+    vals.push(now, id);
     db.run(`UPDATE statuses SET ${fields.join(',')} WHERE id=?`, vals);
+    const fresh = db.get<{ uuid: string | null }>('SELECT uuid FROM statuses WHERE id=?', [id]);
+    enqueueOutbox('statuses', fresh?.uuid ?? null, 'upsert');
     get().refresh();
   },
   deleteStatus(id) {
@@ -681,12 +778,19 @@ export const useStore = create<State>((set, get) => ({
     if (status?.behavior === 'archive') return;
     // v0.9.35-dev.1: soft delete. Переливаем задачи на первый видимый статус
     // (также с бампом version), сам статус помечаем удалённым.
+    // v0.9.35-dev.2: enqueue статуса + всех аффектед задач ДО UPDATE (собираем uuid'ы).
     const now = new Date().toISOString();
+    const statusRow = db.get<{ uuid: string | null }>('SELECT uuid FROM statuses WHERE id=?', [id]);
     const first = db.get<{ id: number }>(
       'SELECT id FROM statuses WHERE id != ? AND is_technical=0 AND deleted_at IS NULL ORDER BY sort_order LIMIT 1',
       [id]
     );
+    let affectedTaskUuids: string[] = [];
     if (first) {
+      affectedTaskUuids = db.all<{ uuid: string | null }>(
+        'SELECT uuid FROM tasks WHERE status_id=? AND deleted_at IS NULL',
+        [id]
+      ).map(r => r.uuid).filter((u): u is string => !!u);
       db.run(
         'UPDATE tasks SET status_id=?, updated_at=?, version=version+1 WHERE status_id=?',
         [first.id, now, id]
@@ -696,10 +800,21 @@ export const useStore = create<State>((set, get) => ({
       'UPDATE statuses SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
       [now, now, id]
     );
+    enqueueOutbox('statuses', statusRow?.uuid ?? null, 'delete');
+    affectedTaskUuids.forEach(u => enqueueOutbox('tasks', u, 'upsert'));
     get().refresh();
   },
   reorderStatuses(ids) {
-    ids.forEach((id, i) => db.run('UPDATE statuses SET sort_order=? WHERE id=?', [i, id]));
+    // v0.9.35-dev.2: reorder меняет sort_order → бампим version + enqueue.
+    const now = new Date().toISOString();
+    ids.forEach((id, i) => {
+      db.run(
+        'UPDATE statuses SET sort_order=?, updated_at=?, version=COALESCE(version,0)+1 WHERE id=?',
+        [i, now, id]
+      );
+      const row = db.get<{ uuid: string | null }>('SELECT uuid FROM statuses WHERE id=?', [id]);
+      enqueueOutbox('statuses', row?.uuid ?? null, 'upsert');
+    });
     get().refresh();
   },
 
@@ -738,13 +853,18 @@ export const useStore = create<State>((set, get) => ({
   // ── v0.8.13 templates API ──
 
   addTemplate(p) {
+    // v0.9.35-dev.2: uuid/client_id/version=1 + enqueue.
     const now = new Date().toISOString();
     const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM task_templates')?.m) ?? 0;
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
     const r = db.run(
-      `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [p.name, p.title ?? '', p.comment ?? '', p.status_id ?? null, p.tag_id ?? null, order, now, now]
+      `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, created_at, updated_at,
+                                   uuid, client_id, version)
+       VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
+      [p.name, p.title ?? '', p.comment ?? '', p.status_id ?? null, p.tag_id ?? null, order, now, now, rowUuid, clientId]
     );
+    enqueueOutbox('task_templates', rowUuid, 'upsert');
     get().refresh();
     return r.lastInsertRowid;
   },
@@ -759,19 +879,25 @@ export const useStore = create<State>((set, get) => ({
       vals.push(v as any);
     });
     if (!fields.length) return;
-    fields.push('updated_at=?');
+    // v0.9.35-dev.2: автобамп version + updated_at + enqueue.
+    fields.push('updated_at=?', 'version=COALESCE(version,0)+1');
     vals.push(now, id);
     db.run(`UPDATE task_templates SET ${fields.join(',')} WHERE id=?`, vals);
+    const fresh = db.get<{ uuid: string | null }>('SELECT uuid FROM task_templates WHERE id=?', [id]);
+    enqueueOutbox('task_templates', fresh?.uuid ?? null, 'upsert');
     get().refresh();
   },
 
   deleteTemplate(id) {
     // v0.9.35-dev.1: soft delete.
+    // v0.9.35-dev.2: enqueue ДО UPDATE (собираем uuid пока строка видима).
     const now = new Date().toISOString();
+    const row = db.get<{ uuid: string | null }>('SELECT uuid FROM task_templates WHERE id=?', [id]);
     db.run(
       'UPDATE task_templates SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
       [now, now, id]
     );
+    enqueueOutbox('task_templates', row?.uuid ?? null, 'delete');
     get().refresh();
   },
 

@@ -78,9 +78,9 @@ describe('migration v5 (sync foundation)', () => {
     const d = await freshDb();
     await runMigrations(webMigrationApi(d));
 
-    // v5 применилась.
+    // v5 (и следующие) применились — гоняем все зарегистрированные миграции до TARGET.
     const uv = d.exec('PRAGMA user_version')[0].values[0][0];
-    expect(uv).toBe(5);
+    expect(uv).toBeGreaterThanOrEqual(5);
 
     // Колонки есть в tasks.
     const cols = d.exec("PRAGMA table_info('tasks')")[0].values.map((r: any) => r[1]);
@@ -112,7 +112,7 @@ describe('migration v5 (sync foundation)', () => {
     expect(uuidAfter).toBe(uuidBefore);
 
     const uv = d.exec('PRAGMA user_version')[0].values[0][0];
-    expect(uv).toBe(5);
+    expect(uv).toBeGreaterThanOrEqual(5);
   });
 
   it('MIGRATIONS содержит v5 с корректным описанием', () => {

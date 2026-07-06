@@ -316,6 +316,49 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+
+  // ================================================================
+  // v6 — Sync outbox (v0.9.35-dev.2)
+  //
+  // Локальная очередь pending-изменений для push'а в облако.
+  // Сейчас только заполняется (enqueue при каждом изменении
+  // сущностей), флюш в Supabase — в dev.4.
+  //
+  // Grain: row-level. На каждую (entity_table, entity_uuid) — максимум
+  // одна запись. Повторный enqueue просто обновляет op/queued_at.
+  // Пейлоад не храним — push берёт свежее состояние из entity_table
+  // по uuid в момент пуша.
+  // ================================================================
+  {
+    version: 6,
+    description:
+      'Sync outbox: pending changes queue for cloud push (v0.9.35-dev.2)',
+    up: async ({ exec, execIgnoreDuplicate }) => {
+      await exec(`
+        CREATE TABLE IF NOT EXISTS sync_outbox (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          entity_table TEXT NOT NULL,
+          entity_uuid TEXT NOT NULL,
+          op TEXT NOT NULL,           -- 'upsert' | 'delete'
+          queued_at TEXT NOT NULL DEFAULT (datetime('now')),
+          last_attempt_at TEXT,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT
+        )
+      `);
+
+      // Dedup: одна pending-запись на сущность. INSERT OR REPLACE по
+      // (entity_table, entity_uuid) будет UPSERT'ить без гонок.
+      await execIgnoreDuplicate(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_entity ON sync_outbox(entity_table, entity_uuid)`
+      );
+
+      // Для push-цикла: берём пачку старейших записей (FIFO).
+      await execIgnoreDuplicate(
+        `CREATE INDEX IF NOT EXISTS idx_sync_outbox_queued_at ON sync_outbox(queued_at)`
+      );
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */

@@ -19,6 +19,9 @@
  */
 import * as db from './db';
 import type { Task, Status } from '../store/useStore';
+import { uuidv7 } from './uuid';
+import { getClientId } from './clientId';
+import { enqueueOutbox } from './outbox';
 
 /**
  * Проверить одну задачу и, если нужно, создать запись в overdue_events.
@@ -59,11 +62,17 @@ export function detectOverdueEventForTask(
 
     // Создаём новое событие. event_date = сегодня (день, когда мы поняли,
     // что задача просрочена). deadline_snapshot = дедлайн на момент события.
+    // v0.9.35-dev.2: uuid/client_id/version=1 + enqueue в sync_outbox.
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
+    const now = new Date().toISOString();
     db.run(
-      `INSERT INTO overdue_events (task_id, deadline_snapshot, event_date)
-       VALUES (?, ?, ?)`,
-      [task.id, task.deadline, today],
+      `INSERT INTO overdue_events (task_id, deadline_snapshot, event_date,
+                                   uuid, client_id, version, updated_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      [task.id, task.deadline, today, rowUuid, clientId, now],
     );
+    enqueueOutbox('overdue_events', rowUuid, 'upsert');
     return true;
   } catch (e) {
     // v0.9.3 hotfix: если таблица overdue_events недоступна — не валим детектор.
