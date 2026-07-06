@@ -17,7 +17,8 @@
  *      обновляет страницу подписки — данные подтянутся через realtime-sync.
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
@@ -102,6 +103,21 @@ export function CheckoutPage() {
 
   const [loadingTier, setLoadingTier] = useState<Tier['id'] | null>(null);
 
+  // v0.9.35-dev.6.4: если пришли через ?tier= (с лендинга через deep-link
+  // или из SubscriptionBlock) — подсвечиваем карточку и скроллим к ней.
+  const [searchParams] = useSearchParams();
+  const preselectedTier = searchParams.get('tier');
+  const validPreselected: Tier['id'] | null =
+    preselectedTier === 'monthly' || preselectedTier === 'annual' || preselectedTier === 'lifetime'
+      ? preselectedTier
+      : null;
+  const tierRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  useEffect(() => {
+    if (validPreselected && tierRefs.current[validPreselected]) {
+      tierRefs.current[validPreselected]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [validPreselected]);
+
   async function handleBuy(tier: Tier) {
     if (!auth.user) {
       pushToast(t('Войдите в аккаунт для оплаты', 'Sign in to purchase'));
@@ -165,14 +181,19 @@ export function CheckoutPage() {
 
       {/* Tier cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10">
-        {TIERS.map((tier) => (
+        {TIERS.map((tier) => {
+          const isPreselected = validPreselected === tier.id;
+          return (
           <div
             key={tier.id}
+            ref={(el) => { tierRefs.current[tier.id] = el; }}
             className={
-              'relative rounded-xl border p-6 flex flex-col ' +
-              (tier.highlight
-                ? 'border-primary/50 bg-primary/[0.03]'
-                : 'border-border bg-surface')
+              'relative rounded-xl border p-6 flex flex-col transition-all ' +
+              (isPreselected
+                ? 'border-primary bg-primary/[0.06] ring-2 ring-primary/30 shadow-lg'
+                : tier.highlight
+                  ? 'border-primary/50 bg-primary/[0.03]'
+                  : 'border-border bg-surface')
             }
           >
             {tier.highlight && (
@@ -216,7 +237,8 @@ export function CheckoutPage() {
               )}
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Features list */}

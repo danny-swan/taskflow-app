@@ -85,6 +85,9 @@ function App() {
             // v0.9.35-dev.6.4: ветка для возврата с оплаты (taskflow://pay/success и taskflow://pay/fail).
             // Самая активация подписки идёт через webhook + Supabase realtime,
             // здесь только UX: показать toast и перевести на /settings.
+            // v0.9.35-dev.6.4 (fix): добавлена ветка taskflow://checkout?tier=X —
+            // кнопки с лендинга (yourtaskflow.app/#pricing) открывают /checkout в
+            // приложении с предвыбранным тарифом (monthly/annual/lifetime).
             try {
               const parsed = new URL(u);
               if (parsed.protocol === 'taskflow:' && parsed.host === 'pay') {
@@ -95,6 +98,13 @@ function App() {
                   pushToast(lang === 'ru' ? 'Оплата отменена.' : 'Payment cancelled.');
                   navigate('/checkout');
                 }
+                continue;
+              }
+              if (parsed.protocol === 'taskflow:' && parsed.host === 'checkout') {
+                // Нормализуем tier из query или pathname (на всякий).
+                const tierRaw = parsed.searchParams.get('tier') ?? parsed.pathname.replace(/^\//, '');
+                const tier = ['monthly', 'annual', 'lifetime'].includes(tierRaw) ? tierRaw : '';
+                navigate(tier ? `/checkout?tier=${tier}` : '/checkout');
                 continue;
               }
             } catch { /* не URL — падаем в авторизационную ветку */ }
