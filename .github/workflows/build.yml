@@ -123,7 +123,8 @@ jobs:
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
-          if [[ "$TAG" =~ ^v.*-(dev|beta|rc|alpha)(\.[0-9]+)?$ ]]; then
+          # Разрешаем составные pre-release суффиксы: -dev.N, -dev.N.M и т.д.
+          if [[ "$TAG" =~ ^v.*-(dev|beta|rc|alpha)(\.[0-9]+)+$ ]]; then
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
             echo "bundles=nsis" >> $GITHUB_OUTPUT
             echo "Tag $TAG → pre-release channel (NSIS + portable only, MSI skipped)"
@@ -376,7 +377,8 @@ jobs:
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
-          if [[ "$TAG" =~ -(dev|beta|rc|alpha)(\.[0-9]+)?$ ]]; then
+          # Разрешаем составные pre-release суффиксы: -dev.N, -dev.N.M и т.д.
+          if [[ "$TAG" =~ -(dev|beta|rc|alpha)(\.[0-9]+)+$ ]]; then
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
             echo "publish_latest_json=false" >> $GITHUB_OUTPUT
             echo "Tag $TAG → pre-release channel (latest.json will NOT be updated)"
