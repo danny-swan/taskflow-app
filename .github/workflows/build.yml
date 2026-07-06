@@ -28,6 +28,11 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Run Vitest
+        env:
+          # v0.9.35-dev.6.2: dummy через vitest.config.ts в define, но дублируем
+          # в env на случай кода, читающего process.env.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npm test -- --reporter=verbose
 
   # v0.9.21: E2E-гейт. Тег не соберётся, если сломаны UI-flowы
@@ -53,6 +58,11 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
+        env:
+          # v0.9.35-dev.6.2: Vite dev-server читает VITE_* из env при старте.
+          # Без них supabase.ts throw'нет → sidebar не рисуется → все E2E падают.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npx playwright test
 
       - name: Upload Playwright report
@@ -158,6 +168,10 @@ jobs:
           # v0.9.23: Turnstile site key — публичный, вшивается в bundle.
           # Секретный Secret Key лежит только в Supabase Attack Protection.
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+          # v0.9.35-dev.6.2: Supabase URL/anon key (публичные, защищены RLS).
+          # С dev.6.1 supabase.ts throw'нет при отсутствии — без этих env бандл не стартует.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc
 
       # Pre-release: только NSIS + portable.
@@ -174,6 +188,9 @@ jobs:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+          # v0.9.35-dev.6.2: Supabase URL/anon key (публичные, защищены RLS).
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: List build artifacts
@@ -311,6 +328,9 @@ jobs:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+          # v0.9.35-dev.6.2: Supabase URL/anon key (публичные, защищены RLS).
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           # Вариант A: без Apple Developer ID — подпись не ставится,
           # пользователь обойдёт Gatekeeper вручную.
           APPLE_SIGNING_IDENTITY: '-'

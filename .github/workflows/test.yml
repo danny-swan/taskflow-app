@@ -39,6 +39,11 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Run Vitest
+        env:
+          # v0.9.35-dev.6.2: vitest.config.ts уже подставляет dummy через `define`,
+          # но дублируем в env — на случай если будет код, читающий process.env.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npm test -- --reporter=verbose
 
   e2e:
@@ -63,6 +68,11 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
+        env:
+          # v0.9.35-dev.6.2: E2E гонит Vite dev-server, который читает VITE_* из env.
+          # Без этого supabase.ts throw'нет на старте и sidebar не отрисуется.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npx playwright test
 
       - name: Upload Playwright report
