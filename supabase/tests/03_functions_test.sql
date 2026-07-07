@@ -18,7 +18,7 @@
 --   • случайный GRANT EXECUTE обратно anon/authenticated
 
 BEGIN;
-SELECT plan(16);
+SELECT plan(20);
 
 -- ─── set_updated_at ────────────────────────────────────────────────────────
 SELECT ok(NOT has_function_privilege('anon',          'public.set_updated_at()', 'EXECUTE'),
