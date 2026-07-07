@@ -32,10 +32,16 @@ CREATE SCHEMA IF NOT EXISTS auth;
 -- ─── 3. auth.users — минимальная копия ────────────────────────────────────
 -- В Supabase это большая таблица с email, encrypted_password, etc. Нам достаточно
 -- только id (uuid) — миграции ссылаются на неё через FK.
+-- Полный набор колонок, на которые ссылаются наши миграции:
+--   • id                — FK-цель во всех протектед-таблицах
+--   • email             — 0001_init.sql: триггер NEW.email в handle_new_user()
+--   • last_sign_in_at   — 0001_init.sql: admin_users_summary view
+--   • created_at        — на всякий случай
 CREATE TABLE IF NOT EXISTS auth.users (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  email text,
-  created_at timestamptz DEFAULT now()
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email             text,
+  last_sign_in_at   timestamptz,
+  created_at        timestamptz DEFAULT now()
 );
 
 -- ─── 4. auth.uid() — читает sub из JWT claims ─────────────────────────────
