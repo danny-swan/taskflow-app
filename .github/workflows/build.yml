@@ -123,8 +123,13 @@ jobs:
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
-          # Разрешаем составные pre-release суффиксы: -dev.N, -dev.N.M и т.д.
-          if [[ "$TAG" =~ ^v.*-(dev|beta|rc|alpha)(\.[0-9]+)+$ ]]; then
+          # workflow_dispatch без тега (ветка) → всегда pre-release (только NSIS, без MSI).
+          # MSI требует numeric-only pre-release; версии вида 0.9.35-dev.N.M несовместимы.
+          if [[ "${{ startsWith(github.ref, 'refs/tags/v') }}" != "true" ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "bundles=nsis" >> $GITHUB_OUTPUT
+            echo "Ref $TAG is not a tag → pre-release channel (NSIS only, MSI skipped)"
+          elif [[ "$TAG" =~ ^v.*-(dev|beta|rc|alpha)(\.[0-9]+)+$ ]]; then
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
             echo "bundles=nsis" >> $GITHUB_OUTPUT
             echo "Tag $TAG → pre-release channel (NSIS + portable only, MSI skipped)"
