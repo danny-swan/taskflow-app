@@ -690,8 +690,8 @@ export interface PaymentMethodRow {
   external_id: string;
   card_brand: string | null;
   card_last4: string | null;
-  card_exp_month: number | null;
-  card_exp_year: number | null;
+  card_expiry_month: number | null;
+  card_expiry_year: number | null;
   is_active: boolean;
   saved_at: string;
 }
@@ -704,7 +704,7 @@ export async function fetchActivePaymentMethods(
 ): Promise<PaymentMethodRow[]> {
   const { data, error } = await supabase
     .from('payment_methods')
-    .select('id, user_id, provider, external_id, card_brand, card_last4, card_exp_month, card_exp_year, is_active, saved_at')
+    .select('id, user_id, provider, external_id, card_brand, card_last4, card_expiry_month, card_expiry_year, is_active, saved_at')
     .eq('user_id', userId)
     .eq('is_active', true)
     .order('saved_at', { ascending: false });

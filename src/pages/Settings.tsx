@@ -2886,8 +2886,8 @@ function SubscriptionSection() {
               </p>
             )}
             {!pmLoading && paymentMethods.length > 0 && paymentMethods.map((pm) => {
-              const expStr = (pm.card_exp_month != null && pm.card_exp_year != null)
-                ? ` · ${String(pm.card_exp_month).padStart(2, '0')}/${String(pm.card_exp_year).slice(-2)}`
+              const expStr = (pm.card_expiry_month != null && pm.card_expiry_year != null)
+                ? ` · ${String(pm.card_expiry_month).padStart(2, '0')}/${String(pm.card_expiry_year).slice(-2)}`
                 : '';
               const brandStr = pm.card_brand ? pm.card_brand.toUpperCase() : t('Карта', 'Card');
               return (

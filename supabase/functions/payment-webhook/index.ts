@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (c) 2026 Daniil Lebedev (danny-swan)
 //
-// v0.9.35-dev.6.5.1 — Supabase Edge Function: payment-webhook
+// v0.9.35-dev.6.5.3 — Supabase Edge Function: payment-webhook
 //
 // Принимает уведомления от ЮKassa (payment.succeeded, payment.canceled,
 // refund.succeeded), верифицирует их и обновляет user_entitlements.
@@ -436,11 +436,17 @@ async function handlePaymentSucceeded(
 
   // 4) Если renewal — логгируем в renewal_attempts_log со status='succeeded'
   if (isRenewal) {
+    // Читаем текущий счётчик попыток ДО сброса (чтобы записать корректный attempt_number)
+    const attRes = await admin.selectOne<{ renewal_attempts_count: number | null }>(
+      'user_entitlements', 'renewal_attempts_count', { user_id: userId },
+    )
+    const attemptNumber = (attRes.ok ? (attRes.data?.renewal_attempts_count ?? 0) : 0) + 1
     const logRes = await admin.insert('renewal_attempts_log', {
       user_id: userId,
       attempted_at: now.toISOString(),
       status: 'succeeded',
-      payment_id: payment.id,
+      yookassa_payment_id: payment.id,
+      attempt_number: attemptNumber,
       error_code: null,
       error_message: null,
     })
@@ -519,7 +525,8 @@ async function handlePaymentCanceled(
     user_id: userId,
     attempted_at: nowIso,
     status: 'canceled',
-    payment_id: payment.id,
+    yookassa_payment_id: payment.id,
+    attempt_number: currentCount + 1,
     error_code: errorCode,
     error_message: cancellationDetails?.party ? `party=${cancellationDetails.party}` : null,
   })

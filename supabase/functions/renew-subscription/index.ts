@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (c) 2026 Daniil Lebedev (danny-swan)
 //
-// v0.9.35-dev.6.5.1 — Supabase Edge Function: renew-subscription
+// v0.9.35-dev.6.5.3 — Supabase Edge Function: renew-subscription
 //
 // Дёргается pg_cron через pg_net раз в час (см. миграцию 0015):
 //   SELECT net.http_post(
@@ -260,7 +260,7 @@ export const handler = async (req: Request): Promise<Response> => {
       )
       if (!pmRes.ok || !pmRes.data || pmRes.data.is_active === false) {
         // Метод удалён или неактивен — не пытаемся, downgrade сразу нет смысла (пусть юзер обновит карту)
-        await logAttempt(admin, uid, 'canceled', null, 'payment_method_inactive', 'payment_method not active in DB')
+        await logAttempt(admin, uid, 'canceled', null, 'payment_method_inactive', 'payment_method not active in DB', (cand.renewal_attempts_count ?? 0) + 1)
         await incrementAttempts(admin, uid, cand.renewal_attempts_count, MAX_ATTEMPTS)
         failed++
         details.push({ user_id: uid, error: 'payment_method inactive' })
@@ -273,7 +273,7 @@ export const handler = async (req: Request): Promise<Response> => {
       const profRes = await admin.selectOne<{ email: string | null }>('profiles', 'email', { id: uid })
       const email = profRes.ok ? (profRes.data?.email ?? null) : null
       if (!email) {
-        await logAttempt(admin, uid, 'canceled', null, 'email_missing', 'no email for receipt')
+        await logAttempt(admin, uid, 'canceled', null, 'email_missing', 'no email for receipt', (cand.renewal_attempts_count ?? 0) + 1)
         await incrementAttempts(admin, uid, cand.renewal_attempts_count, MAX_ATTEMPTS)
         failed++
         details.push({ user_id: uid, error: 'no email' })
@@ -335,7 +335,7 @@ export const handler = async (req: Request): Promise<Response> => {
         // Ошибка API — логируем как canceled
         const errCode = yooJson?.code ?? `http_${yooResp.status}`
         const errMsg = yooJson?.description ?? `HTTP ${yooResp.status}`
-        await logAttempt(admin, uid, 'canceled', yooJson?.id ?? null, errCode, errMsg)
+        await logAttempt(admin, uid, 'canceled', yooJson?.id ?? null, errCode, errMsg, attemptNo)
         const dg = await incrementAttempts(admin, uid, cand.renewal_attempts_count, MAX_ATTEMPTS)
         if (dg) downgraded++
         // v0.9.35-dev.6.5.1: renewal_failed email
@@ -367,7 +367,7 @@ export const handler = async (req: Request): Promise<Response> => {
       } else {
         // status=canceled сразу — редкий кейс, но обрабатываем
         const errCode = (yooJson as { cancellation_details?: { reason?: string } }).cancellation_details?.reason ?? 'canceled'
-        await logAttempt(admin, uid, 'canceled', yooJson.id ?? null, errCode, `status=${status}`)
+        await logAttempt(admin, uid, 'canceled', yooJson.id ?? null, errCode, `status=${status}`, attemptNo)
         const dg = await incrementAttempts(admin, uid, cand.renewal_attempts_count, MAX_ATTEMPTS)
         if (dg) downgraded++
         // v0.9.35-dev.6.5.1: renewal_failed email
@@ -486,12 +486,14 @@ async function logAttempt(
   paymentId: string | null,
   errorCode: string | null,
   errorMessage: string | null,
+  attemptNumber: number = 1,
 ): Promise<void> {
   const res = await admin.insert('renewal_attempts_log', {
     user_id: userId,
     attempted_at: new Date().toISOString(),
     status,
-    payment_id: paymentId,
+    yookassa_payment_id: paymentId,
+    attempt_number: attemptNumber,
     error_code: errorCode,
     error_message: errorMessage,
   })
