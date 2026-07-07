@@ -1,10 +1,20 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (c) 2026 Daniil Lebedev (danny-swan)
 //
-// v0.9.35-dev.6.4 — Supabase Edge Function: payment-webhook
+// v0.9.35-dev.6.4.2 — Supabase Edge Function: payment-webhook
 //
 // Принимает уведомления от ЮKassa (payment.succeeded, payment.canceled,
 // refund.succeeded), верифицирует их и обновляет user_entitlements.
+//
+// ─── Почему без supabase-js ────────────────────────────────────────────────
+// Новые sb_secret_* ключи (SUPABASE_SECRET_KEYS.default) должны отправляться
+// ТОЛЬКО в apikey header. supabase-js даже с global.headers = { apikey, Authorization: '' }
+// продолжает падать с permission denied — платформа отвергает запросы у которых
+// есть Authorization header (пусть даже пустой) и это не JWT.
+//
+// Решение: используем прямой fetch к PostgREST с { apikey: sb_secret_... }
+// без Authorization вообще. Это надёжно и не зависит от того что делает
+// supabase-js под капотом.
 //
 // ─── Модель безопасности ─────────────────────────────────────────────────────
 // ЮKassa НЕ подписывает вебхуки HMAC (в отличие от Stripe / CloudPayments).
@@ -14,29 +24,9 @@
 //      с нашими Basic-credentials. Это гарантирует что платёж РЕАЛЬНО существует
 //      в ЮKassa и его статус/сумма/metadata совпадают с payload.
 //
-// Оба слоя обязательны: злоумышленник может подделать IP только при MITM —
-// dual-verify это ловит.
-//
 // ─── Идемпотентность ─────────────────────────────────────────────────────────
 // external_id (=payment.id ЮKassa) уникален в payment_events через
 // UNIQUE (provider, external_id) (миграция 0007). Дубль → 200 OK + skipped.
-//
-// ЮKassa ретраит 24 часа при не-200 ответе, поэтому всегда отвечаем 200 после
-// того как записали в payment_events (даже если активация ещё не удалась —
-// добавим отдельный retry-механизм в dev.6.5).
-//
-// ─── Deploy ──────────────────────────────────────────────────────────────────
-// supabase functions deploy payment-webhook --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
-// (--no-verify-jwt: провайдер не отправляет пользовательский JWT.)
-//
-// ─── Secrets ─────────────────────────────────────────────────────────────────
-// YOOKASSA_SHOP_ID       — Basic auth username
-// YOOKASSA_SECRET_KEY    — Basic auth password
-// YOOKASSA_SKIP_IP_CHECK — 'true' в dev/test, чтобы можно было тестировать
-//                           через ngrok / postman без ЮKassa-IP
-// SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY — стандартные Supabase.
-
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -44,8 +34,6 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-// ЮKassa IP whitelist (https://yookassa.ru/developers/using-api/webhooks)
-// Формат: CIDR или одиночный IP.
 const YOOKASSA_IP_RANGES = [
   '185.71.76.0/27',
   '185.71.77.0/27',
@@ -53,18 +41,91 @@ const YOOKASSA_IP_RANGES = [
   '77.75.156.11',
   '77.75.156.35',
   '77.75.154.128/25',
-  // IPv6: 2a02:5180::/32 — обрабатываем отдельно (см. isIpAllowed)
 ]
 const YOOKASSA_IPV6_PREFIX = '2a02:5180:'
 
-// Прайс-лист — должен совпадать с create-payment/index.ts.
 const TIER_TO_DAYS: Record<string, number | null> = {
   monthly: 30,
   annual: 365,
-  lifetime: null, // бессрочно
+  lifetime: null,
 }
 
-// ─── Main handler ────────────────────────────────────────────────────────────
+// ═══ Admin PostgREST client через raw fetch ══════════════════════════════════
+// Никаких supabase-js. Только apikey header, без Authorization.
+class AdminClient {
+  constructor(private baseUrl: string, private apiKey: string) {}
+
+  private headers(extra: Record<string, string> = {}): Record<string, string> {
+    return {
+      apikey: this.apiKey,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...extra,
+    }
+  }
+
+  async insert(table: string, rows: unknown | unknown[]): Promise<{ ok: boolean; status: number; data?: unknown; error?: { code?: string; message: string } }> {
+    const url = `${this.baseUrl}/rest/v1/${table}`
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: this.headers({ Prefer: 'return=representation' }),
+      body: JSON.stringify(Array.isArray(rows) ? rows : [rows]),
+    })
+    if (resp.ok) {
+      return { ok: true, status: resp.status, data: await resp.json().catch(() => null) }
+    }
+    const errJson = await resp.json().catch(() => ({}))
+    return { ok: false, status: resp.status, error: { code: errJson.code, message: errJson.message ?? `HTTP ${resp.status}` } }
+  }
+
+  async update(table: string, filters: Record<string, string>, patch: Record<string, unknown>): Promise<{ ok: boolean; status: number; error?: { message: string } }> {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(filters)) {
+      qs.set(k, `eq.${v}`)
+    }
+    const url = `${this.baseUrl}/rest/v1/${table}?${qs.toString()}`
+    const resp = await fetch(url, {
+      method: 'PATCH',
+      headers: this.headers({ Prefer: 'return=minimal' }),
+      body: JSON.stringify(patch),
+    })
+    if (resp.ok) return { ok: true, status: resp.status }
+    const errJson = await resp.json().catch(() => ({}))
+    return { ok: false, status: resp.status, error: { message: errJson.message ?? `HTTP ${resp.status}` } }
+  }
+
+  async upsert(table: string, row: Record<string, unknown>, onConflict: string): Promise<{ ok: boolean; status: number; error?: { message: string } }> {
+    const url = `${this.baseUrl}/rest/v1/${table}?on_conflict=${onConflict}`
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: this.headers({ Prefer: 'return=minimal,resolution=merge-duplicates' }),
+      body: JSON.stringify([row]),
+    })
+    if (resp.ok) return { ok: true, status: resp.status }
+    const errJson = await resp.json().catch(() => ({}))
+    return { ok: false, status: resp.status, error: { message: errJson.message ?? `HTTP ${resp.status}` } }
+  }
+
+  async selectOne<T = Record<string, unknown>>(table: string, columns: string, filters: Record<string, string>): Promise<{ ok: boolean; data?: T | null; error?: { message: string } }> {
+    const qs = new URLSearchParams({ select: columns })
+    for (const [k, v] of Object.entries(filters)) {
+      qs.set(k, `eq.${v}`)
+    }
+    qs.set('limit', '1')
+    const url = `${this.baseUrl}/rest/v1/${table}?${qs.toString()}`
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: this.headers(),
+    })
+    if (!resp.ok) {
+      const errJson = await resp.json().catch(() => ({}))
+      return { ok: false, error: { message: errJson.message ?? `HTTP ${resp.status}` } }
+    }
+    const arr = await resp.json().catch(() => []) as T[]
+    return { ok: true, data: arr.length > 0 ? arr[0] : null }
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS })
@@ -74,7 +135,6 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // ─── 1. IP whitelist (первый слой защиты) ────────────────────────────────
     const skipIpCheck = Deno.env.get('YOOKASSA_SKIP_IP_CHECK') === 'true'
     if (!skipIpCheck) {
       const clientIp = getClientIp(req)
@@ -83,7 +143,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ─── 2. Читаем и парсим body ─────────────────────────────────────────────
     const rawBody = await req.text()
     if (!rawBody) {
       return json({ error: 'Empty body' }, 400)
@@ -103,33 +162,43 @@ Deno.serve(async (req) => {
     const paymentId = payload.object.id
     const event = payload.event
 
-    // ─── 3. Инициализация Supabase admin ─────────────────────────────────────
+    // ─── 3. Инициализация Admin client (raw fetch, apikey only) ─────────────
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-    if (!supabaseUrl || !serviceRoleKey) {
+    let supabaseSecretKey: string | undefined
+    try {
+      const raw = Deno.env.get('SUPABASE_SECRET_KEYS')
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, string>
+        if (parsed && typeof parsed.default === 'string' && parsed.default.length > 0) {
+          supabaseSecretKey = parsed.default
+        }
+      }
+    } catch (_e) {
+      // ignore, fallback
+    }
+    if (!supabaseSecretKey) {
+      supabaseSecretKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || undefined
+    }
+    if (!supabaseUrl || !supabaseSecretKey) {
       return json({ error: 'Server not configured: SUPABASE env missing' }, 500)
     }
-    const admin = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    })
+    const admin = new AdminClient(supabaseUrl, supabaseSecretKey)
 
-    // ─── 4. Dual-verify через GET /v3/payments/{id} ──────────────────────────
+    // ─── 4. Dual-verify через ЮKassa API ───────────────────────────────────
     const shopId = Deno.env.get('YOOKASSA_SHOP_ID')
-    const secretKey = Deno.env.get('YOOKASSA_SECRET_KEY')
-    if (!shopId || !secretKey) {
+    const yooSecretKey = Deno.env.get('YOOKASSA_SECRET_KEY')
+    if (!shopId || !yooSecretKey) {
       return json({ error: 'Server not configured: YOOKASSA credentials missing' }, 500)
     }
 
     const verifyResp = await fetch(`https://api.yookassa.ru/v3/payments/${paymentId}`, {
       method: 'GET',
       headers: {
-        'Authorization': `Basic ${btoa(`${shopId}:${secretKey}`)}`,
+        Authorization: `Basic ${btoa(`${shopId}:${yooSecretKey}`)}`,
       },
     })
 
     if (!verifyResp.ok) {
-      // Верификация не прошла — писать в БД не будем, вернём 502.
-      // ЮKassa ретраит 24ч — если это временный сбой, восстановимся.
       const errJson = await verifyResp.json().catch(() => ({}))
       return json({
         error: 'ЮKassa verify failed',
@@ -140,73 +209,57 @@ Deno.serve(async (req) => {
 
     const verified = await verifyResp.json() as YooKassaPaymentObject
 
-    // Санити-чек: id совпадает
     if (verified.id !== paymentId) {
       return json({ error: 'Payment ID mismatch after verify' }, 400)
     }
 
-    // ─── 5. Идемпотентная запись в payment_events ────────────────────────────
-    // Первым делом фиксируем факт получения — даже если активация упадёт,
-    // audit будет.
     const userIdFromMeta = verified.metadata?.user_id ?? payload.object.metadata?.user_id ?? null
 
-    const { error: insErr } = await admin
-      .from('payment_events')
-      .insert({
-        provider: 'yookassa',
-        external_id: paymentId,
-        user_id: userIdFromMeta,
-        raw_payload: {
-          notification: payload as unknown as Record<string, unknown>,
-          verified: verified as unknown as Record<string, unknown>,
-        },
-        signature_valid: true, // прошли IP + dual-verify
-        processed_at: null,
-        error: null,
-      })
+    const insRes = await admin.insert('payment_events', {
+      provider: 'yookassa',
+      external_id: paymentId,
+      user_id: userIdFromMeta,
+      raw_payload: {
+        notification: payload,
+        verified,
+      },
+      signature_valid: true,
+      processed_at: null,
+      error: null,
+    })
 
-    if (insErr) {
-      if (insErr.code === '23505' /* unique_violation */) {
-        // Дубль — идемпотентный OK, ЮKassa больше не будет ретраить.
+    if (!insRes.ok) {
+      if (insRes.error?.code === '23505') {
         return json({ ok: true, skipped: 'duplicate', payment_id: paymentId }, 200)
       }
-      // Реальная DB-ошибка — 500, чтобы ЮKassa повторила.
-      return json({ error: 'DB insert failed: ' + insErr.message }, 500)
+      return json({ error: 'DB insert failed: ' + (insRes.error?.message ?? 'unknown') }, 500)
     }
 
-    // ─── 6. Обработка события ────────────────────────────────────────────────
     let procResult: { ok: boolean; msg: string; error?: string } = { ok: false, msg: 'unhandled event' }
 
     switch (event) {
       case 'payment.succeeded':
         procResult = await handlePaymentSucceeded(admin, verified)
         break
-
       case 'payment.canceled':
         procResult = { ok: true, msg: 'payment.canceled — no entitlement change' }
         break
-
       case 'refund.succeeded':
         procResult = await handleRefundSucceeded(admin, verified)
         break
-
       default:
         procResult = { ok: true, msg: `event '${event}' ignored (not subscribed)` }
     }
 
-    // Помечаем processed_at + error, чтобы аудит был полный.
-    await admin
-      .from('payment_events')
-      .update({
+    await admin.update(
+      'payment_events',
+      { provider: 'yookassa', external_id: paymentId },
+      {
         processed_at: new Date().toISOString(),
         error: procResult.error ?? null,
-      })
-      .eq('provider', 'yookassa')
-      .eq('external_id', paymentId)
+      },
+    )
 
-    // ЮKassa ждёт 200, всегда возвращаем 200 если запись в audit прошла.
-    // Если внутренняя обработка не удалась — deep info в теле, но 200,
-    // чтобы вебхук не ретраился бесконечно.
     return json({
       ok: procResult.ok,
       event,
@@ -219,10 +272,8 @@ Deno.serve(async (req) => {
   }
 })
 
-// ─── Event handlers ──────────────────────────────────────────────────────────
-
 async function handlePaymentSucceeded(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   payment: YooKassaPaymentObject,
 ): Promise<{ ok: boolean; msg: string; error?: string }> {
   const meta = payment.metadata ?? {}
@@ -247,16 +298,13 @@ async function handlePaymentSucceeded(
   let validUntil: string | null = null
 
   if (days !== null) {
-    // Продление подписки: если у юзера уже есть активная pro-подписка (valid_until в будущем),
-    // extendим от текущего valid_until, иначе — от now.
-    // Правило "не даунгрейдить lifetime" — блокируется отдельно ниже.
-    const { data: existing } = await admin
-      .from('user_entitlements')
-      .select('plan, valid_until')
-      .eq('user_id', userId)
-      .single()
+    const existingRes = await admin.selectOne<{ plan: string; valid_until: string | null }>(
+      'user_entitlements',
+      'plan,valid_until',
+      { user_id: userId },
+    )
+    const existing = existingRes.ok ? existingRes.data : null
 
-    // Нельзя купить monthly/annual поверх активного lifetime
     if (existing?.plan === 'lifetime') {
       return {
         ok: false,
@@ -271,44 +319,41 @@ async function handlePaymentSucceeded(
     const extended = new Date(baseDate.getTime() + days * 86400 * 1000)
     validUntil = extended.toISOString()
   }
-  // lifetime → validUntil остаётся null (бессрочно)
 
-  const { error: upsertErr } = await admin
-    .from('user_entitlements')
-    .upsert({
+  const upsertRes = await admin.upsert(
+    'user_entitlements',
+    {
       user_id: userId,
       plan,
       valid_until: validUntil,
       activated_at: now.toISOString(),
       source: 'yookassa',
-      trial_used: true, // после платежа trial уже не имеет значения
+      trial_used: true,
       notes: `payment_id=${payment.id}, tier=${tier}`,
-    }, {
-      onConflict: 'user_id',
-    })
+    },
+    'user_id',
+  )
 
-  if (upsertErr) {
-    return { ok: false, msg: 'entitlement upsert failed', error: upsertErr.message }
+  if (!upsertRes.ok) {
+    return { ok: false, msg: 'entitlement upsert failed', error: upsertRes.error?.message }
   }
 
   return { ok: true, msg: `Activated ${plan} until ${validUntil ?? 'forever'}` }
 }
 
 async function handleRefundSucceeded(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   payment: YooKassaPaymentObject,
 ): Promise<{ ok: boolean; msg: string; error?: string }> {
-  // Refund: даунгрейдим до 'free'. Более тонкое поведение (частичный возврат,
-  // пропорциональное сокращение valid_until) — в dev.6.5.
   const meta = payment.metadata ?? {}
   const userId = meta.user_id
   if (!userId) {
     return { ok: false, msg: 'no user_id in refund metadata', error: 'metadata.user_id missing' }
   }
 
-  const { error: dgErr } = await admin
-    .from('user_entitlements')
-    .upsert({
+  const dgRes = await admin.upsert(
+    'user_entitlements',
+    {
       user_id: userId,
       plan: 'free',
       valid_until: null,
@@ -316,18 +361,16 @@ async function handleRefundSucceeded(
       source: 'yookassa',
       trial_used: true,
       notes: `refund payment_id=${payment.id}`,
-    }, {
-      onConflict: 'user_id',
-    })
+    },
+    'user_id',
+  )
 
-  if (dgErr) {
-    return { ok: false, msg: 'refund downgrade failed', error: dgErr.message }
+  if (!dgRes.ok) {
+    return { ok: false, msg: 'refund downgrade failed', error: dgRes.error?.message }
   }
 
   return { ok: true, msg: 'Downgraded to free after refund' }
 }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -337,8 +380,6 @@ function json(body: unknown, status = 200): Response {
 }
 
 function getClientIp(req: Request): string | null {
-  // На Supabase Edge клиентский IP приходит в 'x-forwarded-for' (первый в списке)
-  // или 'x-real-ip'.
   const xff = req.headers.get('x-forwarded-for')
   if (xff) {
     return xff.split(',')[0].trim()
@@ -347,12 +388,10 @@ function getClientIp(req: Request): string | null {
 }
 
 function isIpAllowed(ip: string): boolean {
-  // IPv6 фаст-path
   if (ip.includes(':')) {
     return ip.toLowerCase().startsWith(YOOKASSA_IPV6_PREFIX)
   }
 
-  // IPv4: сравниваем с CIDR-диапазонами
   const ipNum = ipv4ToNum(ip)
   if (ipNum === null) return false
 
@@ -362,11 +401,9 @@ function isIpAllowed(ip: string): boolean {
       const baseNum = ipv4ToNum(base)
       if (baseNum === null) continue
       const bits = parseInt(bitsStr, 10)
-      // mask: старшие bits бит = 1, остальные = 0
       const mask = bits === 0 ? 0 : (-1 << (32 - bits)) >>> 0
       if ((ipNum & mask) === (baseNum & mask)) return true
     } else {
-      // одиночный IP
       if (range === ip) return true
     }
   }
@@ -385,17 +422,15 @@ function ipv4ToNum(ip: string): number | null {
   return n >>> 0
 }
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
 interface YooKassaNotification {
-  type: string // 'notification'
-  event: string // 'payment.succeeded' | 'payment.canceled' | 'refund.succeeded' | ...
+  type: string
+  event: string
   object: YooKassaPaymentObject
 }
 
 interface YooKassaPaymentObject {
   id: string
-  status: string // 'succeeded' | 'canceled' | 'pending' | ...
+  status: string
   paid?: boolean
   amount?: { value: string; currency: string }
   created_at?: string
