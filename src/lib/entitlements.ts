@@ -101,6 +101,12 @@ export interface EntitlementRow {
   trial_used: boolean;
   notes: string | null;
   updated_at: string;
+  // v0.9.35-dev.6.5.1 — recurring billing (см. migration 0014)
+  auto_renew?: boolean;
+  cancel_at_period_end?: boolean;
+  next_renewal_at?: string | null; // ISO timestamp
+  renewal_attempts?: number;
+  payment_method_id?: string | null; // FK → payment_methods.id
 }
 
 /**
@@ -124,6 +130,17 @@ export interface Entitlement {
   isTrialActive: boolean;
   /** true если оплаченный Pro активен прямо сейчас. */
   isPaidPro: boolean;
+  // v0.9.35-dev.6.5.1 — recurring billing
+  /** true если подписка настроена на автопродление (save_payment_method сработал). */
+  autoRenew: boolean;
+  /** true если пользователь отменил автопродление, но период ещё действует. */
+  cancelAtPeriodEnd: boolean;
+  /** Момент следующего попытки списания (null если auto_renew=false или lifetime). */
+  nextRenewalAt: Date | null;
+  /** Количество неуспешных попыток списания подряд (0…3). После 3-й — downgrade. */
+  renewalAttempts: number;
+  /** ID сохранённого способа оплаты в payment_methods (null если не привязан). */
+  paymentMethodId: string | null;
 }
 
 // ─── Резолвер (чистая функция, тестируется в изоляции) ────────────────────────
@@ -154,6 +171,11 @@ export function resolveEntitlement(
       msLeft: null,
       isTrialActive: false,
       isPaidPro: true,
+      autoRenew: false,
+      cancelAtPeriodEnd: false,
+      nextRenewalAt: null,
+      renewalAttempts: 0,
+      paymentMethodId: null,
     };
   }
 
@@ -169,11 +191,23 @@ export function resolveEntitlement(
       msLeft: null,
       isTrialActive: false,
       isPaidPro: false,
+      autoRenew: false,
+      cancelAtPeriodEnd: false,
+      nextRenewalAt: null,
+      renewalAttempts: 0,
+      paymentMethodId: null,
     };
   }
 
   const validUntil = row.valid_until ? new Date(row.valid_until) : null;
   const msLeft = validUntil ? validUntil.getTime() - now : null;
+
+  // v0.9.35-dev.6.5.1 — recurring поля (backward-compatible: undefined ⇒ дефолты)
+  const autoRenew = row.auto_renew ?? false;
+  const cancelAtPeriodEnd = row.cancel_at_period_end ?? false;
+  const nextRenewalAt = row.next_renewal_at ? new Date(row.next_renewal_at) : null;
+  const renewalAttempts = row.renewal_attempts ?? 0;
+  const paymentMethodId = row.payment_method_id ?? null;
 
   // Case 3: lifetime — навсегда.
   if (row.plan === 'lifetime') {
@@ -187,6 +221,11 @@ export function resolveEntitlement(
       msLeft: null,
       isTrialActive: false,
       isPaidPro: true,
+      autoRenew: false, // lifetime не продлевается
+      cancelAtPeriodEnd: false,
+      nextRenewalAt: null,
+      renewalAttempts: 0,
+      paymentMethodId,
     };
   }
 
@@ -207,6 +246,11 @@ export function resolveEntitlement(
         msLeft: 0,
         isTrialActive: false,
         isPaidPro: false,
+        autoRenew: false, // истёк — считаем отключённым
+        cancelAtPeriodEnd: false,
+        nextRenewalAt: null,
+        renewalAttempts,
+        paymentMethodId,
       };
     }
     return {
@@ -219,6 +263,12 @@ export function resolveEntitlement(
       msLeft,
       isTrialActive: row.plan === 'trial',
       isPaidPro: row.plan === 'pro',
+      // trial не имеет auto_renew, но если в БД flag выставлен — уважаем его (будущее расширение)
+      autoRenew,
+      cancelAtPeriodEnd,
+      nextRenewalAt,
+      renewalAttempts,
+      paymentMethodId,
     };
   }
 
@@ -233,6 +283,11 @@ export function resolveEntitlement(
     msLeft: null,
     isTrialActive: false,
     isPaidPro: false,
+    autoRenew: false,
+    cancelAtPeriodEnd: false,
+    nextRenewalAt: null,
+    renewalAttempts: 0,
+    paymentMethodId,
   };
 }
 
@@ -302,7 +357,7 @@ export function writeCachedRow(row: EntitlementRow | null): void {
 export async function fetchEntitlementRow(userId: string): Promise<EntitlementRow | null> {
   const { data, error } = await supabase
     .from('user_entitlements')
-    .select('user_id, plan, valid_until, activated_at, source, trial_used, notes, updated_at')
+    .select('user_id, plan, valid_until, activated_at, source, trial_used, notes, updated_at, auto_renew, cancel_at_period_end, next_renewal_at, renewal_attempts, payment_method_id')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -516,6 +571,110 @@ export function useEntitlement(
     loading,
     refetch: () => setRefetchTick(t => t + 1),
   };
+}
+
+// ─── v0.9.35-dev.6.5.1: Recurring subscription management ───────────────────
+
+/**
+ * Отмена автопродления текущей pro-подписки. Ставит cancel_at_period_end=true;
+ * доступ сохраняется до valid_until. Не возвращает деньги (для этого — refund через support).
+ *
+ * Edge Function: /functions/v1/cancel-subscription
+ * Auth: JWT (автоматически через supabase.functions.invoke).
+ */
+export async function cancelSubscription(): Promise<
+  { ok: true; cancelledAt: string; accessUntil: string | null; plan: Plan }
+  | { ok: false; error: string }
+> {
+  try {
+    const { data, error } = await supabase.functions.invoke('cancel-subscription', {
+      body: {},
+    });
+    if (error) {
+      logger.warn('[entitlements] cancelSubscription invoke error:', error.message);
+      return { ok: false, error: error.message };
+    }
+    if (!data || (data as any).ok !== true) {
+      return { ok: false, error: (data as any)?.error ?? 'unknown error' };
+    }
+    return {
+      ok: true,
+      cancelledAt: (data as any).cancelled_at as string,
+      accessUntil: ((data as any).access_until as string | null) ?? null,
+      plan: (data as any).plan as Plan,
+    };
+  } catch (e: any) {
+    logger.warn('[entitlements] cancelSubscription failed:', e?.message ?? e);
+    return { ok: false, error: e?.message ?? 'network error' };
+  }
+}
+
+/**
+ * Реактивация автопродления: cancel_at_period_end=false. Работает только для подписки,
+ * где всё ещё есть привязанный payment_method и valid_until в будущем.
+ *
+ * Edge Function: /functions/v1/reactivate-subscription
+ */
+export async function reactivateSubscription(): Promise<
+  { ok: true; nextRenewalAt: string; plan: Plan }
+  | { ok: false; error: string }
+> {
+  try {
+    const { data, error } = await supabase.functions.invoke('reactivate-subscription', {
+      body: {},
+    });
+    if (error) {
+      logger.warn('[entitlements] reactivateSubscription invoke error:', error.message);
+      return { ok: false, error: error.message };
+    }
+    if (!data || (data as any).ok !== true) {
+      return { ok: false, error: (data as any)?.error ?? 'unknown error' };
+    }
+    return {
+      ok: true,
+      nextRenewalAt: (data as any).next_renewal_at as string,
+      plan: (data as any).plan as Plan,
+    };
+  } catch (e: any) {
+    logger.warn('[entitlements] reactivateSubscription failed:', e?.message ?? e);
+    return { ok: false, error: e?.message ?? 'network error' };
+  }
+}
+
+/**
+ * Строка из payment_methods (для UI: маска карты, срок действия).
+ */
+export interface PaymentMethodRow {
+  id: string;
+  user_id: string;
+  provider: string;
+  external_id: string;
+  card_brand: string | null;
+  card_last4: string | null;
+  card_exp_month: number | null;
+  card_exp_year: number | null;
+  is_active: boolean;
+  saved_at: string;
+}
+
+/**
+ * Загружает активные payment_methods текущего юзера (RLS отсекает чужие).
+ */
+export async function fetchActivePaymentMethods(
+  userId: string,
+): Promise<PaymentMethodRow[]> {
+  const { data, error } = await supabase
+    .from('payment_methods')
+    .select('id, user_id, provider, external_id, card_brand, card_last4, card_exp_month, card_exp_year, is_active, saved_at')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .order('saved_at', { ascending: false });
+
+  if (error) {
+    logger.warn('[entitlements] fetchActivePaymentMethods failed:', error.message);
+    return [];
+  }
+  return (data ?? []) as PaymentMethodRow[];
 }
 
 // ─── Debug / тесты ────────────────────────────────────────────────────────────

@@ -60,5 +60,15 @@ SELECT ok(NOT has_function_privilege('service_role',  'public.sync_bump_version(
 SELECT ok(has_function_privilege('postgres',          'public.sync_bump_version()', 'EXECUTE'),
           'postgres (owner) может EXECUTE sync_bump_version');
 
+-- ─── tg_payment_methods_touch_updated_at (NEW in 0014) ──────────────────────
+SELECT ok(NOT has_function_privilege('anon',          'public.tg_payment_methods_touch_updated_at()', 'EXECUTE'),
+          'anon НЕ EXECUTE tg_payment_methods_touch_updated_at');
+SELECT ok(NOT has_function_privilege('authenticated', 'public.tg_payment_methods_touch_updated_at()', 'EXECUTE'),
+          'authenticated НЕ EXECUTE tg_payment_methods_touch_updated_at');
+SELECT ok(NOT has_function_privilege('service_role',  'public.tg_payment_methods_touch_updated_at()', 'EXECUTE'),
+          'service_role НЕ EXECUTE tg_payment_methods_touch_updated_at (через REVOKE FROM PUBLIC)');
+SELECT ok(has_function_privilege('postgres',          'public.tg_payment_methods_touch_updated_at()', 'EXECUTE'),
+          'postgres (owner) может EXECUTE tg_payment_methods_touch_updated_at');
+
 SELECT * FROM finish();
 ROLLBACK;

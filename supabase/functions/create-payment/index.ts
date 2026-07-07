@@ -1,19 +1,32 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (c) 2026 Daniil Lebedev (danny-swan)
 //
-// v0.9.35-dev.6.4 — Supabase Edge Function: create-payment
+// v0.9.35-dev.6.5.1 — Supabase Edge Function: create-payment
 //
 // Создаёт платёж в ЮKassa (API v3) и возвращает confirmation_url для redirect.
 // Требует JWT пользователя (клиент вызывает как аутентифицированный юзер) —
 // user_id и email резолвим из auth.getUser().
 //
-// Поддерживаемые тарифы (см. supabase/migrations/0007_entitlements.sql):
-//   - "monthly"  → 299 ₽ / 30 дней  → plan 'pro'
-//   - "annual"   → 2990 ₽ / 365 дней → plan 'pro'
-//   - "lifetime" → 4990 ₽ бессрочно → plan 'lifetime'
+// Режимы (body.mode):
+//   - "purchase" (по умолчанию) — обычная покупка тарифа. Требует body.tier.
+//   - "update-card"             — списание 1₽ для сохранения нового способа
+//                                 оплаты. Webhook затем отправляет refund.
+//                                 Требует активной pro/lifetime подписки
+//                                 (проверяется на уровне webhook + UI).
 //
-// В метадату платежа кладём user_id + tier — webhook (payment-webhook)
-// использует их для активации entitlement.
+// Поддерживаемые тарифы (см. supabase/migrations/0007_entitlements.sql):
+//   - "monthly"  → 299 ₽ / 30 дней  → plan 'pro'      (recurring)
+//   - "annual"   → 2990 ₽ / 365 дней → plan 'pro'      (recurring)
+//   - "lifetime" → 4990 ₽ бессрочно → plan 'lifetime' (не recurring)
+//
+// Для recurring-тарифов и режима update-card запрашиваем у ЮKassa
+// save_payment_method: true + merchant_customer_id: user.id — тогда ЮKassa
+// в webhook payment.succeeded вернёт payment_method.saved=true с id токена,
+// который сохраняем в public.payment_methods и используем в renew-subscription
+// через API POST /payments с payment_method_id.
+//
+// В метадату платежа кладём user_id + tier + mode — webhook (payment-webhook)
+// использует их для активации entitlement / сохранения способа оплаты.
 //
 // Чек НПД (54-ФЗ + 422-ФЗ для самозанятого):
 //   ЮKassa регистрирует чек в ФНС от нашего имени. Мы обязаны передать
@@ -56,6 +69,7 @@ const TIERS = {
     description: 'Подписка TaskFlow Pro — 1 месяц',
     days: 30,
     plan: 'pro' as const,
+    recurring: true,
   },
   annual: {
     amount: '2990.00',
@@ -63,6 +77,7 @@ const TIERS = {
     description: 'Подписка TaskFlow Pro — 1 год',
     days: 365,
     plan: 'pro' as const,
+    recurring: true,
   },
   lifetime: {
     amount: '4990.00',
@@ -70,13 +85,26 @@ const TIERS = {
     description: 'TaskFlow Lifetime — бессрочный доступ',
     days: null,
     plan: 'lifetime' as const,
+    recurring: false,
   },
 } as const
 
 type Tier = keyof typeof TIERS
 
+// ─── Спецификация режима update-card ─────────────────────────────────────────
+// 1 ₽ — минимальная сумма, которую можно списать через ЮKassa для верификации
+// карты. Webhook payment.succeeded затем инициирует refund.succeeded, при
+// котором мы НЕ трогаем entitlement (это mode=update-card, не покупка).
+const UPDATE_CARD_SPEC = {
+  amount: '1.00',
+  currency: 'RUB',
+  description: 'TaskFlow — обновление платёжного метода (возврат автоматически)',
+} as const
+
+type PaymentMode = 'purchase' | 'update-card'
+
 // ─── Main handler ────────────────────────────────────────────────────────────
-Deno.serve(async (req) => {
+export const handler = async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS })
   }
@@ -123,42 +151,63 @@ Deno.serve(async (req) => {
     }
 
     // ─── 3. Валидация payload ────────────────────────────────────────────────
-    let body: { tier?: string }
+    let body: { tier?: string; mode?: string }
     try {
       body = await req.json()
     } catch {
       return json({ error: 'Invalid JSON body' }, 400)
     }
-    const tier = body.tier as Tier | undefined
-    if (!tier || !(tier in TIERS)) {
-      return json({ error: `Invalid tier. Expected one of: ${Object.keys(TIERS).join(', ')}` }, 400)
-    }
-    const spec = TIERS[tier]
 
-    // ─── 4. Проверка "нельзя купить lifetime поверх lifetime" (мягкий guard) ─
-    // Полная проверка (нельзя даунгрейдить активный pro/lifetime) — на уровне
-    // webhook + UI. Здесь только предохранитель от очевидного дубля.
-    // (пропустим для dev.6.4, добавим в 6.5 если понадобится)
+    const mode: PaymentMode = body.mode === 'update-card' ? 'update-card' : 'purchase'
+    const isUpdateCard = mode === 'update-card'
+
+    // Для purchase — валидируем tier. Для update-card — tier не нужен.
+    let tier: Tier | null = null
+    let spec: (typeof TIERS)[Tier] | null = null
+    if (!isUpdateCard) {
+      const t = body.tier as Tier | undefined
+      if (!t || !(t in TIERS)) {
+        return json({ error: `Invalid tier. Expected one of: ${Object.keys(TIERS).join(', ')}` }, 400)
+      }
+      tier = t
+      spec = TIERS[t]
+    }
+
+    // ─── 4. Guard "нельзя купить lifetime поверх lifetime" — на webhook/UI ──
+    // Полная проверка (нельзя даунгрейдить активный pro/lifetime, нельзя update-card
+    // без активной подписки) — на уровне webhook + UI.
 
     // ─── 5. Собираем payload для ЮKassa ──────────────────────────────────────
     const idempotenceKey = crypto.randomUUID()
-    const returnUrl = `${returnBase.replace(/\/$/, '')}/pay/success?tier=${tier}`
 
-    const yooPayload = {
+    // Сохраняем способ оплаты: (а) для recurring-тарифов при первичной покупке,
+    // (б) всегда при mode=update-card. Для lifetime — не сохраняем.
+    const shouldSaveMethod = isUpdateCard || (spec ? spec.recurring : false)
+
+    // amount/currency/description зависят от режима.
+    const activeSpec = isUpdateCard
+      ? { amount: UPDATE_CARD_SPEC.amount, currency: UPDATE_CARD_SPEC.currency, description: UPDATE_CARD_SPEC.description }
+      : { amount: spec!.amount, currency: spec!.currency, description: spec!.description }
+
+    const returnUrl = isUpdateCard
+      ? `${returnBase.replace(/\/$/, '')}/settings?card=updated`
+      : `${returnBase.replace(/\/$/, '')}/pay/success?tier=${tier}`
+
+    const yooPayload: Record<string, unknown> = {
       amount: {
-        value: spec.amount,
-        currency: spec.currency,
+        value: activeSpec.amount,
+        currency: activeSpec.currency,
       },
       capture: true, // одностадийный платёж — списываем сразу
       confirmation: {
         type: 'redirect',
         return_url: returnUrl,
       },
-      description: spec.description,
+      description: activeSpec.description,
       metadata: {
         user_id: user.id,
-        tier,
-        plan: spec.plan,
+        mode,
+        ...(tier ? { tier, plan: spec!.plan } : {}),
         // Web-app версия, полезно для отладки в личном кабинете ЮKassa
         source: 'taskflow-app',
       },
@@ -168,11 +217,11 @@ Deno.serve(async (req) => {
         tax_system_code: 6, // 6 = НПД (самозанятый)
         items: [
           {
-            description: spec.description,
+            description: activeSpec.description,
             quantity: '1.00',
             amount: {
-              value: spec.amount,
-              currency: spec.currency,
+              value: activeSpec.amount,
+              currency: activeSpec.currency,
             },
             vat_code: 1, // 1 = без НДС
             payment_subject: 'service', // услуга
@@ -182,9 +231,20 @@ Deno.serve(async (req) => {
       },
     }
 
+    // Сохраняем способ оплаты: ЮKassa выпустит payment_method с id, который
+    // придёт в webhook payment.succeeded (payment.payment_method.saved=true).
+    // merchant_customer_id связывает все токены одного пользователя в ЛК
+    // ЮKassa — удобно для отладки и compliance.
+    if (shouldSaveMethod) {
+      yooPayload.save_payment_method = true
+      yooPayload.merchant_customer_id = user.id
+    }
+
     // ─── 6. Вызов ЮKassa API ─────────────────────────────────────────────────
+    // YOOKASSA_API_BASE — необязательный env для тестов (по умолчанию prod).
+    const yooApiBase = Deno.env.get('YOOKASSA_API_BASE') || 'https://api.yookassa.ru'
     const basicAuth = btoa(`${shopId}:${secretKey}`)
-    const yooResp = await fetch('https://api.yookassa.ru/v3/payments', {
+    const yooResp = await fetch(`${yooApiBase}/v3/payments`, {
       method: 'POST',
       headers: {
         'Authorization': `Basic ${basicAuth}`,
@@ -222,14 +282,18 @@ Deno.serve(async (req) => {
       payment_id: yooJson.id,
       status: yooJson.status,
       confirmation_url: confirmationUrl,
+      mode,
       tier,
-      amount: spec.amount,
-      currency: spec.currency,
+      amount: activeSpec.amount,
+      currency: activeSpec.currency,
+      save_payment_method: shouldSaveMethod,
     }, 200)
   } catch (e) {
     return json({ error: (e as Error).message ?? 'Unknown error' }, 500)
   }
-})
+}
+
+Deno.serve(handler)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

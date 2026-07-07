@@ -6,7 +6,7 @@
 --   3) authenticated не видит чужие строки
 
 BEGIN;
-SELECT plan(24);
+SELECT plan(30);
 
 -- ─── 1. RLS enabled на всех protected tables ───────────────────────────────
 SELECT ok(
@@ -57,6 +57,14 @@ SELECT ok(
   (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.usage_events'::regclass),
   'RLS enabled on usage_events'
 );
+SELECT ok(
+  (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.payment_methods'::regclass),
+  'RLS enabled on payment_methods'
+);
+SELECT ok(
+  (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.renewal_attempts_log'::regclass),
+  'RLS enabled on renewal_attempts_log'
+);
 
 -- ─── 2. Подготовка: два юзера + строки ─────────────────────────────────────
 -- Вставляем как superuser (миграции + сиды всегда идут под owner).
@@ -94,6 +102,22 @@ BEGIN
   VALUES
     (u1, 'task-u1', 'Task from user1', 'st-u1'),
     (u2, 'task-u2', 'Task from user2', 'st-u2')
+  ON CONFLICT DO NOTHING;
+
+  -- payment_methods: один метод на юзера (dev.6.5)
+  INSERT INTO public.payment_methods
+    (id, user_id, external_id, card_last4, title)
+  VALUES
+    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', u1, 'ykpm-u1', '1111', 'Bank card *1111'),
+    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', u2, 'ykpm-u2', '2222', 'Bank card *2222')
+  ON CONFLICT DO NOTHING;
+
+  -- renewal_attempts_log: одна запись на юзера (dev.6.5)
+  INSERT INTO public.renewal_attempts_log
+    (id, user_id, payment_method_id, attempt_number, status, yookassa_payment_id)
+  VALUES
+    ('cccccccc-cccc-cccc-cccc-cccccccccccc', u1, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 1, 'succeeded', 'yk-pay-u1'),
+    ('dddddddd-dddd-dddd-dddd-dddddddddddd', u2, 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 1, 'succeeded', 'yk-pay-u2')
   ON CONFLICT DO NOTHING;
 END$$;
 
@@ -137,6 +161,30 @@ SELECT is(
   (SELECT count(*)::int FROM public.profiles WHERE id = '22222222-2222-2222-2222-222222222222'::uuid),
   0,
   'user1 НЕ видит чужой profile'
+);
+
+-- payment_methods RLS — own row visibility
+SELECT is(
+  (SELECT count(*)::int FROM public.payment_methods WHERE external_id = 'ykpm-u1'),
+  1,
+  'user1 видит свой payment_method'
+);
+SELECT is(
+  (SELECT count(*)::int FROM public.payment_methods WHERE external_id = 'ykpm-u2'),
+  0,
+  'user1 НЕ видит чужой payment_method'
+);
+
+-- renewal_attempts_log RLS — own row visibility
+SELECT is(
+  (SELECT count(*)::int FROM public.renewal_attempts_log WHERE yookassa_payment_id = 'yk-pay-u1'),
+  1,
+  'user1 видит свой renewal_attempts_log'
+);
+SELECT is(
+  (SELECT count(*)::int FROM public.renewal_attempts_log WHERE yookassa_payment_id = 'yk-pay-u2'),
+  0,
+  'user1 НЕ видит чужой renewal_attempts_log'
 );
 
 RESET ROLE;

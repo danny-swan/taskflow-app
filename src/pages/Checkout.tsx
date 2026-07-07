@@ -3,9 +3,13 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  * Copyright (c) 2026 Daniil Lebedev (danny-swan)
  *
- * v0.9.35-dev.6.4 — страница /checkout: три тарифа TaskFlow Pro.
+ * v0.9.35-dev.6.5.1 — страница /checkout:
+ *   • обычный режим: три тарифа TaskFlow Pro (?tier=monthly|annual|lifetime).
+ *   • режим update-card (?mode=update-card): пробный платёж 1₽ для сохранения
+ *     нового способа оплаты. После успешного платежа webhook сохраняет карту
+ *     в payment_methods и автоматически возвращает 1₽. Entitlement не меняется.
  *
- * Flow:
+ * Flow (purchase):
  *   1. Пользователь выбирает тариф (monthly / annual / lifetime).
  *   2. Клик → вызов Edge Function `create-payment` (передаём tier).
  *   3. Функция возвращает confirmation_url ЮKassa.
@@ -15,6 +19,14 @@
  *      в приложение. Активация entitlement идёт через webhook (см.
  *      supabase/functions/payment-webhook), поэтому пользователь просто
  *      обновляет страницу подписки — данные подтянутся через realtime-sync.
+ *
+ * Flow (update-card):
+ *   1. Пользователь заходит на /checkout?mode=update-card (из Settings).
+ *   2. Показывается отдельный экран «Обновить способ оплаты» (1₽ + возврат).
+ *   3. Клик → create-payment с { mode: 'update-card' }.
+ *   4. ЮKassa: списание 1₽ с сохранением способа оплаты.
+ *   5. webhook: сохранение payment_method + автоматический refund 1₽.
+ *   6. Через realtime новая карта появляется в Settings → Управление подпиской.
  */
 
 import { useState, useEffect, useRef } from 'react';
@@ -23,7 +35,7 @@ import { useStore } from '../store/useStore';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { useEntitlement } from '../lib/entitlements';
-import { Check, Loader2, ExternalLink } from 'lucide-react';
+import { Check, Loader2, ExternalLink, CreditCard, ShieldCheck } from 'lucide-react';
 
 interface Tier {
   id: 'monthly' | 'annual' | 'lifetime';
@@ -102,10 +114,14 @@ export function CheckoutPage() {
   const { entitlement } = useEntitlement(userId, userEmail);
 
   const [loadingTier, setLoadingTier] = useState<Tier['id'] | null>(null);
+  const [updateCardBusy, setUpdateCardBusy] = useState(false);
 
   // v0.9.35-dev.6.4: если пришли через ?tier= (с лендинга через deep-link
   // или из SubscriptionBlock) — подсвечиваем карточку и скроллим к ней.
+  // v0.9.35-dev.6.5.1: если пришли через ?mode=update-card — показываем
+  // отдельный экран обновления карты (1₽ + автоматический возврат).
   const [searchParams] = useSearchParams();
+  const isUpdateCardMode = searchParams.get('mode') === 'update-card';
   const preselectedTier = searchParams.get('tier');
   const validPreselected: Tier['id'] | null =
     preselectedTier === 'monthly' || preselectedTier === 'annual' || preselectedTier === 'lifetime'
@@ -117,6 +133,15 @@ export function CheckoutPage() {
       tierRefs.current[validPreselected]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [validPreselected]);
+
+  async function openConfirmationUrl(url: string) {
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(url);
+    } catch {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  }
 
   async function handleBuy(tier: Tier) {
     if (!auth.user) {
@@ -132,13 +157,7 @@ export function CheckoutPage() {
       if (!data?.confirmation_url) {
         throw new Error(data?.error ?? 'No confirmation_url from server');
       }
-      // Открываем в системном браузере (внутри Tauri) или новом окне (web-режим).
-      try {
-        const { open } = await import('@tauri-apps/plugin-shell');
-        await open(data.confirmation_url);
-      } catch {
-        window.open(data.confirmation_url, '_blank', 'noopener,noreferrer');
-      }
+      await openConfirmationUrl(data.confirmation_url);
       pushToast(
         t(
           'Открыто окно оплаты в браузере. После оплаты подписка активируется автоматически.',
@@ -153,8 +172,120 @@ export function CheckoutPage() {
     }
   }
 
+  async function handleUpdateCard() {
+    if (!auth.user) {
+      pushToast(t('Войдите в аккаунт', 'Sign in first'));
+      return;
+    }
+    setUpdateCardBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('create-payment', {
+        body: { mode: 'update-card' },
+      });
+      if (error) throw error;
+      if (!data?.confirmation_url) {
+        throw new Error(data?.error ?? 'No confirmation_url from server');
+      }
+      await openConfirmationUrl(data.confirmation_url);
+      pushToast(
+        t(
+          'Открыто окно ЮKassa. После оплаты 1₽ карта сохранится и деньги вернутся автоматически.',
+          'ЮKassa opened. After the ₽1 charge, your card will be saved and refunded automatically.',
+        ),
+      );
+    } catch (e) {
+      const msg = (e as Error).message ?? 'Unknown error';
+      pushToast(t(`Ошибка: ${msg}`, `Error: ${msg}`));
+    } finally {
+      setUpdateCardBusy(false);
+    }
+  }
+
   const currentPlan = entitlement?.effectivePlan ?? 'free';
   const hasLifetime = currentPlan === 'lifetime';
+
+  // ─── Режим update-card: отдельный экран, тарифы не показываем ─────────────
+  if (isUpdateCardMode) {
+    return (
+      <div className="flex-1 overflow-y-auto p-6 max-w-2xl mx-auto w-full">
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-primary/10 mb-4">
+            <CreditCard className="w-7 h-7 text-primary" />
+          </div>
+          <h1 className="text-[26px] font-semibold mb-2">
+            {t('Обновить способ оплаты', 'Update payment method')}
+          </h1>
+          <p className="text-muted text-[14px] max-w-xl mx-auto">
+            {t(
+              'Чтобы сохранить новую карту, мы спишем 1 ₽ через ЮKassa и вернём эти деньги автоматически в течение нескольких минут. Никаких скрытых списаний.',
+              'To save a new card, we charge ₽1 via ЮKassa and refund it automatically within a few minutes. No hidden charges.',
+            )}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-border bg-surface p-6 mb-6">
+          <h2 className="text-[15px] font-semibold mb-4">
+            {t('Что произойдёт', 'What happens')}
+          </h2>
+          <ol className="space-y-3 text-[14px]">
+            <li className="flex gap-3">
+              <span className="shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[12px] font-medium">1</span>
+              <span>{t('Открывается защищённая страница ЮKassa.', 'Secure ЮKassa page opens.')}</span>
+            </li>
+            <li className="flex gap-3">
+              <span className="shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[12px] font-medium">2</span>
+              <span>{t('Списывается 1 ₽ с новой карты. Карта сохраняется для будущих автосписаний.', '₽1 is charged to the new card. The card is saved for future auto-renewals.')}</span>
+            </li>
+            <li className="flex gap-3">
+              <span className="shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[12px] font-medium">3</span>
+              <span>{t('Мы автоматически возвращаем 1 ₽ — деньги придут обратно в течение нескольких минут (иногда до нескольких банковских дней).', 'We refund ₽1 automatically — money returns within a few minutes (sometimes up to a few banking days).')}</span>
+            </li>
+            <li className="flex gap-3">
+              <span className="shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[12px] font-medium">4</span>
+              <span>{t('Новая карта появляется в разделе «Управление подпиской» → следующее автосписание пройдёт с неё.', 'The new card appears under “Subscription management” → next auto-renewal will use it.')}</span>
+            </li>
+          </ol>
+        </div>
+
+        <button
+          onClick={handleUpdateCard}
+          disabled={updateCardBusy || !auth.user}
+          className="w-full py-3 rounded-lg bg-primary text-white text-[14px] font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {updateCardBusy ? (
+            <span className="flex items-center justify-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              {t('Открываем оплату…', 'Opening checkout…')}
+            </span>
+          ) : (
+            <span className="flex items-center justify-center gap-2">
+              {t('Продолжить в ЮKassa (1 ₽)', 'Continue to ЮKassa (₽1)')}
+              <ExternalLink className="w-4 h-4" />
+            </span>
+          )}
+        </button>
+
+        <div className="mt-6 flex items-start gap-2 text-[12px] text-muted">
+          <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-success" />
+          <p>
+            {t(
+              'Оплата защищена ЮKassa. Данные карты обрабатываются ЮKassa по стандарту PCI DSS — TaskFlow не хранит номера карт.',
+              'Payments processed by ЮKassa (PCI DSS compliant). TaskFlow never stores card numbers.',
+            )}
+          </p>
+        </div>
+
+        <div className="mt-6 text-[12px] text-muted text-center">
+          <a
+            href="/settings"
+            className="text-primary hover:underline"
+          >
+            {t('← Вернуться в настройки', '← Back to settings')}
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-6 max-w-6xl mx-auto w-full">

@@ -1,14 +1,14 @@
 -- TaskFlow v0.9.35-dev.6.5 — pgTAP: GRANTs на public.* таблицы
 --
--- Проверяет что миграции 0010-0013 корректно выдали привилегии.
+-- Проверяет что миграции 0010-0014 корректно выдали привилегии.
 -- Регрессионная защита: любая новая миграция, забывшая GRANT после
 -- ENABLE ROW LEVEL SECURITY, упадёт здесь.
 
 BEGIN;
 
--- Ожидаемое количество тестов: (12 таблиц × 4 CRUD × 2 роли)
+-- Ожидаемое количество тестов: (14 таблиц × 4 CRUD × 2 роли)
 -- минус то, что не выдаётся — считаем вручную ниже.
-SELECT plan(56);
+SELECT plan(74);
 
 -- ─── profiles (SELECT, UPDATE для authenticated; ALL для service_role) ─────
 SELECT ok(has_table_privilege('authenticated', 'public.profiles', 'SELECT'),
@@ -98,11 +98,35 @@ SELECT ok(NOT has_table_privilege('authenticated', 'public.usage_events', 'INSER
 SELECT ok(NOT has_table_privilege('authenticated', 'public.usage_events', 'UPDATE'), 'auth NOT UPDATE usage_events');
 SELECT ok(NOT has_table_privilege('authenticated', 'public.usage_events', 'DELETE'), 'auth NOT DELETE usage_events');
 
+-- ─── payment_methods (NEW in 0014): SELECT для authenticated, ALL для service_role ──
+SELECT ok(has_table_privilege('authenticated', 'public.payment_methods',    'SELECT'), 'auth SELECT payment_methods');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.payment_methods', 'INSERT'), 'auth NOT INSERT payment_methods');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.payment_methods', 'UPDATE'), 'auth NOT UPDATE payment_methods');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.payment_methods', 'DELETE'), 'auth NOT DELETE payment_methods');
+
+SELECT ok(has_table_privilege('service_role', 'public.payment_methods', 'SELECT'), 'service_role SELECT payment_methods');
+SELECT ok(has_table_privilege('service_role', 'public.payment_methods', 'INSERT'), 'service_role INSERT payment_methods');
+SELECT ok(has_table_privilege('service_role', 'public.payment_methods', 'UPDATE'), 'service_role UPDATE payment_methods');
+SELECT ok(has_table_privilege('service_role', 'public.payment_methods', 'DELETE'), 'service_role DELETE payment_methods');
+
+-- ─── renewal_attempts_log (NEW in 0014): SELECT для authenticated, ALL для service_role ──
+SELECT ok(has_table_privilege('authenticated', 'public.renewal_attempts_log',    'SELECT'), 'auth SELECT renewal_attempts_log');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.renewal_attempts_log', 'INSERT'), 'auth NOT INSERT renewal_attempts_log');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.renewal_attempts_log', 'UPDATE'), 'auth NOT UPDATE renewal_attempts_log');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.renewal_attempts_log', 'DELETE'), 'auth NOT DELETE renewal_attempts_log');
+
+SELECT ok(has_table_privilege('service_role', 'public.renewal_attempts_log', 'SELECT'), 'service_role SELECT renewal_attempts_log');
+SELECT ok(has_table_privilege('service_role', 'public.renewal_attempts_log', 'INSERT'), 'service_role INSERT renewal_attempts_log');
+SELECT ok(has_table_privilege('service_role', 'public.renewal_attempts_log', 'UPDATE'), 'service_role UPDATE renewal_attempts_log');
+SELECT ok(has_table_privilege('service_role', 'public.renewal_attempts_log', 'DELETE'), 'service_role DELETE renewal_attempts_log');
+
 -- ─── anon НЕ должен иметь доступ ни к чему в public ────────────────────────
-SELECT ok(NOT has_table_privilege('anon', 'public.sync_tasks',   'SELECT'), 'anon НЕ SELECT sync_tasks');
-SELECT ok(NOT has_table_privilege('anon', 'public.profiles',     'SELECT'), 'anon НЕ SELECT profiles');
-SELECT ok(NOT has_table_privilege('anon', 'public.user_entitlements', 'SELECT'), 'anon НЕ SELECT user_entitlements');
-SELECT ok(NOT has_table_privilege('anon', 'public.payment_events',    'SELECT'), 'anon НЕ SELECT payment_events');
+SELECT ok(NOT has_table_privilege('anon', 'public.sync_tasks',            'SELECT'), 'anon НЕ SELECT sync_tasks');
+SELECT ok(NOT has_table_privilege('anon', 'public.profiles',              'SELECT'), 'anon НЕ SELECT profiles');
+SELECT ok(NOT has_table_privilege('anon', 'public.user_entitlements',     'SELECT'), 'anon НЕ SELECT user_entitlements');
+SELECT ok(NOT has_table_privilege('anon', 'public.payment_events',        'SELECT'), 'anon НЕ SELECT payment_events');
+SELECT ok(NOT has_table_privilege('anon', 'public.payment_methods',       'SELECT'), 'anon НЕ SELECT payment_methods');
+SELECT ok(NOT has_table_privilege('anon', 'public.renewal_attempts_log',  'SELECT'), 'anon НЕ SELECT renewal_attempts_log');
 
 SELECT * FROM finish();
 ROLLBACK;

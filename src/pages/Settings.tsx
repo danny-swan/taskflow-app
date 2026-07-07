@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
 import { useAuth, signOut, deleteAccount, updateEmail } from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
@@ -16,7 +16,7 @@ import { logger } from '../lib/logger';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { useEntitlement, startTrial, submitActivationRequest } from '../lib/entitlements';
+import { useEntitlement, startTrial, submitActivationRequest, cancelSubscription, reactivateSubscription, fetchActivePaymentMethods, type PaymentMethodRow } from '../lib/entitlements';
 import { supabase } from '../lib/supabase';
 
 type Sub = 'general' | 'account' | 'subscription' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
@@ -2509,6 +2509,13 @@ function SubscriptionSection() {
   const [submitting, setSubmitting] = useState(false);
   const [trialBusy, setTrialBusy] = useState(false);
 
+  // v0.9.35-dev.6.5.1 — recurring management
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [reactivateBusy, setReactivateBusy] = useState(false);
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodRow[]>([]);
+  const [pmLoading, setPmLoading] = useState(false);
+
   // История заявок пользователя.
   const [requests, setRequests] = useState<ActivationRequestRow[]>([]);
   const [reqLoading, setReqLoading] = useState(false);
@@ -2540,6 +2547,51 @@ function SubscriptionSection() {
     void reloadRequests();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
+
+  // v0.9.35-dev.6.5.1: загружаем payment_methods только для Pro
+  useEffect(() => {
+    if (!userId) { setPaymentMethods([]); return; }
+    if (entitlement.effectivePlan !== 'pro') { setPaymentMethods([]); return; }
+    setPmLoading(true);
+    fetchActivePaymentMethods(userId)
+      .then(pms => setPaymentMethods(pms))
+      .catch(e => logger.warn('[SubscriptionSection] fetchPMs failed:', e?.message ?? e))
+      .finally(() => setPmLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, entitlement.effectivePlan, entitlement.paymentMethodId]);
+
+  const handleCancelSubscription = async () => {
+    setCancelBusy(true);
+    try {
+      const res = await cancelSubscription();
+      if (res.ok) {
+        pushToast(t('Автопродление отменено', 'Auto-renewal cancelled'));
+      } else {
+        pushToast(t('Не удалось отменить: ', 'Failed to cancel: ') + res.error);
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка отмены', 'Cancel error'));
+    } finally {
+      setCancelBusy(false);
+      setCancelConfirmOpen(false);
+    }
+  };
+
+  const handleReactivateSubscription = async () => {
+    setReactivateBusy(true);
+    try {
+      const res = await reactivateSubscription();
+      if (res.ok) {
+        pushToast(t('Автопродление включено', 'Auto-renewal enabled'));
+      } else {
+        pushToast(t('Не удалось включить: ', 'Failed to enable: ') + res.error);
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка реактивации', 'Reactivate error'));
+    } finally {
+      setReactivateBusy(false);
+    }
+  };
 
   // Guard: если не залогинен — показываем плейсхолдер.
   if (!user) {
@@ -2698,6 +2750,184 @@ function SubscriptionSection() {
           </p>
         )}
       </div>
+
+      {/* ──── v0.9.35-dev.6.5.1: Управление подпиской (только Pro) ──── */}
+      {entitlement.effectivePlan === 'pro' && (
+        <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-4">
+          <h4 className="text-[14px] font-semibold flex items-center gap-2">
+            <RefreshCw size={14} />
+            {t('Управление подпиской', 'Subscription management')}
+          </h4>
+
+          {/* Предупреждение о неудачных попытках списания */}
+          {entitlement.renewalAttempts > 0 && (
+            <div
+              className="rounded-md p-3 border text-[12px] flex items-start gap-2"
+              style={{
+                background: 'color-mix(in oklab, #DA7101 12%, transparent)',
+                borderColor: 'color-mix(in oklab, #DA7101 40%, transparent)',
+              }}
+            >
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" style={{ color: '#DA7101' }} />
+              <div className="flex-1">
+                <div className="font-semibold" style={{ color: '#DA7101' }}>
+                  {t(
+                    `Не удалось списать оплату (попытка ${entitlement.renewalAttempts} из 3)`,
+                    `Payment attempt failed (${entitlement.renewalAttempts} of 3)`,
+                  )}
+                </div>
+                <p className="mt-1 text-muted">
+                  {t(
+                    'Проверьте, что срок действия карты не истёк и на ней достаточно средств. После 3-й неудачной попытки автопродление будет отменено автоматически.',
+                    'Please check that your card is not expired and has sufficient funds. After the 3rd failed attempt, auto-renewal will be cancelled automatically.',
+                  )}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => navigate('/checkout?mode=update-card')}
+                  className="mt-2 text-[12px] font-medium underline"
+                  style={{ color: '#DA7101' }}
+                >
+                  {t('Обновить способ оплаты', 'Update payment method')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Статус автопродления */}
+          <div className="flex justify-between items-start gap-3">
+            <div className="flex-1">
+              <div className="text-[12px] text-muted uppercase tracking-wide">
+                {t('Автопродление', 'Auto-renewal')}
+              </div>
+              <div className="text-[13px] font-medium mt-0.5">
+                {entitlement.cancelAtPeriodEnd
+                  ? t('Отменено', 'Cancelled')
+                  : entitlement.autoRenew
+                    ? t('Включено', 'Enabled')
+                    : t('Не настроено', 'Not set up')}
+              </div>
+              {entitlement.cancelAtPeriodEnd && entitlement.validUntil && (
+                <p className="text-[11px] text-muted mt-1">
+                  {t(
+                    `Доступ сохраняется до ${entitlement.validUntil.toLocaleDateString('ru-RU')}, дальше — Free.`,
+                    `Access until ${entitlement.validUntil.toLocaleDateString('en-US')}, then downgrades to Free.`,
+                  )}
+                </p>
+              )}
+              {!entitlement.cancelAtPeriodEnd && entitlement.autoRenew && entitlement.nextRenewalAt && (
+                <p className="text-[11px] text-muted mt-1">
+                  {t(
+                    `Следующее списание: ${entitlement.nextRenewalAt.toLocaleDateString('ru-RU')}`,
+                    `Next charge: ${entitlement.nextRenewalAt.toLocaleDateString('en-US')}`,
+                  )}
+                </p>
+              )}
+            </div>
+            {entitlement.autoRenew && !entitlement.cancelAtPeriodEnd && (
+              <button
+                type="button"
+                onClick={() => setCancelConfirmOpen(true)}
+                disabled={cancelBusy}
+                className="text-[12px] px-3 py-1.5 rounded-md border border-border-soft hover:bg-surface disabled:opacity-60 flex items-center gap-1.5"
+              >
+                <Ban size={12} />
+                {t('Отменить', 'Cancel')}
+              </button>
+            )}
+            {entitlement.cancelAtPeriodEnd && entitlement.paymentMethodId && (
+              <button
+                type="button"
+                onClick={handleReactivateSubscription}
+                disabled={reactivateBusy}
+                style={{ background: 'var(--accent, #01696F)' }}
+                className="text-white text-[12px] px-3 py-1.5 rounded-md disabled:opacity-60 flex items-center gap-1.5"
+              >
+                <RotateCcw size={12} />
+                {reactivateBusy
+                  ? t('Включаем…', 'Enabling…')
+                  : t('Включить обратно', 'Re-enable')}
+              </button>
+            )}
+          </div>
+
+          {/* Способ оплаты (маска карты) */}
+          <div className="border-t border-border-soft pt-3">
+            <div className="text-[12px] text-muted uppercase tracking-wide mb-1.5">
+              {t('Способ оплаты', 'Payment method')}
+            </div>
+            {pmLoading && <p className="text-[12px] text-muted">{t('Загрузка…', 'Loading…')}</p>}
+            {!pmLoading && paymentMethods.length === 0 && (
+              <p className="text-[12px] text-muted">
+                {t('Карта не привязана. Автопродление невозможно.', 'No card linked. Auto-renewal not available.')}
+              </p>
+            )}
+            {!pmLoading && paymentMethods.length > 0 && paymentMethods.map((pm) => {
+              const expStr = (pm.card_exp_month != null && pm.card_exp_year != null)
+                ? ` · ${String(pm.card_exp_month).padStart(2, '0')}/${String(pm.card_exp_year).slice(-2)}`
+                : '';
+              const brandStr = pm.card_brand ? pm.card_brand.toUpperCase() : t('Карта', 'Card');
+              return (
+                <div key={pm.id} className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <CreditCard size={14} className="text-muted shrink-0" />
+                    <span className="text-[13px] font-mono tabular-nums">
+                      {brandStr} •••• {pm.card_last4 ?? '••••'}{expStr}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/checkout?mode=update-card')}
+                    className="text-[12px] underline text-muted hover:text-fg"
+                  >
+                    {t('Обновить', 'Update')}
+                  </button>
+                </div>
+              );
+            })}
+            {!pmLoading && paymentMethods.length === 0 && entitlement.autoRenew === false && (
+              <button
+                type="button"
+                onClick={() => navigate('/checkout?mode=update-card')}
+                className="mt-2 text-[12px] px-3 py-1.5 rounded-md border border-border-soft hover:bg-surface flex items-center gap-1.5"
+              >
+                <CreditCard size={12} />
+                {t('Привязать карту', 'Link card')}
+              </button>
+            )}
+          </div>
+
+          <p className="text-[11px] text-muted flex items-start gap-1 border-t border-border-soft pt-3">
+            <Info size={11} className="mt-0.5 shrink-0" />
+            {t(
+              'Отмена автопродления не возвращает деньги за текущий период — вы просто перестанете платить в будущем. Для возврата обратитесь в поддержку.',
+              'Cancelling auto-renewal does not refund the current period — you simply stop paying in the future. For a refund, contact support.',
+            )}
+          </p>
+        </div>
+      )}
+
+      {/* Модалка подтверждения отмены */}
+      <ConfirmDialog
+        open={cancelConfirmOpen}
+        title={t('Отменить автопродление?', 'Cancel auto-renewal?')}
+        message={
+          validUntilStr
+            ? t(
+                `Доступ к Pro-функциям сохранится до ${validUntilStr}, дальше аккаунт вернётся на Free. Деньги за текущий период не возвращаются.`,
+                `Pro access remains until ${validUntilStr}, then the account downgrades to Free. The current period is non-refundable.`,
+              )
+            : t(
+                'Доступ к Pro-функциям сохранится до конца оплаченного периода.',
+                'Pro access remains until the end of the paid period.',
+              )
+        }
+        confirmLabel={cancelBusy ? t('Отменяем…', 'Cancelling…') : t('Отменить автопродление', 'Cancel auto-renewal')}
+        cancelLabel={t('Оставить', 'Keep')}
+        danger
+        onConfirm={handleCancelSubscription}
+        onCancel={() => setCancelConfirmOpen(false)}
+      />
 
       {/* ──── Trial CTA ──── */}
       {canStartTrial && (
