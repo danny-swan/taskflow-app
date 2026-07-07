@@ -76,3 +76,15 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ─── 8. pgtap ─────────────────────────────────────────────────────────────
 CREATE EXTENSION IF NOT EXISTS pgtap;
+
+-- ─── 9. supabase_realtime publication ─────────────────────────────────────
+-- Миграции 0002/0006/0007 выполняют ALTER PUBLICATION supabase_realtime
+-- ADD TABLE ... В Supabase эта публикация создаётся Realtime сервисом.
+-- Создаём пустую публикацию чтобы ALTER в миграциях сработал.
+-- CREATE PUBLICATION не поддерживает IF NOT EXISTS в PG15 — через DO-блок.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    CREATE PUBLICATION supabase_realtime;
+  END IF;
+END$$;
