@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban, Unlink } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
 import { useAuth, signOut, deleteAccount, updateEmail } from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
@@ -16,7 +16,7 @@ import { logger } from '../lib/logger';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { useEntitlement, startTrial, submitActivationRequest, cancelSubscription, reactivateSubscription, fetchActivePaymentMethods, type PaymentMethodRow } from '../lib/entitlements';
+import { useEntitlement, startTrial, submitActivationRequest, cancelSubscription, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, type PaymentMethodRow } from '../lib/entitlements';
 import { supabase } from '../lib/supabase';
 
 type Sub = 'general' | 'account' | 'subscription' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
@@ -2513,6 +2513,9 @@ function SubscriptionSection() {
   const [cancelBusy, setCancelBusy] = useState(false);
   const [reactivateBusy, setReactivateBusy] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  // v0.9.35-dev.6.5.2 — отвязка карты (требование ЮKassa)
+  const [detachBusy, setDetachBusy] = useState(false);
+  const [detachConfirmOpen, setDetachConfirmOpen] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodRow[]>([]);
   const [pmLoading, setPmLoading] = useState(false);
 
@@ -2590,6 +2593,26 @@ function SubscriptionSection() {
       pushToast(e?.message ?? t('Ошибка реактивации', 'Reactivate error'));
     } finally {
       setReactivateBusy(false);
+    }
+  };
+
+  // v0.9.35-dev.6.5.2 — отвязка карты (требование ЮKassa для автоплатежей)
+  const handleDetachPaymentMethod = async () => {
+    setDetachBusy(true);
+    try {
+      const res = await detachPaymentMethod();
+      if (res.ok) {
+        pushToast(t('Карта отвязана', 'Card detached'));
+        // Обновляем список карт локально (realtime догонит, но отобразим сразу).
+        setPaymentMethods([]);
+      } else {
+        pushToast(t('Не удалось отвязать: ', 'Failed to detach: ') + res.error);
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка отвязки', 'Detach error'));
+    } finally {
+      setDetachBusy(false);
+      setDetachConfirmOpen(false);
     }
   };
 
@@ -2875,13 +2898,24 @@ function SubscriptionSection() {
                       {brandStr} •••• {pm.card_last4 ?? '••••'}{expStr}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => navigate('/checkout?mode=update-card')}
-                    className="text-[12px] underline text-muted hover:text-fg"
-                  >
-                    {t('Обновить', 'Update')}
-                  </button>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => navigate('/checkout?mode=update-card')}
+                      className="text-[12px] underline text-muted hover:text-fg"
+                    >
+                      {t('Обновить', 'Update')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDetachConfirmOpen(true)}
+                      disabled={detachBusy}
+                      className="text-[12px] px-2.5 py-1 rounded-md border border-border-soft hover:bg-surface disabled:opacity-60 flex items-center gap-1.5"
+                    >
+                      <Unlink size={12} />
+                      {detachBusy ? t('Отвязываем…', 'Detaching…') : t('Отвязать', 'Detach')}
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -2927,6 +2961,21 @@ function SubscriptionSection() {
         danger
         onConfirm={handleCancelSubscription}
         onCancel={() => setCancelConfirmOpen(false)}
+      />
+
+      {/* Модалка подтверждения отвязки карты (v0.9.35-dev.6.5.2) */}
+      <ConfirmDialog
+        open={detachConfirmOpen}
+        title={t('Отвязать карту?', 'Detach card?')}
+        message={t(
+          'Карта будет удалена из сервиса, автопродление отключится. Доступ к Pro-функциям сохранится до конца оплаченного периода. Чтобы снова включить автопродление, потребуется привязать карту заново.',
+          'The card will be removed from the service and auto-renewal will be disabled. Pro access remains until the end of the paid period. To re-enable auto-renewal, you will need to link a card again.',
+        )}
+        confirmLabel={detachBusy ? t('Отвязываем…', 'Detaching…') : t('Отвязать карту', 'Detach card')}
+        cancelLabel={t('Отмена', 'Cancel')}
+        danger
+        onConfirm={handleDetachPaymentMethod}
+        onCancel={() => setDetachConfirmOpen(false)}
       />
 
       {/* ──── Trial CTA ──── */}

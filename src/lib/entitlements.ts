@@ -642,6 +642,45 @@ export async function reactivateSubscription(): Promise<
 }
 
 /**
+ * Отвязка карты. Деактивирует все активные payment_methods текущего юзера
+ * (is_active=false) и обнуляет привязку в user_entitlements (payment_method_id=null,
+ * auto_renew=false, cancel_at_period_end=true). Доступ по valid_until сохраняется,
+ * но автопродления больше не будет.
+ *
+ * Требование ЮKassa: пользователь должен иметь возможность самостоятельно
+ * отвязать карту без обращения в поддержку.
+ *
+ * Edge Function: /functions/v1/detach-payment-method
+ * Auth: JWT (автоматически через supabase.functions.invoke).
+ */
+export async function detachPaymentMethod(): Promise<
+  { ok: true; detachedAt: string; detachedCount: number; alreadyDetached: boolean }
+  | { ok: false; error: string }
+> {
+  try {
+    const { data, error } = await supabase.functions.invoke('detach-payment-method', {
+      body: {},
+    });
+    if (error) {
+      logger.warn('[entitlements] detachPaymentMethod invoke error:', error.message);
+      return { ok: false, error: error.message };
+    }
+    if (!data || (data as any).ok !== true) {
+      return { ok: false, error: (data as any)?.error ?? 'unknown error' };
+    }
+    return {
+      ok: true,
+      detachedAt: (data as any).detached_at as string,
+      detachedCount: ((data as any).detached_count as number) ?? 0,
+      alreadyDetached: (data as any).already_detached === true,
+    };
+  } catch (e: any) {
+    logger.warn('[entitlements] detachPaymentMethod failed:', e?.message ?? e);
+    return { ok: false, error: e?.message ?? 'network error' };
+  }
+}
+
+/**
  * Строка из payment_methods (для UI: маска карты, срок действия).
  */
 export interface PaymentMethodRow {
