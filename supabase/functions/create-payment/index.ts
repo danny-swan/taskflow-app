@@ -101,7 +101,7 @@ const UPDATE_CARD_SPEC = {
   description: 'TaskFlow — обновление платёжного метода (возврат автоматически)',
 } as const
 
-type PaymentMode = 'purchase' | 'update-card'
+type PaymentMode = 'purchase' | 'update-card' | 'trial'
 
 // ─── Main handler ────────────────────────────────────────────────────────────
 export const handler = async (req: Request): Promise<Response> => {
@@ -158,13 +158,17 @@ export const handler = async (req: Request): Promise<Response> => {
       return json({ error: 'Invalid JSON body' }, 400)
     }
 
-    const mode: PaymentMode = body.mode === 'update-card' ? 'update-card' : 'purchase'
+    const mode: PaymentMode =
+      body.mode === 'update-card' ? 'update-card'
+      : body.mode === 'trial' ? 'trial'
+      : 'purchase'
     const isUpdateCard = mode === 'update-card'
+    const isTrialMode = mode === 'trial'
 
-    // Для purchase — валидируем tier. Для update-card — tier не нужен.
+    // Для purchase — валидируем tier. Для update-card и trial — tier не нужен.
     let tier: Tier | null = null
     let spec: (typeof TIERS)[Tier] | null = null
-    if (!isUpdateCard) {
+    if (!isUpdateCard && !isTrialMode) {
       const t = body.tier as Tier | undefined
       if (!t || !(t in TIERS)) {
         return json({ error: `Invalid tier. Expected one of: ${Object.keys(TIERS).join(', ')}` }, 400)
@@ -182,11 +186,12 @@ export const handler = async (req: Request): Promise<Response> => {
 
     // Сохраняем способ оплаты: (а) для recurring-тарифов при первичной покупке,
     // (б) всегда при mode=update-card. Для lifetime — не сохраняем.
-    const shouldSaveMethod = isUpdateCard || (spec ? spec.recurring : false)
+    const shouldSaveMethod = isUpdateCard || isTrialMode || (spec ? spec.recurring : false)
 
     // amount/currency/description зависят от режима.
-    const activeSpec = isUpdateCard
-      ? { amount: UPDATE_CARD_SPEC.amount, currency: UPDATE_CARD_SPEC.currency, description: UPDATE_CARD_SPEC.description }
+    const activeSpec = (isUpdateCard || isTrialMode)
+      ? { amount: UPDATE_CARD_SPEC.amount, currency: UPDATE_CARD_SPEC.currency,
+          description: isTrialMode ? 'TaskFlow Pro Trial — привязка карты (1 ₽, возврат автоматически)' : UPDATE_CARD_SPEC.description }
       : { amount: spec!.amount, currency: spec!.currency, description: spec!.description }
 
     const returnUrl = isUpdateCard

@@ -35,7 +35,7 @@ import { useStore } from '../store/useStore';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { useEntitlement } from '../lib/entitlements';
-import { Check, Loader2, ExternalLink, CreditCard, ShieldCheck } from 'lucide-react';
+import { Check, Loader2, ExternalLink, CreditCard, ShieldCheck, Sparkles } from 'lucide-react';
 
 interface Tier {
   id: 'monthly' | 'annual' | 'lifetime';
@@ -115,6 +115,7 @@ export function CheckoutPage() {
 
   const [loadingTier, setLoadingTier] = useState<Tier['id'] | null>(null);
   const [updateCardBusy, setUpdateCardBusy] = useState(false);
+  const [trialCardBusy, setTrialCardBusy] = useState(false);
 
   // v0.9.35-dev.6.4: если пришли через ?tier= (с лендинга через deep-link
   // или из SubscriptionBlock) — подсвечиваем карточку и скроллим к ней.
@@ -122,6 +123,7 @@ export function CheckoutPage() {
   // отдельный экран обновления карты (1₽ + автоматический возврат).
   const [searchParams] = useSearchParams();
   const isUpdateCardMode = searchParams.get('mode') === 'update-card';
+  const isTrialMode = searchParams.get('mode') === 'trial';
   const preselectedTier = searchParams.get('tier');
   const validPreselected: Tier['id'] | null =
     preselectedTier === 'monthly' || preselectedTier === 'annual' || preselectedTier === 'lifetime'
@@ -198,6 +200,35 @@ export function CheckoutPage() {
       pushToast(t(`Ошибка: ${msg}`, `Error: ${msg}`));
     } finally {
       setUpdateCardBusy(false);
+    }
+  }
+
+  async function handleStartTrialWithCard() {
+    if (!auth.user) {
+      pushToast(t('Войдите в аккаунт', 'Sign in first'));
+      return;
+    }
+    setTrialCardBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('create-payment', {
+        body: { mode: 'trial' },
+      });
+      if (error) throw error;
+      if (!data?.confirmation_url) {
+        throw new Error(data?.error ?? 'No confirmation_url from server');
+      }
+      await openConfirmationUrl(data.confirmation_url);
+      pushToast(
+        t(
+          'Открыто окно ЮKassa. После привязки карты trial запустится автоматически.',
+          'ЮKassa opened. After card setup, your trial will start automatically.',
+        ),
+      );
+    } catch (e) {
+      const msg = (e as Error).message ?? 'Unknown error';
+      pushToast(t(`Ошибка: ${msg}`, `Error: ${msg}`));
+    } finally {
+      setTrialCardBusy(false);
     }
   }
 
@@ -280,6 +311,102 @@ export function CheckoutPage() {
             href="/settings"
             className="text-primary hover:underline"
           >
+            {t('← Вернуться в настройки', '← Back to settings')}
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Режим trial: экран привязки карты для запуска trial ──────────────────
+  if (isTrialMode) {
+    return (
+      <div className="flex-1 overflow-y-auto p-6 max-w-2xl mx-auto w-full">
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-primary/10 mb-4">
+            <Sparkles className="w-7 h-7 text-primary" />
+          </div>
+          <h1 className="text-[26px] font-semibold mb-2">
+            {t('14 дней Pro бесплатно', '14 days of Pro — free')}
+          </h1>
+          <p className="text-muted text-[14px]">
+            {t(
+              'Привяжите карту, чтобы начать trial. Деньги не списываются до окончания 14 дней.',
+              'Add your card to start the trial. You won\'t be charged until after 14 days.',
+            )}
+          </p>
+        </div>
+
+        <div className="bg-surface-alt border border-border-soft rounded-xl p-6 space-y-4 mb-6">
+          <h2 className="text-[15px] font-semibold">{t('Что входит в Trial', 'What\'s included in Trial')}</h2>
+          <ul className="space-y-2 text-[13px] text-muted">
+            {[
+              t('Облачная синхронизация на всех устройствах', 'Cloud sync across all devices'),
+              t('Календарь с дедлайнами', 'Calendar with deadlines'),
+              t('Статистика в реальном времени', 'Real-time statistics'),
+              t('Приоритетная поддержка', 'Priority support'),
+            ].map((feature, i) => (
+              <li key={i} className="flex items-center gap-2">
+                <Check className="w-4 h-4 text-success shrink-0" />
+                {feature}
+              </li>
+            ))}
+          </ul>
+
+          <div className="border-t border-border-soft pt-4 space-y-1">
+            <div className="flex justify-between text-[13px]">
+              <span className="text-muted">{t('Trial-период', 'Trial period')}</span>
+              <span className="font-medium">{t('14 дней бесплатно', '14 days free')}</span>
+            </div>
+            <div className="flex justify-between text-[13px]">
+              <span className="text-muted">{t('После trial', 'After trial')}</span>
+              <span className="font-medium">299 ₽ / {t('мес', 'mo')}</span>
+            </div>
+            <div className="flex justify-between text-[13px]">
+              <span className="text-muted">{t('Отмена', 'Cancellation')}</span>
+              <span className="font-medium">{t('в любой момент', 'anytime')}</span>
+            </div>
+          </div>
+        </div>
+
+        <p className="text-[12px] text-muted mb-4 text-center">
+          {t(
+            'Для подтверждения карты спишем 1 ₽ и сразу вернём. Это стандартная проверка ЮKassa.',
+            'To verify your card, we charge ₽1 and refund it immediately. This is a standard ЮKassa check.',
+          )}
+        </p>
+
+        <button
+          onClick={() => void handleStartTrialWithCard()}
+          disabled={trialCardBusy || !auth.user}
+          className="w-full py-3 rounded-lg font-medium text-white disabled:opacity-60"
+          style={{ background: 'var(--accent, #01696F)' }}
+        >
+          {trialCardBusy ? (
+            <span className="flex items-center justify-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              {t('Открываем ЮKassa…', 'Opening ЮKassa…')}
+            </span>
+          ) : (
+            <span className="flex items-center justify-center gap-2">
+              {t('Привязать карту и начать trial', 'Add card and start trial')}
+              <ExternalLink className="w-4 h-4" />
+            </span>
+          )}
+        </button>
+
+        <div className="mt-4 flex items-start gap-2 text-[12px] text-muted">
+          <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-success" />
+          <p>
+            {t(
+              'Оплата защищена ЮKassa (PCI DSS). TaskFlow не хранит данные карты.',
+              'Payments processed by ЮKassa (PCI DSS). TaskFlow never stores card data.',
+            )}
+          </p>
+        </div>
+
+        <div className="mt-4 text-[12px] text-muted text-center">
+          <a href="/settings" className="text-primary hover:underline">
             {t('← Вернуться в настройки', '← Back to settings')}
           </a>
         </div>

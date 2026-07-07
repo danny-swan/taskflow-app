@@ -196,7 +196,7 @@ export const handler = async (req: Request): Promise<Response> => {
     // безопасности используем or=() синтаксис через URLSearchParams вручную.
     const qs = new URLSearchParams({
       select: 'user_id,plan,valid_until,tier_hint:notes,payment_method_id,renewal_attempts_count,last_renewal_attempt_at,last_payment_id',
-      plan: 'eq.pro',
+      plan: 'in.(pro,trial)',
       auto_renew: 'eq.true',
       cancel_at_period_end: 'eq.false',
       next_renewal_at: `lte.${nowIso}`,

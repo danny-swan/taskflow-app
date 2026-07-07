@@ -16,7 +16,7 @@ import { logger } from '../lib/logger';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { useEntitlement, startTrial, submitActivationRequest, cancelSubscription, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, changePlan, type PaymentMethodRow } from '../lib/entitlements';
+import { useEntitlement, submitActivationRequest, cancelSubscription, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, changePlan, type PaymentMethodRow } from '../lib/entitlements';
 import { supabase } from '../lib/supabase';
 
 type Sub = 'general' | 'account' | 'subscription' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
@@ -2560,7 +2560,6 @@ function SubscriptionSection() {
   );
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [trialBusy, setTrialBusy] = useState(false);
 
   // v0.9.35-dev.6.5.1 — recurring management
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -2755,22 +2754,6 @@ function SubscriptionSection() {
   // Показывать кнопку «Начать trial» только если free и trial ни разу не был.
   const canStartTrial = entitlement.effectivePlan === 'free' && !entitlement.trialUsed;
 
-  const handleStartTrial = async () => {
-    setTrialBusy(true);
-    try {
-      const res = await startTrial();
-      if (res.ok) {
-        pushToast(t('Trial активирован на 14 дней', 'Trial activated for 14 days'));
-        // Refetch произойдёт через realtime; но на всякий случай форсим.
-      } else {
-        pushToast(t('Не удалось запустить trial: ', 'Failed to start trial: ') + (res.error ?? '?'));
-      }
-    } catch (e: any) {
-      pushToast(e?.message ?? t('Ошибка запуска trial', 'Trial start error'));
-    } finally {
-      setTrialBusy(false);
-    }
-  };
 
   const handleSubmitActivation = async () => {
     if (!txRef.trim()) {
@@ -3114,7 +3097,7 @@ function SubscriptionSection() {
         onCancel={() => setUpgradeConfirmOpen(false)}
       />
 
-      {/* ──── Trial CTA ──── */}
+      {/* ──── Trial CTA — v0.9.35-dev.6.8: привязка карты обязательна ──── */}
       {canStartTrial && (
         <div
           className="rounded-lg p-4 space-y-3 border"
@@ -3129,19 +3112,18 @@ function SubscriptionSection() {
               <h4 className="text-[14px] font-semibold">{t('Попробуйте Pro бесплатно', 'Try Pro for free')}</h4>
               <p className="text-[12px] text-muted mt-1">
                 {t(
-                  '14 дней всех облачных функций: синхронизация, календарь, realtime. Без карты, без автосписания.',
-                  '14 days of all cloud features: sync, calendar, realtime. No card, no auto-charge.',
+                  '14 дней всех функций Pro. После trial — 299 ₽/мес, отмена в любой момент.',
+                  '14 days of all Pro features. After trial — ₽299/mo, cancel anytime.',
                 )}
               </p>
             </div>
           </div>
           <button
-            onClick={handleStartTrial}
-            disabled={trialBusy}
+            onClick={() => navigate('/checkout?mode=trial')}
             style={{ background: 'var(--accent, #01696F)' }}
-            className="text-white px-3 py-1.5 text-[13px] rounded-md disabled:opacity-60"
+            className="text-white px-3 py-1.5 text-[13px] rounded-md"
           >
-            {trialBusy ? t('Активируем…', 'Activating…') : t('Начать 14-дневный trial', 'Start 14-day trial')}
+            {t('Начать бесплатный trial', 'Start free trial')}
           </button>
         </div>
       )}

@@ -308,6 +308,7 @@ async function handlePaymentSucceeded(
   const mode = meta.mode ?? 'purchase'
   const isRenewal = meta.renewal === 'true' || meta.renewal === '1'
   const isUpdateCard = mode === 'update-card'
+  const isTrialMode = mode === 'trial'
 
   if (!userId) {
     return {
@@ -345,7 +346,72 @@ async function handlePaymentSucceeded(
     }
   }
 
-  // 3) Обычная покупка / renewal — требует tier + plan
+  // 3) Режим trial — refund 1₽ + активируем trial на 14 дней
+  if (isTrialMode) {
+    // Проверяем что метод привязан
+    if (!savedMethodId) {
+      console.warn(`trial without saved method for user ${userId}, payment ${payment.id}`)
+    }
+
+    // Refund 1₽
+    const refundRes = await initiateRefund(shopId, yooSecretKey, payment)
+    if (!refundRes.ok) {
+      return { ok: false, msg: 'trial refund initiation failed', error: refundRes.error }
+    }
+
+    // Активируем trial в user_entitlements
+    const TRIAL_DAYS = 14
+    const now = new Date()
+    const validUntil = new Date(now.getTime() + TRIAL_DAYS * 86_400_000)
+
+    // Проверяем не было ли trial раньше
+    const { data: existing } = await admin
+      .from('user_entitlements')
+      .select('trial_used, plan')
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    if (existing?.trial_used) {
+      // Trial уже был — всё равно refund'им, но trial не активируем
+      return {
+        ok: true,
+        msg: `trial: refund initiated (${refundRes.refundId ?? 'pending'}), but trial_used=true — skipped activation`,
+      }
+    }
+
+    const trialPatch: Record<string, unknown> = {
+      user_id: userId,
+      plan: 'trial',
+      valid_until: validUntil.toISOString(),
+      // next_renewal_at = valid_until → renew-subscription заберёт в день окончания
+      next_renewal_at: validUntil.toISOString(),
+      activated_at: now.toISOString(),
+      source: 'trial',
+      trial_used: true,
+      auto_renew: savedMethodId ? true : false,
+      cancel_at_period_end: false,
+      notes: 'Trial started via card binding (payment-webhook)',
+      updated_at: now.toISOString(),
+    }
+    if (savedMethodId) {
+      trialPatch.payment_method_id = savedMethodId
+    }
+
+    const { error: upsertErr } = await admin
+      .from('user_entitlements')
+      .upsert(trialPatch, { onConflict: 'user_id' })
+
+    if (upsertErr) {
+      return { ok: false, msg: 'trial upsert failed', error: upsertErr.message }
+    }
+
+    return {
+      ok: true,
+      msg: `trial: activated until ${validUntil.toISOString()}, method ${savedMethodId ?? '—'}, refund ${refundRes.refundId ?? 'initiated'}`,
+    }
+  }
+
+  // 4) Обычная покупка / renewal — требует tier + plan
   const tier = meta.tier
   const plan = meta.plan
 
