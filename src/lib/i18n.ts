@@ -168,7 +168,7 @@ const dict = {
     tz_auto: 'Автоопределение (локальный)',
     tz_hint: 'Используется для определения «сегодня» в Статистике и для дат выполнения задач. Если вы в положительном часовом поясе (MSK, JST…) и выполняете задачу ночью — это важно, иначе дата может сместиться на день назад.',
     // v0.9.31 — блок поддержки
-    support_title: 'Чаевые разработчику',
+    support_title: 'Поддержать разработчика',
     support_intro_1: 'Это добровольные чаевые — не подписка и не оплата функций. TaskFlow я делаю один и в свободное время, без навязчивой рекламы и лишнего сбора данных. Если приложение вам зашло и хочется поддержать развитие — буду благодарен любой сумме.',
     support_intro_2: 'Кофе для разработчика — топливо для новых коммитов ☕ Если TaskFlow спас вам хотя бы один дедлайн, чашка эспрессо, считай, уже заслужена 🙂',
     support_intro_3: 'За доступ к Pro-функциям — оформляйте подписку выше. А это просто способ сказать спасибо. ❤',
@@ -362,7 +362,7 @@ const dict = {
     tz_auto: 'Auto (local)',
     tz_hint: 'Used to determine “today” in Stats and task completion dates. Matters if you are in a positive UTC offset (MSK, JST…) and complete a task at night — otherwise the date may shift a day backward.',
     // v0.9.31 — support block
-    support_title: 'Tip the developer',
+    support_title: 'Support the developer',
     support_intro_1: 'This is a voluntary tip — not a subscription, not a paywall. I build TaskFlow alone in my spare time, with no ads and no data harvesting. If you enjoy the app and want to support its development, any amount is appreciated.',
     support_intro_2: 'A developer’s coffee — fuel for new commits ☕ If TaskFlow has saved you even one deadline, an espresso is probably already earned 🙂',
     support_intro_3: 'For access to Pro features — use the subscription above. This is just a way to say thanks. ❤',

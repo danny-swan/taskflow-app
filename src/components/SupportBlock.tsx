@@ -17,63 +17,47 @@ type Method = {
   network?: string; // короткая подпись сети (для крипты)
 };
 
-// v0.9.31: публичные адреса для приёма поддержки.
-// Публиковать безопасно — с адреса нельзя снять средства без приватного ключа.
-// v0.9.35-dev.6.1: значения вынесены в env (VITE_PAY_*). Пустые варианты
-// скрываются; если пусты все 4 — весь блок скрыт (см. SupportBlock ниже).
-const RAW_METHODS: Array<Method | null> = [
-  import.meta.env.VITE_PAY_CLOUDTIPS_URL
-    ? {
-        key: 'cloudtips',
-        labelKey: 'support_method_cloudtips',
-        icon: '\u{1F4B3}',
-        kind: 'link',
-        value: import.meta.env.VITE_PAY_CLOUDTIPS_URL as string,
-      }
-    : null,
-  import.meta.env.VITE_PAY_USDT_TRC20
-    ? {
-        key: 'usdt_trc',
-        labelKey: 'support_method_usdt_trc',
-        icon: '\u{1FA99}',
-        kind: 'address',
-        value: import.meta.env.VITE_PAY_USDT_TRC20 as string,
-        network: 'Tron / TRC-20',
-      }
-    : null,
-  import.meta.env.VITE_PAY_TON
-    ? {
-        key: 'ton',
-        labelKey: 'support_method_ton',
-        icon: '\u{1FA99}',
-        kind: 'address',
-        value: import.meta.env.VITE_PAY_TON as string,
-        network: 'The Open Network',
-      }
-    : null,
-  import.meta.env.VITE_PAY_USDT_ERC20
-    ? {
-        key: 'usdt_erc',
-        labelKey: 'support_method_usdt_erc',
-        icon: '\u{1FA99}',
-        kind: 'address',
-        value: import.meta.env.VITE_PAY_USDT_ERC20 as string,
-        network: 'Ethereum / ERC-20',
-      }
-    : null,
+// v0.9.31: публичные адреса — публиковать безопасно (без приватного ключа нельзя снять).
+// v0.9.35-dev.6.7.1: возвращены хардкодом — env-подход (dev.6.1) не был прокинут в build.yml.
+const METHODS: Method[] = [
+  {
+    key: 'cloudtips',
+    labelKey: 'support_method_cloudtips',
+    icon: '\u{1F4B3}',
+    kind: 'link',
+    value: 'https://pay.cloudtips.ru/p/83f4d553',
+  },
+  {
+    key: 'usdt_trc',
+    labelKey: 'support_method_usdt_trc',
+    icon: '\u{1FA99}',
+    kind: 'address',
+    value: 'TJv97nWcARwvNTR6N62SW3TM2goo6gTpUZ',
+    network: 'Tron / TRC-20',
+  },
+  {
+    key: 'ton',
+    labelKey: 'support_method_ton',
+    icon: '\u{1FA99}',
+    kind: 'address',
+    value: 'UQDphkFo74Ff8yG92mYZk7wpclgdpjs666Qn9m1HvJ51becx',
+    network: 'The Open Network',
+  },
+  {
+    key: 'usdt_erc',
+    labelKey: 'support_method_usdt_erc',
+    icon: '\u{1FA99}',
+    kind: 'address',
+    value: '0x316Da7F3930Cc8c45Ff689181f8053e5d45C9300',
+    network: 'Ethereum / ERC-20',
+  },
 ];
-
-const METHODS: Method[] = RAW_METHODS.filter((m): m is Method => m !== null);
 
 export function SupportBlock() {
   const lang = useStore(s => s.language);
   const theme = useStore(s => s.theme);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-
-  // v0.9.35-dev.6.7: блок всегда виден. Если VITE_PAY_* не настроены —
-  // показываем текст без кнопок оплаты.
-  const noMethods = METHODS.length === 0;
 
   // Определяем тёмная тема или светлая — нужно для контраста QR
   const isDark = theme === 'dark' || theme === 'akatsuki';
@@ -108,15 +92,7 @@ export function SupportBlock() {
         <p>{tr(lang, 'support_intro_3')}</p>
       </div>
 
-      {noMethods && (
-        <p className="mt-3 text-[12px] text-muted italic">
-          {lang === 'ru'
-            ? 'Способы поддержки временно недоступны. Спасибо за внимание!'
-            : 'Support options are temporarily unavailable. Thank you for your interest!'}
-        </p>
-      )}
-
-      {!noMethods && <div className="mt-4 space-y-2">
+      <div className="mt-4 space-y-2">
         {METHODS.map((m) => {
           const isOpen = openKey === m.key;
           const label = tr(lang, m.labelKey);
@@ -216,7 +192,7 @@ export function SupportBlock() {
             </div>
           );
         })}
-      </div>}
+      </div>
 
       <p
         className="mt-3.5 text-[11px] text-muted leading-relaxed"

@@ -121,14 +121,16 @@ export function AdminPage() {
   const user = auth.session?.user;
   const userId = user?.id ?? null;
   const userEmail = user?.email ?? null;
-  const { entitlement } = useEntitlement(userId, userEmail);
+  const { entitlement, loading: entLoading } = useEntitlement(userId, userEmail);
 
-  // Guard — только для admin
+  // Guard — только для admin.
+  // Ждём пока загрузится auth + entitlement, чтобы не было ложного redirect
+  // пока resolveEntitlement ещё не получила данные из БД.
   useEffect(() => {
-    if (!auth.loading && user && !entitlement.isAdmin) {
+    if (!auth.loading && !entLoading && user && !entitlement.isAdmin) {
       navigate('/', { replace: true });
     }
-  }, [auth.loading, user, entitlement.isAdmin, navigate]);
+  }, [auth.loading, entLoading, user, entitlement.isAdmin, navigate]);
 
   const [users, setUsers]           = useState<UserRow[]>([]);
   const [loading, setLoading]       = useState(false);
@@ -302,6 +304,14 @@ export function AdminPage() {
   // ─── Guard render ─────────────────────────────────────────────────────────
 
   if (auth.loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader size={20} className="animate-spin text-muted" />
+      </div>
+    );
+  }
+
+  if (entLoading) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <Loader size={20} className="animate-spin text-muted" />

@@ -2822,16 +2822,17 @@ function SubscriptionSection() {
           <span className="text-[12px] text-muted uppercase tracking-wide">
             {t('Текущий план', 'Current plan')}
           </span>
-          <span
-            className="text-[11px] font-semibold px-2 py-0.5 rounded"
-            style={{ background: planBadgeColor, color: '#fff' }}
-          >
-            {planLabel}
-          </span>
+          {entLoading ? (
+            <span className="h-5 w-16 rounded bg-border animate-pulse inline-block" />
+          ) : (
+            <span
+              className="text-[11px] font-semibold px-2 py-0.5 rounded"
+              style={{ background: planBadgeColor, color: '#fff' }}
+            >
+              {planLabel}
+            </span>
+          )}
         </div>
-        {entLoading && (
-          <p className="text-[12px] text-muted">{t('Загрузка…', 'Loading…')}</p>
-        )}
         {validUntilStr && (
           <div className="flex justify-between items-center">
             <span className="text-[12px] text-muted uppercase tracking-wide">
@@ -3149,7 +3150,7 @@ function SubscriptionSection() {
       {/* v0.9.35-dev.6.4.1: кнопка активна, каждый тариф — кликабельный ряд,
           ведёт на /checkout?tier={monthly|annual|lifetime}. Cloud/YooKassa уже подключены (dev.6.4).
           v0.9.35-dev.6.7: скрыт если у пользователя уже активная подписка. */}
-      {!entitlement.isPaidPro && <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+      {!entLoading && !entitlement.isPaidPro && <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
         <h4 className="text-[14px] font-semibold flex items-center gap-2">
           <Cloud size={14} />
           {t('Оформить подписку', 'Purchase subscription')}
@@ -3213,7 +3214,7 @@ function SubscriptionSection() {
       </div>}
 
       {/* ──── Альтернативные способы оплаты — скрыты для pro/lifetime ──── */}
-      {!entitlement.isPaidPro && PAYMENT_METHODS.length > 0 && (
+      {!entLoading && !entitlement.isPaidPro && PAYMENT_METHODS.length > 0 && (
         <details className="bg-surface-alt border border-border-soft rounded-lg">
           <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2">
             <ExternalLink size={14} />
@@ -3267,7 +3268,7 @@ function SubscriptionSection() {
       )}
 
       {/* ──── Форма ручной активации — свёрнута по умолчанию, скрыта для pro/lifetime ──── */}
-      {!entitlement.isPaidPro && <details className="bg-surface-alt border border-border-soft rounded-lg">
+      {!entLoading && !entitlement.isPaidPro && <details className="bg-surface-alt border border-border-soft rounded-lg">
         <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2">
           <KeyRound size={14} />
           {t('Ручная активация', 'Manual activation')}
@@ -3369,7 +3370,7 @@ function SubscriptionSection() {
       </details>}
 
       {/* ──── История заявок — свёрнута по умолчанию, скрыта для pro/lifetime ──── */}
-      {!entitlement.isPaidPro && <details className="bg-surface-alt border border-border-soft rounded-lg">
+      {!entLoading && !entitlement.isPaidPro && <details className="bg-surface-alt border border-border-soft rounded-lg">
         <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2 justify-between">
           <span className="flex items-center gap-2">
             <Clock size={14} />
