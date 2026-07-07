@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (c) 2026 Daniil Lebedev (danny-swan)
 //
-// v0.9.35-dev.6.4.2 — Supabase Edge Function: payment-webhook
+// v0.9.35-dev.6.4.3 — Supabase Edge Function: payment-webhook
 //
 // Принимает уведомления от ЮKassa (payment.succeeded, payment.canceled,
 // refund.succeeded), верифицирует их и обновляет user_entitlements.
