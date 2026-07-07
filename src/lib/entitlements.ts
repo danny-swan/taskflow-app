@@ -716,6 +716,54 @@ export async function fetchActivePaymentMethods(
   return (data ?? []) as PaymentMethodRow[];
 }
 
+// ─── change-plan (monthly → annual upgrade) ─────────────────────────────────
+
+/**
+ * v0.9.35-dev.6.6 — Upgrade monthly → annual.
+ * Вызывает Edge Function change-plan с JWT текущего пользователя.
+ * Даунгрейд (annual → monthly) не поддерживается.
+ *
+ * Returns:
+ *   { ok: true, new_valid_until, payment_id, confirmation_url? }
+ *   { ok: false, error: string, code?: string }
+ */
+export async function changePlan(): Promise<
+  | { ok: true; new_valid_until: string; payment_id: string; confirmation_url: string | null }
+  | { ok: false; error: string; code?: string }
+> {
+  const { data: { session }, error: sessErr } = await supabase.auth.getSession();
+  if (sessErr || !session) return { ok: false, error: sessErr?.message ?? 'Not authenticated' };
+
+  // VITE_SUPABASE_URL имеет вид https://xxx.supabase.co (без /rest/v1 суффикса)
+  const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string).replace(/\/rest\/v1$/, '');
+
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/functions/v1/change-plan`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({}),
+      }
+    );
+    const data = await res.json() as Record<string, unknown>;
+    if (data.ok) {
+      return {
+        ok: true,
+        new_valid_until: data.new_valid_until as string,
+        payment_id: data.payment_id as string,
+        confirmation_url: (data.confirmation_url as string | null) ?? null,
+      };
+    }
+    return { ok: false, error: (data.error as string) ?? `HTTP ${res.status}`, code: data.code as string | undefined };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // ─── Debug / тесты ────────────────────────────────────────────────────────────
 
 export const _internals = {

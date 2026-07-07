@@ -32,6 +32,7 @@ const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default:
 const HelpPage = lazy(() => import('./pages/Help').then(m => ({ default: m.HelpPage })));
 // v0.9.35-dev.6.4: страница подписки для оплаты через ЮKassa.
 const CheckoutPage = lazy(() => import('./pages/Checkout').then(m => ({ default: m.CheckoutPage })));
+const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
 
 function App() {
   const ready = useStore(s => s.ready);
@@ -278,6 +279,8 @@ function App() {
               <Route path="/help" element={<HelpPage />} />
               {/* v0.9.35-dev.6.4: Checkout — открытая страница оплаты подписки. */}
               <Route path="/checkout" element={<CheckoutPage />} />
+              {/* v0.9.35-dev.6.6: Admin panel — guard проверяется внутри AdminPage */}
+              <Route path="/admin" element={<AdminPage />} />
               <Route path="*" element={<Navigate to={`/${defaultTab}`} replace />} />
             </Routes>
           </Suspense>

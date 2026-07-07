@@ -16,7 +16,7 @@ import { logger } from '../lib/logger';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { useEntitlement, startTrial, submitActivationRequest, cancelSubscription, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, type PaymentMethodRow } from '../lib/entitlements';
+import { useEntitlement, startTrial, submitActivationRequest, cancelSubscription, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, changePlan, type PaymentMethodRow } from '../lib/entitlements';
 import { supabase } from '../lib/supabase';
 
 type Sub = 'general' | 'account' | 'subscription' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
@@ -2518,6 +2518,9 @@ function SubscriptionSection() {
   const [detachConfirmOpen, setDetachConfirmOpen] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodRow[]>([]);
   const [pmLoading, setPmLoading] = useState(false);
+  // v0.9.35-dev.6.6 — upgrade monthly → annual
+  const [upgradeBusy, setUpgradeBusy] = useState(false);
+  const [upgradeConfirmOpen, setUpgradeConfirmOpen] = useState(false);
 
   // История заявок пользователя.
   const [requests, setRequests] = useState<ActivationRequestRow[]>([]);
@@ -2613,6 +2616,39 @@ function SubscriptionSection() {
     } finally {
       setDetachBusy(false);
       setDetachConfirmOpen(false);
+    }
+  };
+
+  // v0.9.35-dev.6.6 — upgrade monthly → annual
+  const handleUpgradePlan = async () => {
+    setUpgradeBusy(true);
+    try {
+      const res = await changePlan();
+      if (res.ok) {
+        if (res.confirmation_url) {
+          // Требуется 3DS — открываем в системном браузере
+          // (Tauri shell open есть в Checkout, тут просто window.open как fallback)
+          try {
+            const { open } = await import('@tauri-apps/plugin-shell');
+            await open(res.confirmation_url);
+          } catch {
+            window.open(res.confirmation_url, '_blank');
+          }
+          pushToast(t('Открыта страница оплаты. После оплаты подписка автоматически продлится.', 'Payment page opened. Subscription will be extended automatically after payment.'));
+        } else {
+          const until = new Date(res.new_valid_until).toLocaleDateString(
+            isRu ? 'ru-RU' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' }
+          );
+          pushToast(t(`Годовой план активирован до ${until}`, `Annual plan activated until ${until}`));
+        }
+      } else {
+        pushToast(t('Ошибка апгрейда: ', 'Upgrade error: ') + (res.error ?? '?'));
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка', 'Error'));
+    } finally {
+      setUpgradeBusy(false);
+      setUpgradeConfirmOpen(false);
     }
   };
 
@@ -2874,6 +2910,38 @@ function SubscriptionSection() {
             )}
           </div>
 
+          {/* v0.9.35-dev.6.6 — Upgrade monthly → annual */}
+          {entitlement.effectivePlan === 'pro' && (() => {
+            // Показываем только если подписка monthly (daysLeft ≤ 40 = точно monthly)
+            const isMonthly = daysLeft != null && daysLeft <= 40;
+            if (!isMonthly) return null;
+            return (
+              <div className="border-t border-border-soft pt-3">
+                <div className="text-[12px] text-muted uppercase tracking-wide mb-2">
+                  {t('Управление планом', 'Plan management')}
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[13px] font-medium">{t('Перейти на годовый', 'Upgrade to Annual')}</p>
+                    <p className="text-[11px] text-muted mt-0.5">
+                      {t('+365 дней к текущему периоду за 2 990 ₽', '+365 days added to current period — 2,990 ₽')}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUpgradeConfirmOpen(true)}
+                    disabled={upgradeBusy}
+                    style={{ background: 'var(--accent, #01696F)' }}
+                    className="text-white text-[12px] px-3 py-1.5 rounded-md disabled:opacity-60 flex items-center gap-1.5 shrink-0"
+                  >
+                    <Sparkles size={12} />
+                    {t('Перейти', 'Upgrade')}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Способ оплаты (маска карты) */}
           <div className="border-t border-border-soft pt-3">
             <div className="text-[12px] text-muted uppercase tracking-wide mb-1.5">
@@ -2976,6 +3044,20 @@ function SubscriptionSection() {
         danger
         onConfirm={handleDetachPaymentMethod}
         onCancel={() => setDetachConfirmOpen(false)}
+      />
+
+      {/* v0.9.35-dev.6.6 — Upgrade confirm */}
+      <ConfirmDialog
+        open={upgradeConfirmOpen}
+        title={t('Перейти на годовый план?', 'Upgrade to Annual?')}
+        message={t(
+          'С вашей привязанной карты будет списано 2 990 ₽. К вашему текущему периоду добавится +365 дней.',
+          'Your saved card will be charged 2,990 ₽. +365 days will be added to your current period.',
+        )}
+        confirmLabel={upgradeBusy ? t('Обрабатываем…', 'Processing…') : t('Перейти за 2 990 ₽', 'Upgrade for 2,990 ₽')}
+        cancelLabel={t('Отмена', 'Cancel')}
+        onConfirm={() => void handleUpgradePlan()}
+        onCancel={() => setUpgradeConfirmOpen(false)}
       />
 
       {/* ──── Trial CTA ──── */}
@@ -3281,6 +3363,20 @@ function SubscriptionSection() {
           </ul>
         )}
       </div>
+
+      {/* v0.9.35-dev.6.6 — Admin link */}
+      {entitlement.isAdmin && (
+        <div className="pt-2 border-t border-border-soft">
+          <button
+            type="button"
+            onClick={() => navigate('/admin')}
+            className="flex items-center gap-1.5 text-[12px] text-muted hover:text-accent transition-colors"
+          >
+            <Shield size={12} />
+            {t('Администрирование', 'Administration')}
+          </button>
+        </div>
+      )}
 
       {/* ──── Footer info ──── */}
       <details className="text-[12px] text-muted">
