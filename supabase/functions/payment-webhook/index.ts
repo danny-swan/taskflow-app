@@ -365,13 +365,14 @@ async function handlePaymentSucceeded(
     const validUntil = new Date(now.getTime() + TRIAL_DAYS * 86_400_000)
 
     // Проверяем не было ли trial раньше
-    const { data: existing } = await admin
-      .from('user_entitlements')
-      .select('trial_used, plan')
-      .eq('user_id', userId)
-      .maybeSingle()
+    const existingTrialRes = await admin.selectOne<{ trial_used: boolean | null; plan: string }>(
+      'user_entitlements',
+      'trial_used,plan',
+      { user_id: userId },
+    )
+    const existingTrial = existingTrialRes.ok ? existingTrialRes.data : null
 
-    if (existing?.trial_used) {
+    if (existingTrial?.trial_used) {
       // Trial уже был — всё равно refund'им, но trial не активируем
       return {
         ok: true,
@@ -397,12 +398,10 @@ async function handlePaymentSucceeded(
       trialPatch.payment_method_id = savedMethodId
     }
 
-    const { error: upsertErr } = await admin
-      .from('user_entitlements')
-      .upsert(trialPatch, { onConflict: 'user_id' })
+    const upsertTrialRes = await admin.upsert('user_entitlements', trialPatch, 'user_id')
 
-    if (upsertErr) {
-      return { ok: false, msg: 'trial upsert failed', error: upsertErr.message }
+    if (!upsertTrialRes.ok) {
+      return { ok: false, msg: 'trial upsert failed', error: upsertTrialRes.error?.message }
     }
 
     return {

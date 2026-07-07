@@ -196,6 +196,8 @@ export const handler = async (req: Request): Promise<Response> => {
 
     const returnUrl = isUpdateCard
       ? `${returnBase.replace(/\/$/, '')}/settings?card=updated`
+      : isTrialMode
+      ? `${returnBase.replace(/\/$/, '')}/settings?trial=started`
       : `${returnBase.replace(/\/$/, '')}/pay/success?tier=${tier}`
 
     const yooPayload: Record<string, unknown> = {
