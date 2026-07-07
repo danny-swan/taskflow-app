@@ -178,6 +178,7 @@ jobs:
           # С dev.6.1 supabase.ts throw'нет при отсутствии — без этих env бандл не стартует.
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          VITE_ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc
 
       # Pre-release: только NSIS + portable.
@@ -197,6 +198,7 @@ jobs:
           # v0.9.35-dev.6.2: Supabase URL/anon key (публичные, защищены RLS).
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          VITE_ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: List build artifacts
@@ -337,6 +339,7 @@ jobs:
           # v0.9.35-dev.6.2: Supabase URL/anon key (публичные, защищены RLS).
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          VITE_ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
           # Вариант A: без Apple Developer ID — подпись не ставится,
           # пользователь обойдёт Gatekeeper вручную.
           APPLE_SIGNING_IDENTITY: '-'

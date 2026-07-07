@@ -157,7 +157,11 @@ export function resolveEntitlement(
   userEmail: string | null,
   now: number = Date.now(),
 ): Entitlement {
-  const isAdmin = !!userEmail && ADMIN_EMAILS.includes(userEmail.toLowerCase());
+  // isAdmin: проверяем сначала VITE_ADMIN_EMAILS (compile-time), затем fallback
+  // через source='seed' из БД (runtime — не зависит от env при сборке).
+  const isAdminByEmail = !!userEmail && ADMIN_EMAILS.includes(userEmail.toLowerCase());
+  const isAdminBySeed = !!row && row.source === 'seed' && row.plan === 'lifetime';
+  const isAdmin = isAdminByEmail || isAdminBySeed;
 
   // Case 1: админ — всегда lifetime, независимо от БД (safety net).
   if (isAdmin) {

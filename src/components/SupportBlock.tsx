@@ -71,9 +71,9 @@ export function SupportBlock() {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // v0.9.35-dev.6.1: если ни один способ поддержки не настроен —
-  // блок не показываем.
-  if (METHODS.length === 0) return null;
+  // v0.9.35-dev.6.7: блок всегда виден. Если VITE_PAY_* не настроены —
+  // показываем текст без кнопок оплаты.
+  const noMethods = METHODS.length === 0;
 
   // Определяем тёмная тема или светлая — нужно для контраста QR
   const isDark = theme === 'dark' || theme === 'akatsuki';
@@ -108,7 +108,15 @@ export function SupportBlock() {
         <p>{tr(lang, 'support_intro_3')}</p>
       </div>
 
-      <div className="mt-4 space-y-2">
+      {noMethods && (
+        <p className="mt-3 text-[12px] text-muted italic">
+          {lang === 'ru'
+            ? 'Способы поддержки временно недоступны. Спасибо за внимание!'
+            : 'Support options are temporarily unavailable. Thank you for your interest!'}
+        </p>
+      )}
+
+      {!noMethods && <div className="mt-4 space-y-2">
         {METHODS.map((m) => {
           const isOpen = openKey === m.key;
           const label = tr(lang, m.labelKey);
@@ -208,7 +216,7 @@ export function SupportBlock() {
             </div>
           );
         })}
-      </div>
+      </div>}
 
       <p
         className="mt-3.5 text-[11px] text-muted leading-relaxed"

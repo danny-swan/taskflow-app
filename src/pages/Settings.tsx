@@ -43,32 +43,45 @@ export function SettingsPage() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
-  const subs: { key: Sub; label: string }[] = [
+  // v0.9.35-dev.6.7: сбок сгруппирован визуальными разделителями.
+  // 'divider' — визуальный разделитель.
+  type NavItem = { key: Sub; label: string } | { key: 'divider'; label?: never };
+  const navItems: NavItem[] = [
+    // Группа 1: Основные настройки
     { key: 'general', label: tr(lang, 'settings_general') },
-    { key: 'account', label: lang === 'ru' ? 'Аккаунт' : 'Account' },
-    { key: 'subscription', label: lang === 'ru' ? 'Подписка' : 'Subscription' },
-    { key: 'tags', label: tr(lang, 'settings_tags') },
     { key: 'statuses', label: tr(lang, 'settings_statuses') },
-    { key: 'stats', label: tr(lang, 'settings_stats') },
+    { key: 'tags', label: tr(lang, 'settings_tags') },
     { key: 'theme', label: tr(lang, 'settings_theme') },
     { key: 'templates', label: lang === 'ru' ? 'Шаблоны задач' : 'Task templates' },
+    // Разделитель
+    { key: 'divider' },
+    // Группа 2: Аккаунт и подписка
+    { key: 'account', label: lang === 'ru' ? 'Аккаунт' : 'Account' },
+    { key: 'subscription', label: lang === 'ru' ? 'Подписка' : 'Subscription' },
+    // Разделитель
+    { key: 'divider' },
+    // Группа 3: Данные и обслуживание
     { key: 'io', label: tr(lang, 'settings_io') },
     { key: 'storage', label: tr(lang, 'storage_section') },
-    { key: 'sync', label: lang === 'ru' ? 'Синхронизация' : 'Sync' },
     { key: 'updates', label: lang === 'ru' ? 'Обновления' : 'Updates' },
   ];
+
+  // stats и sync всё ещё есть для прямого перехода (например из кода)
+  // без отображения в сбоке.
 
   return (
     <div className="flex-1 flex overflow-hidden">
       <div className="w-[200px] shrink-0 border-r border-border-soft py-4 px-2.5 overflow-y-auto">
-        {subs.map(s => (
-          <button
-            key={s.key}
-            onClick={() => setSub(s.key)}
-            className={'w-full text-left px-3 py-1.5 mb-0.5 rounded-md text-[13px] ' +
-              (sub === s.key ? 'bg-accent-soft text-accent font-medium' : 'hover:bg-surface-alt')}
-          >{s.label}</button>
-        ))}
+        {navItems.map((item, idx) =>
+          item.key === 'divider'
+            ? <div key={`div-${idx}`} className="my-2 border-t border-border-soft/60" />
+            : <button
+                key={item.key}
+                onClick={() => setSub(item.key as Sub)}
+                className={'w-full text-left px-3 py-1.5 mb-0.5 rounded-md text-[13px] ' +
+                  (sub === item.key ? 'bg-accent-soft text-accent font-medium' : 'hover:bg-surface-alt')}
+              >{item.label}</button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto px-6 py-5">
         {sub === 'general' && <GeneralSection />}
@@ -136,8 +149,14 @@ function GeneralSection() {
   };
 
   return (
-    <div className="max-w-xl space-y-6">
+    <div className="max-w-xl space-y-4">
       <h3 className="font-display text-[16px] font-semibold">{tr(lang, 'settings_general')}</h3>
+
+      {/* ─── Блок: Основные параметры ─── */}
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-4">
+        <h4 className="text-[13px] font-semibold text-muted uppercase tracking-wide">
+          {lang === 'ru' ? 'Основные' : 'General'}
+        </h4>
 
       <Row label={tr(lang, 'language')}>
         <div className="flex gap-2">
@@ -217,9 +236,12 @@ function GeneralSection() {
         </div>
       </Row>
 
+      </div>{/* /блок Основные */}
+
+      {/* ─── Блок: Автоочистка ─── */}
       {/* v0.9.30: автоочистка выполненных задач — два режима (weekday/age) */}
-      <div className="pt-4 border-t border-border-soft">
-        <h4 className="font-display text-[14px] font-semibold mb-3">
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+        <h4 className="font-display text-[14px] font-semibold">
           {lang === 'ru' ? 'Автоочистка выполненных задач' : 'Auto-cleanup completed tasks'}
         </h4>
 
@@ -333,6 +355,37 @@ function GeneralSection() {
         onConfirm={() => { handleCleanNow(); setCleanNowConfirm(false); }}
         onCancel={() => setCleanNowConfirm(false)}
       />
+
+      {/* v0.9.35-dev.6.7: Сбор статистики перенесён внутрь вкладки Общее */}
+      <InlineStatsToggle lang={lang} />
+    </div>
+  );
+}
+
+/** Сбор статистики — встроенный в GeneralSection (v0.9.35-dev.6.7) */
+function InlineStatsToggle({ lang }: { lang: string }) {
+  const enabled = useStore(s => s.statsEnabled);
+  const setEnabled = useStore(s => s.setStatsEnabled);
+  return (
+    <div className="bg-surface-alt border border-border-soft rounded-lg p-4">
+      <h4 className="font-display text-[14px] font-semibold mb-3">
+        {lang === 'ru' ? 'Сбор статистики' : 'Usage statistics'}
+      </h4>
+      <Row label={lang === 'ru' ? 'Включить' : 'Enable'}>
+        <label className="inline-flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={e => setEnabled(e.target.checked)}
+            className="w-4 h-4 accent-[var(--color-accent)]"
+          />
+          <span className="text-[13px] text-muted">
+            {lang === 'ru'
+              ? 'Собирать анонимную статистику использования'
+              : 'Collect anonymous usage statistics'}
+          </span>
+        </label>
+      </Row>
     </div>
   );
 }
@@ -3092,10 +3145,11 @@ function SubscriptionSection() {
         </div>
       )}
 
-      {/* ──── Оформить подписку (→ /checkout) ──── */}
+      {/* ──── Оформить подписку (→ /checkout) — скрыто для pro/lifetime ──── */}
       {/* v0.9.35-dev.6.4.1: кнопка активна, каждый тариф — кликабельный ряд,
-          ведёт на /checkout?tier={monthly|annual|lifetime}. Cloud/YooKassa уже подключены (dev.6.4). */}
-      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+          ведёт на /checkout?tier={monthly|annual|lifetime}. Cloud/YooKassa уже подключены (dev.6.4).
+          v0.9.35-dev.6.7: скрыт если у пользователя уже активная подписка. */}
+      {!entitlement.isPaidPro && <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
         <h4 className="text-[14px] font-semibold flex items-center gap-2">
           <Cloud size={14} />
           {t('Оформить подписку', 'Purchase subscription')}
@@ -3156,10 +3210,10 @@ function SubscriptionSection() {
             'Payment via YooKassa. Store is in test mode (prod moderation). Auto-renewal comes in the next release.',
           )}
         </p>
-      </div>
+      </div>}
 
-      {/* ──── Альтернативные способы оплаты (env-driven) ──── */}
-      {PAYMENT_METHODS.length > 0 && (
+      {/* ──── Альтернативные способы оплаты — скрыты для pro/lifetime ──── */}
+      {!entitlement.isPaidPro && PAYMENT_METHODS.length > 0 && (
         <details className="bg-surface-alt border border-border-soft rounded-lg">
           <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2">
             <ExternalLink size={14} />
@@ -3212,12 +3266,13 @@ function SubscriptionSection() {
         </details>
       )}
 
-      {/* ──── Форма ручной активации ──── */}
-      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
-        <h4 className="text-[14px] font-semibold flex items-center gap-2">
+      {/* ──── Форма ручной активации — свёрнута по умолчанию, скрыта для pro/lifetime ──── */}
+      {!entitlement.isPaidPro && <details className="bg-surface-alt border border-border-soft rounded-lg">
+        <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2">
           <KeyRound size={14} />
           {t('Ручная активация', 'Manual activation')}
-        </h4>
+        </summary>
+        <div className="px-4 pb-4 space-y-3">
         <p className="text-[12px] text-muted">
           {t(
             'Отправили платёж? Оставьте заявку — админ проверит и активирует подписку.',
@@ -3310,24 +3365,26 @@ function SubscriptionSection() {
         >
           {submitting ? t('Отправляем…', 'Submitting…') : t('Отправить заявку', 'Submit request')}
         </button>
-      </div>
+        </div>
+      </details>}
 
-      {/* ──── История заявок ──── */}
-      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h4 className="text-[14px] font-semibold flex items-center gap-2">
+      {/* ──── История заявок — свёрнута по умолчанию, скрыта для pro/lifetime ──── */}
+      {!entitlement.isPaidPro && <details className="bg-surface-alt border border-border-soft rounded-lg">
+        <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2 justify-between">
+          <span className="flex items-center gap-2">
             <Clock size={14} />
             {t('Мои заявки', 'My requests')}
-          </h4>
+          </span>
           <button
-            onClick={() => void reloadRequests()}
+            onClick={(e) => { e.preventDefault(); void reloadRequests(); }}
             disabled={reqLoading}
             className="p-1 rounded hover:bg-surface"
             title={t('Обновить', 'Refresh')}
           >
             <RefreshCw size={12} className={reqLoading ? 'animate-spin' : ''} />
           </button>
-        </div>
+        </summary>
+        <div className="px-4 pb-4 space-y-2">
         {requests.length === 0 && !reqLoading && (
           <p className="text-[12px] text-muted">
             {t('Заявок ещё нет.', 'No requests yet.')}
@@ -3362,7 +3419,8 @@ function SubscriptionSection() {
             ))}
           </ul>
         )}
-      </div>
+        </div>
+      </details>}
 
       {/* v0.9.35-dev.6.6 — Admin link */}
       {entitlement.isAdmin && (
