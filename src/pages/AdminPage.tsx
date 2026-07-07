@@ -14,7 +14,7 @@
 //   — История renewal_attempts_log по пользователю
 //   — История payment_events по пользователю
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Shield, RefreshCw, ChevronDown, ChevronRight, Check, X,
@@ -113,7 +113,10 @@ async function callAdminAction(
 export function AdminPage() {
   const lang = useStore(s => s.language);
   const isRu = lang === 'ru';
-  const t = (ru: string, en: string) => (isRu ? ru : en);
+  // useCallback чтобы t не пересоздавалась на каждом рендере и не инвалидировала loadUsers useCallback
+  const isRuRef = useRef(isRu);
+  isRuRef.current = isRu;
+  const t = useCallback((ru: string, en: string) => (isRuRef.current ? ru : en), []);
   const pushToast = useStore(s => s.pushToast);
   const navigate = useNavigate();
   const auth = useAuth();
@@ -203,8 +206,12 @@ export function AdminPage() {
 
       setUsers(rows);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      logger.warn('[AdminPage] loadUsers error:', msg);
+      const msg = e instanceof Error
+        ? e.message
+        : (typeof e === 'object' && e !== null && 'message' in e)
+          ? String((e as { message: unknown }).message)
+          : String(e);
+      logger.warn('[AdminPage] loadUsers error:', e);
       pushToast(t('Ошибка загрузки: ', 'Load error: ') + msg);
     } finally {
       setLoading(false);

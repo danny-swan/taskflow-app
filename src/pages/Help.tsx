@@ -5,7 +5,6 @@ import { ChevronDown } from 'lucide-react';
 import { CHANGELOG } from '../data/changelog';
 import { resetOnboarding } from '../components/Onboarding';
 import { SupportBlock } from '../components/SupportBlock';
-import { SubscriptionBlock } from '../components/SubscriptionBlock';
 
 interface HelpSection {
   title: string;
@@ -964,16 +963,13 @@ export function HelpPage() {
             <AboutSection lang={lang} />
 
             {/* v0.9.32: на lg+ SupportBlock в sticky aside справа, на меньших внизу основной колонки. */}
-            {/* v0.9.35-dev.6.4: SubscriptionBlock (Подписка Pro) — над SupportBlock (чаевые). */}
             <div className="help-support-inline">
-              <SubscriptionBlock />
               <SupportBlock />
             </div>
           </div>
         </div>
 
         <div className="help-support-aside sticky top-4 self-start min-w-0">
-          <SubscriptionBlock />
           <SupportBlock />
         </div>
       </div>
