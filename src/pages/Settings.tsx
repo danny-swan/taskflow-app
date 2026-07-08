@@ -63,10 +63,13 @@ export function SettingsPage() {
     // Группа 3: Данные и обслуживание
     { key: 'io', label: tr(lang, 'settings_io') },
     { key: 'storage', label: tr(lang, 'storage_section') },
+    // v0.9.35-dev.6.8.1: вкладка Синхронизация была потеряна при перестановке
+    // порядка вкладок — возвращаем между Хранилище и Обновления.
+    { key: 'sync', label: lang === 'ru' ? 'Синхронизация' : 'Sync' },
     { key: 'updates', label: lang === 'ru' ? 'Обновления' : 'Updates' },
   ];
 
-  // stats и sync всё ещё есть для прямого перехода (например из кода)
+  // stats всё ещё есть для прямого перехода (например из кода)
   // без отображения в сбоке.
 
   return (
@@ -3098,7 +3101,10 @@ function SubscriptionSection() {
       />
 
       {/* ──── Trial CTA — v0.9.35-dev.6.8: привязка карты обязательна ──── */}
-      {canStartTrial && (
+      {/* v0.9.35-dev.6.8.1: guard !subsLoading убирает flash-of-free — CTA
+          «Попробуйте Pro бесплатно» больше не мелькает на секунду при переходе
+          на вкладку, пока entitlement ещё грузится из кэша. */}
+      {!subsLoading && canStartTrial && (
         <div
           className="rounded-lg p-4 space-y-3 border"
           style={{

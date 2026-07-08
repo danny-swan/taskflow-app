@@ -231,10 +231,10 @@ function TrialBanner({ e, lang }: { e: Entitlement; lang: Lang }) {
  *     <CalendarPage />
  *   </PaywallGate>
  *
- * Не показывает спиннер во время загрузки entitlement — стартует с кэша,
- * так что первый рендер сразу верный в 99% случаев. Если кэш пуст и юзер
- * действительно Pro — на секунду покажется «Раздел на Pro», затем refetch
- * заменит на children. Это ok для v0.9.35-dev.6.
+ * v0.9.35-dev.6.8.1: стартует с кэша, но пока entitlement ещё грузится и
+ * кэш дал бы free — показываем нейтральный лоадер, а НЕ paywall-заглушку.
+ * Пайвол «Раздел на Pro» показывается только когда loading=false — тогда
+ * вердикт free точно окончательный. Закрывает flash-of-free при навигации.
  */
 export function PaywallGate({ children }: { children: React.ReactNode }) {
   const lang = useStore(s => s.language);
@@ -267,6 +267,19 @@ export function PaywallGate({ children }: { children: React.ReactNode }) {
 
   if (allowed) return <>{children}</>;
 
+  // v0.9.35-dev.6.8.1: убираем flash-of-free. Пока entitlement ещё грузится
+  // (loading=true) и результат был бы «denied» (free) — НЕ показываем paywall.
+  // Кэш может быть пуст/устаревший (например сразу после навигации, до того как
+  // fetch/realtime подтвердят Pro). Показываем нейтральный лоадер и ждём, пока
+  // loading=false: только тогда финальный вердикт free точно верный.
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center px-4">
+        <div className="w-5 h-5 rounded-full border-2 border-border border-t-accent animate-spin" />
+      </div>
+    );
+  }
+
   // Free / trial-expired. Показываем объяснение.
   const trialExpired = entitlement.rawPlan === 'trial' && entitlement.effectivePlan === 'free';
   const subtitleKey: L10nKey = trialExpired
@@ -290,9 +303,6 @@ export function PaywallGate({ children }: { children: React.ReactNode }) {
         <div className="text-[13px] text-muted mb-5 leading-relaxed">
           {loc(lang, subtitleKey)}
         </div>
-        {loading && !entitlement && (
-          <div className="text-[11px] text-muted mb-3">…</div>
-        )}
         <button
           onClick={() => navigate('/settings#subscription')}
           className="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] rounded-md text-white"
