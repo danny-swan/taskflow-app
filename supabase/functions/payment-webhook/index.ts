@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (c) 2026 Daniil Lebedev (danny-swan)
 //
-// v0.9.35-dev.6.5.3 — Supabase Edge Function: payment-webhook
+// v0.9.35-dev.6.9.2 — Supabase Edge Function: payment-webhook
+//
+// dev.6.9.2 — баг #2 (двухшаговое «Включить автопродление»):
+//   в режиме update-card теперь проставляем entitlement.payment_method_id
+//   (токен ЮKassa), но НЕ включаем auto_renew — это делает
+//   reactivate-subscription отдельным явным шагом.
 //
 // Принимает уведомления от ЮKassa (payment.succeeded, payment.canceled,
 // refund.succeeded), верифицирует их и обновляет user_entitlements.
@@ -328,12 +333,35 @@ async function handlePaymentSucceeded(
     savedMethodId = payment.payment_method.id
   }
 
-  // 2) Режим update-card — инициируем refund, entitlement НЕ трогаем
+  // 2) Режим update-card — сохраняем способ оплаты в entitlement + refund 1₽.
+  //
+  // dev.6.9.2 (двухшаговый акцепт): проставляем entitlement.payment_method_id =
+  // <токен ЮKassa>, чтобы reactivate-subscription смог включить автопродление.
+  // ВАЖНО: auto_renew и cancel_at_period_end здесь НЕ трогаем — включение
+  // рекуррентных списаний требует отдельного явного согласия пользователя
+  // (фронт вызывает reactivate-subscription по возврату). Это симметрично
+  // detach-payment-method, где всё обнуляется одним действием.
   if (isUpdateCard) {
-    if (!savedMethodId) {
+    if (savedMethodId) {
+      // Привязываем сохранённый метод к подписке. Только payment_method_id —
+      // без auto_renew (двухшаговый flow «Включить автопродление»).
+      const bindRes = await admin.update(
+        'user_entitlements',
+        { user_id: userId },
+        { payment_method_id: savedMethodId, updated_at: new Date().toISOString() },
+      )
+      if (!bindRes.ok) {
+        // Метод сохранён в payment_methods, но не привязан к entitlement —
+        // не критично для возврата денег, но фиксируем ошибку явно.
+        console.error(
+          `update-card: failed to bind payment_method_id for user ${userId}: ${bindRes.error?.message}`,
+        )
+        // Всё равно инициируем refund ниже — деньги пользователю важнее.
+      }
+    } else {
       // update-card без сохранённого метода — ситуация аномальная (возможно,
-      // гео-ограничение, SBP, банковский кошелёк). Всё равно refund'им 1₽,
-      // но логгируем.
+      // гео-ограничение, SBP-разовый, банковский кошелёк без рекуррента).
+      // Всё равно refund'им 1₽, но логгируем — автопродление включить нельзя.
       console.warn(`update-card without saved method for user ${userId}, payment ${payment.id}`)
     }
     const refundRes = await initiateRefund(shopId, yooSecretKey, payment)
@@ -342,7 +370,7 @@ async function handlePaymentSucceeded(
     }
     return {
       ok: true,
-      msg: `update-card: saved method ${savedMethodId ?? '—'}, refund ${refundRes.refundId ?? 'initiated'}`,
+      msg: `update-card: bound method ${savedMethodId ?? '—'} to entitlement, refund ${refundRes.refundId ?? 'initiated'}`,
     }
   }
 
