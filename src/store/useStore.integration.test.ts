@@ -6,7 +6,7 @@
  * Это отличается от useStore.test.ts, где db.ts замокан на no-op — там тестируем
  * derived-хелперы. Здесь — реальную запись в sqlite + outbox.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import initSqlJs, { type Database } from 'sql.js';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -240,6 +240,90 @@ describe('store integration — addTask/updateTask/soft-delete → outbox', () =
     expect(ob.length).toBe(1);
     expect(ob[0].op).toBe('delete');
     expect(ob[0].entity_table).toBe('tasks');
+  });
+});
+
+describe('store integration — назначение тэга из Статистики (Fix 2)', () => {
+  it('updateTask({ tag_id }) проставляет тег, бампает version и пишет upsert в outbox', () => {
+    const statusId = useStore.getState().statuses[0].id;
+    const tagId = useStore.getState().addTag('LRN', '#0F0');
+    const taskId = useStore.getState().addTask({ title: 'Без тега', status_id: statusId });
+
+    // Задача создана без тега.
+    let row = liveDb!.exec(`SELECT tag_id FROM tasks WHERE id=${taskId}`)[0];
+    expect(row.values[0][0]).toBeNull();
+
+    liveDb!.run('DELETE FROM sync_outbox');
+
+    // Назначаем тег тем же путём, что и колонка «Тэг» на странице Статистики.
+    useStore.getState().updateTask(taskId, { tag_id: tagId });
+
+    row = liveDb!.exec(`SELECT tag_id, version FROM tasks WHERE id=${taskId}`)[0];
+    expect(row.values[0][0]).toBe(tagId);
+    expect(row.values[0][1]).toBe(2); // INSERT(1) + UPDATE(1)
+
+    const ob = outboxAll(liveDb!);
+    expect(ob.length).toBe(1);
+    expect(ob[0].entity_table).toBe('tasks');
+    expect(ob[0].op).toBe('upsert');
+
+    // Store тоже отражает назначение.
+    const stored = useStore.getState().tasks.find(t => t.id === taskId);
+    expect(stored?.tag_id).toBe(tagId);
+  });
+});
+
+describe('store integration — удаление с окном отмены (Fix 3)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('deleteTaskWithUndo НЕ удаляет сразу, а удаляет по истечении окна', () => {
+    const statusId = useStore.getState().statuses[0].id;
+    const taskId = useStore.getState().addTask({ title: 'Удалить с окном', status_id: statusId });
+    liveDb!.run('DELETE FROM sync_outbox');
+
+    useStore.getState().deleteTaskWithUndo(taskId, {
+      toastText: 'Запись удалена', undoLabel: 'Отменить', delayMs: 10000,
+    });
+
+    // Сразу после вызова — задача НЕ удалена, показан тост с Undo.
+    let row = liveDb!.exec(`SELECT deleted_at FROM tasks WHERE id=${taskId}`)[0];
+    expect(row.values[0][0]).toBeNull();
+    expect(outboxAll(liveDb!).length).toBe(0);
+    const ts = useStore.getState().toasts; const toast = ts[ts.length - 1];
+    expect(toast?.action?.label).toBe('Отменить');
+
+    // Окно истекло → реальный permanent delete.
+    vi.advanceTimersByTime(10000);
+
+    row = liveDb!.exec(`SELECT deleted_at, version FROM tasks WHERE id=${taskId}`)[0];
+    expect(row.values[0][0]).not.toBeNull();
+    const ob = outboxAll(liveDb!);
+    expect(ob.length).toBe(1);
+    expect(ob[0].op).toBe('delete');
+  });
+
+  it('Undo в пределах окна отменяет удаление — задача остаётся нетронутой', () => {
+    const statusId = useStore.getState().statuses[0].id;
+    const taskId = useStore.getState().addTask({ title: 'Передумал удалять', status_id: statusId });
+    liveDb!.run('DELETE FROM sync_outbox');
+
+    useStore.getState().deleteTaskWithUndo(taskId, {
+      toastText: 'Запись удалена', undoLabel: 'Отменить', delayMs: 10000,
+    });
+
+    // Пользователь жмёт Undo через 3 c.
+    vi.advanceTimersByTime(3000);
+    const ts = useStore.getState().toasts; const toast = ts[ts.length - 1];
+    toast!.action!.onClick();
+
+    // Даже после полного окна задача не должна быть удалена.
+    vi.advanceTimersByTime(10000);
+
+    const row = liveDb!.exec(`SELECT deleted_at FROM tasks WHERE id=${taskId}`)[0];
+    expect(row.values[0][0]).toBeNull();
+    // Никаких delete в outbox.
+    expect(outboxAll(liveDb!).filter(r => r.op === 'delete').length).toBe(0);
   });
 });
 

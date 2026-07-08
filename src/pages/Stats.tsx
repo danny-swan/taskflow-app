@@ -39,7 +39,8 @@ export function StatsPage() {
   const pushToast = useStore(s => s.pushToast);
   const columnWidths = useStore(s => s.columnWidths);
   const setColumnWidth = useStore(s => s.setColumnWidth);
-  const permanentlyDeleteTask = useStore(s => s.permanentlyDeleteTask);
+  const updateTask = useStore(s => s.updateTask);
+  const deleteTaskWithUndo = useStore(s => s.deleteTaskWithUndo);
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [restoreId, setRestoreId] = useState<number | null>(null);
@@ -286,7 +287,17 @@ export function StatsPage() {
                     <span style={r.isTechnical ? { textDecoration: 'line-through' } : undefined}>{r.title}</span>
                   </td>
                   <td className="py-2 pr-3 text-center">
-                    <span className="mono text-[11px] uppercase tracking-wider" style={{ color: r.tag?.color }}>{r.tag?.name || '—'}</span>
+                    {r.tag ? (
+                      <span className="mono text-[11px] uppercase tracking-wider" style={{ color: r.tag.color }}>{r.tag.name}</span>
+                    ) : tags.length > 0 ? (
+                      <TagAssignSelect
+                        lang={lang}
+                        tags={tags}
+                        onAssign={(tagId) => updateTask(r.id, { tag_id: tagId })}
+                      />
+                    ) : (
+                      <span className="mono text-[11px] uppercase tracking-wider text-muted">—</span>
+                    )}
                   </td>
                   <td className="py-2 pr-3 mono text-[12px] text-muted text-center">{formatDate(r.start)}</td>
                   <td className="py-2 pr-3 mono text-[12px] text-muted text-center">{formatDate(r.deadline)}</td>
@@ -349,8 +360,11 @@ export function StatsPage() {
         danger
         onConfirm={() => {
           if (confirmDeleteId !== null) {
-            permanentlyDeleteTask(confirmDeleteId);
-            pushToast(tr(lang, 'record_deleted'));
+            // v0.9.35-dev.6.10.5: не удаляем сразу — окно отмены ~10 c.
+            deleteTaskWithUndo(confirmDeleteId, {
+              toastText: tr(lang, 'record_deleted'),
+              undoLabel: lang === 'ru' ? 'Отменить' : 'Undo',
+            });
           }
           setConfirmDeleteId(null);
         }}
@@ -399,6 +413,35 @@ export function StatsPage() {
         </div>
       </ConfirmDialog>
     </div>
+  );
+}
+
+/**
+ * v0.9.35-dev.6.10.5: назначение тэга прямо из колонки «Тэг» Статистики, когда
+ * тэга ещё нет. Нативный <select> в стиле фильтров тулбара; выбор пишется через
+ * обычный updateTask → изменение уходит в sync-outbox как любое другое.
+ */
+function TagAssignSelect({ tags, lang, onAssign }: {
+  tags: { id: number; name: string; color: string }[];
+  lang: 'ru' | 'en';
+  onAssign: (tagId: number) => void;
+}) {
+  return (
+    <select
+      value=""
+      onChange={(e) => {
+        const v = e.target.value;
+        if (v) onAssign(parseInt(v, 10));
+      }}
+      title={lang === 'ru' ? 'Назначить тэг' : 'Assign tag'}
+      aria-label={lang === 'ru' ? 'Назначить тэг' : 'Assign tag'}
+      className="mono text-[11px] uppercase tracking-wider bg-transparent border border-border-soft rounded px-1 py-0.5 text-muted hover:border-accent cursor-pointer outline-none focus:border-accent"
+    >
+      <option value="">{lang === 'ru' ? '+ тэг' : '+ tag'}</option>
+      {tags.map(t => (
+        <option key={t.id} value={t.id}>{t.name}</option>
+      ))}
+    </select>
   );
 }
 

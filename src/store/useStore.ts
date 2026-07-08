@@ -156,6 +156,12 @@ interface State {
   updateTask(id: number, p: Partial<Task>): void;
   softDeleteTask(id: number): void;
   permanentlyDeleteTask(id: number): void;
+  // v0.9.35-dev.6.10.5: удаление из Статистики с окном отмены (~10 c).
+  // Не удаляет сразу — планирует permanentlyDeleteTask через delayMs и показывает
+  // тост с кнопкой Undo. Undo в пределах окна отменяет отложенное удаление
+  // (задача остаётся нетронутой). По истечении окна выполняется реальное
+  // permanentlyDeleteTask (soft-delete + op=delete в outbox).
+  deleteTaskWithUndo(id: number, opts: { toastText: string; undoLabel: string; delayMs?: number }): void;
   reorderTasks(statusId: number, ids: number[]): void;
 
   addTag(name: string, color: string): number;
@@ -188,6 +194,12 @@ interface State {
 }
 
 let toastId = 0;
+
+// v0.9.35-dev.6.10.5: отложенные (в пределах окна Undo) permanent-delete'ы.
+// Ключ — id задачи, значение — таймер. Модульный уровень: переживает
+// перемонтирование страницы Статистики, чтобы окно отмены не срывалось при
+// навигации.
+const pendingDeletions = new Map<number, ReturnType<typeof setTimeout>>();
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
@@ -658,6 +670,27 @@ export const useStore = create<State>((set, get) => ({
     );
     enqueueOutbox('tasks', row?.uuid, 'delete');
     get().refresh();
+  },
+  deleteTaskWithUndo(id, opts) {
+    const delay = opts.delayMs ?? 10000;
+    // Если для этой задачи уже запланировано удаление — сбрасываем прежний таймер.
+    const existing = pendingDeletions.get(id);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      pendingDeletions.delete(id);
+      get().permanentlyDeleteTask(id);
+    }, delay);
+    pendingDeletions.set(id, timer);
+    get().pushToast(opts.toastText, {
+      label: opts.undoLabel,
+      onClick: () => {
+        const t = pendingDeletions.get(id);
+        if (t) {
+          clearTimeout(t);
+          pendingDeletions.delete(id);
+        }
+      },
+    });
   },
   softDeleteTask(id) {
     const now = new Date().toISOString();
