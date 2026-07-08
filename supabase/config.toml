@@ -1,0 +1,33 @@
+# ============================================================================
+# Supabase project config — TaskFlow
+#
+# Здесь фиксируем ТОЛЬКО настройки Edge Functions, которые должны быть
+# консистентны между окружениями и деплоями. Всё остальное (db, auth, api...)
+# управляется через Dashboard и НЕ дублируется тут, чтобы `supabase functions
+# deploy` не перезаписывал серверные настройки неожиданными значениями.
+#
+# project_id — reference проекта (виден в URL дашборда и в
+# https://<project_id>.supabase.co).
+# ============================================================================
+
+project_id = "sejpmzrmtgcvevukggkx"
+
+# ─── Edge Functions ─────────────────────────────────────────────────────────
+#
+# ВАЖНО (v0.9.35-dev.6.9.2, миграция на новые ключи Supabase):
+# Проект переведён на publishable/secret API keys. Legacy service_role JWT
+# больше не принимается gateway'ем (UNAUTHORIZED_LEGACY_JWT). Новые secret-ключи
+# (sb_secret_...) — НЕ JWT, поэтому их нельзя слать в Authorization: Bearer.
+#
+# renew-subscription дёргается pg_cron'ом без пользовательского JWT, поэтому
+# verify_jwt = false: платформа НЕ проверяет вызывающего. Авторизацию делает
+# сам код функции — сверяет заголовок x-cron-secret с Edge-secret
+# CRON_SHARED_SECRET (тот же паттерн, что x-internal-token у send-user-email).
+#
+# Прочие функции здесь НЕ перечислены намеренно: их настройки уже заданы на
+# сервере (payment-webhook, send-user-email — verify_jwt=false; клиентские
+# функции — verify_jwt=true). Деплой по имени (`supabase functions deploy
+# renew-subscription`) не трогает настройки других функций.
+
+[functions.renew-subscription]
+verify_jwt = false

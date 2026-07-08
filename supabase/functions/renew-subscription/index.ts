@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (c) 2026 Daniil Lebedev (danny-swan)
 //
-// v0.9.35-dev.6.5.3 — Supabase Edge Function: renew-subscription
+// v0.9.35-dev.6.9.2 — Supabase Edge Function: renew-subscription
 //
-// Дёргается pg_cron через pg_net раз в час (см. миграцию 0015):
+// Дёргается pg_cron через pg_net раз в час (см. миграцию 0018 + 0019):
 //   SELECT net.http_post(
 //     url:='https://<ref>.supabase.co/functions/v1/renew-subscription',
-//     headers:='{"Authorization":"Bearer <service_role_key>"}'::jsonb
+//     headers:=jsonb_build_object(
+//       'Content-Type','application/json',
+//       'apikey', <sb_secret_...>,          -- новый secret key (из Vault: secret_api_key)
+//       'x-cron-secret', <CRON_SHARED_SECRET> -- общий секрет (из Vault: cron_shared_secret)
+//     )
 //   );
+//
+// ВАЖНО (миграция на новые ключи Supabase, dev.6.9.2):
+//   Проект переведён на publishable/secret API keys. Legacy service_role JWT больше
+//   не принимается gateway'ем (UNAUTHORIZED_LEGACY_JWT). Новые ключи — НЕ JWT, их
+//   нельзя слать в Authorization: Bearer. Поэтому:
+//     • функция задеплоена с verify_jwt=false (см. supabase/config.toml);
+//     • cron шлёт secret key в заголовке apikey (для PostgREST внутри функции);
+//     • cron шлёт общий секрет в x-cron-secret — им функция авторизует вызов
+//       (иначе открытый URL был бы доступен всем).
 //
 // Логика:
 //   1. Отбираем entitlements: plan='pro', auto_renew=true, cancel_at_period_end=false,
@@ -35,16 +48,19 @@
 //           auto_renew=false, valid_until=NULL, next_renewal_at=NULL, payment_method_id=NULL.
 //           TODO(dev.6.5.1 email): отправить renewal_failed email через Resend.
 //
-// Auth: JWT verification включена (Supabase проверяет Bearer token).
-// pg_cron присылает service_role_key — он проходит проверку как admin.
+// Auth: verify_jwt=false (см. config.toml). Платформа НЕ проверяет вызывающего —
+// это делает сам код: pg_cron присылает x-cron-secret, который должен совпасть с
+// Edge-secret CRON_SHARED_SECRET (см. блок авторизации в handler ниже).
 //
 // Secrets:
 //   YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, YOOKASSA_RETURN_URL_BASE
 //   SUPABASE_URL, SUPABASE_SECRET_KEYS (default), SUPABASE_SERVICE_ROLE_KEY (fallback)
+//   INTERNAL_SHARED_SECRET (для вызова send-user-email)
+//   CRON_SHARED_SECRET (авторизация входящего cron-вызова через x-cron-secret)
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-cron-secret',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
@@ -148,6 +164,23 @@ class AdminClient {
 export const handler = async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS })
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
+
+  // ─── Авторизация вызова (v0.9.35-dev.6.9.2) ──────────────────────────────────
+  // Функция задеплоена с verify_jwt=false (новые ключи Supabase не JWT, платформа
+  // их не проверяет — см. config.toml). Поэтому проверяем вызывающего сами:
+  // pg_cron присылает общий секрет в заголовке x-cron-secret. Он должен совпасть
+  // с Edge-secret CRON_SHARED_SECRET. Тот же паттерн, что x-internal-token у
+  // send-user-email. Сравнение в постоянном времени, чтобы не течь по времени.
+  {
+    const expected = Deno.env.get('CRON_SHARED_SECRET')
+    if (!expected) {
+      return json({ error: 'Server not configured: CRON_SHARED_SECRET missing' }, 500)
+    }
+    const provided = req.headers.get('x-cron-secret') ?? ''
+    if (!constantTimeEqual(provided, expected)) {
+      return json({ error: 'Unauthorized' }, 401)
+    }
+  }
 
   try {
     // ─── env ──
@@ -571,4 +604,21 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   })
+}
+
+/**
+ * Сравнение строк в постоянном времени (защита от timing-attack при сверке
+ * секрета). Длина сравнивается первой; если не совпадает — сразу false, но
+ * всё равно проходим по байтам ожидаемой строки.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder()
+  const ab = enc.encode(a)
+  const bb = enc.encode(b)
+  if (ab.length !== bb.length) return false
+  let diff = 0
+  for (let i = 0; i < ab.length; i++) {
+    diff |= ab[i] ^ bb[i]
+  }
+  return diff === 0
 }
