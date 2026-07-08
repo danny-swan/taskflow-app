@@ -169,8 +169,8 @@ Deno.test('create-payment: update-card mode — 1₽ + save_payment_method=true'
     // Для update-card в metadata НЕТ tier/plan
     assertEquals(yooBody.metadata.tier, undefined)
     assertEquals(yooBody.metadata.plan, undefined)
-    // return_url ведёт на /settings?card=updated
-    assert((yooBody.confirmation.return_url as string).includes('/settings?card=updated'))
+    // return_url ведёт на существующую страницу /pay/success?ctx=card (фикс 404)
+    assert((yooBody.confirmation.return_url as string).includes('/pay/success?ctx=card'))
   } finally {
     await teardown(server, restore)
   }

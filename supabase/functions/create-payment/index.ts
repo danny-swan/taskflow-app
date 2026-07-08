@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (c) 2026 Daniil Lebedev (danny-swan)
 //
-// v0.9.35-dev.6.5.1 — Supabase Edge Function: create-payment
+// v0.9.35-dev.6.10.2 — Supabase Edge Function: create-payment
+//
+// dev.6.10.2: Фикс 404 после привязки карты. return_url для update-card/trial
+//             теперь ведёт на существующую /pay/success?ctx=card|trial
+//             (раньше — на несуществующий роут /settings?* → 404 на GitHub Pages).
 //
 // Создаёт платёж в ЮKassa (API v3) и возвращает confirmation_url для redirect.
 // Требует JWT пользователя (клиент вызывает как аутентифицированный юзер) —
@@ -194,10 +198,15 @@ export const handler = async (req: Request): Promise<Response> => {
           description: isTrialMode ? 'TaskFlow Pro Trial — привязка карты (1 ₽, возврат автоматически)' : UPDATE_CARD_SPEC.description }
       : { amount: spec!.amount, currency: spec!.currency, description: spec!.description }
 
+    // return_url для confirmation.type=redirect ДОЛЖЕН быть абсолютным http/https
+    // и вести на СУЩЕСТВУЮЩУЮ страницу. Используем /pay/success — она сама
+    // открывает приложение через deep-link taskflow:// (см. pay/success.html).
+    // Раньше update-card/trial вели на /settings?* — такого роута на лендинге
+    // (GitHub Pages) нет → пользователь видел 404 после привязки карты.
     const returnUrl = isUpdateCard
-      ? `${returnBase.replace(/\/$/, '')}/settings?card=updated`
+      ? `${returnBase.replace(/\/$/, '')}/pay/success?ctx=card`
       : isTrialMode
-      ? `${returnBase.replace(/\/$/, '')}/settings?trial=started`
+      ? `${returnBase.replace(/\/$/, '')}/pay/success?ctx=trial`
       : `${returnBase.replace(/\/$/, '')}/pay/success?tier=${tier}`
 
     const yooPayload: Record<string, unknown> = {
