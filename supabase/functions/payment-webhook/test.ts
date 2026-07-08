@@ -80,9 +80,13 @@ Deno.test('webhook: payment.succeeded monthly — активация pro + auto_
   server.on('GET', '/v3/payments/yoo-payment-42', verifyPayment(payment))
   // payment_events insert
   server.on('POST', '/rest/v1/payment_events', () => ({ status: 201 }))
-  // savePaymentMethod: PATCH deactivate old + POST insert new
+  // savePaymentMethod: PATCH deactivate old + POST upsert new (return=representation)
   server.on('PATCH', '/rest/v1/payment_methods', () => ({ status: 204 }))
-  server.on('POST', '/rest/v1/payment_methods', () => ({ status: 201 }))
+  // upsertReturning ожидает representation-массив с внутренним uuid строки
+  server.on('POST', '/rest/v1/payment_methods', () => ({
+    status: 201,
+    body: [{ id: 'pm-row-uuid', user_id: USER_ID, provider: 'yookassa', external_id: 'pm-token-abc', is_active: true }],
+  }))
   // existing entitlement — free
   server.on('GET', '/rest/v1/user_entitlements', () => ({
     status: 200,
@@ -130,7 +134,9 @@ Deno.test('webhook: payment.succeeded monthly — активация pro + auto_
     assertEquals(entRow.plan, 'pro')
     assertEquals(entRow.auto_renew, true)
     assertEquals(entRow.cancel_at_period_end, false)
-    assertEquals(entRow.payment_method_id, 'pm-token-abc')
+    // dev.6.10.1: payment_method_id = ВНУТРЕННИЙ uuid строки payment_methods
+    // (FK на payment_methods.id), а не токен ЮKassa.
+    assertEquals(entRow.payment_method_id, 'pm-row-uuid')
     assertEquals(entRow.renewal_attempts_count, 0)
     assert(typeof entRow.valid_until === 'string' && entRow.valid_until.length > 0)
   } finally {
@@ -196,9 +202,10 @@ Deno.test('webhook: payment.succeeded lifetime — auto_renew=false, valid_until
   }
 })
 
-Deno.test('webhook: payment.succeeded mode=update-card — refund + email refund_completed', async () => {
+Deno.test('webhook: payment.succeeded mode=update-card (СБП, одношаговый) — привязка метода + auto_renew=true + refund', async () => {
   const server = await MockServer.start()
 
+  // СБП: type=sbp, card отсутствует, saved=true
   const payment = {
     id: 'yoo-update-card-1',
     status: 'succeeded',
@@ -206,11 +213,10 @@ Deno.test('webhook: payment.succeeded mode=update-card — refund + email refund
     captured_at: '2026-07-07T10:00:00Z',
     created_at: '2026-07-07T09:59:00Z',
     payment_method: {
-      type: 'bank_card',
+      type: 'sbp',
       id: 'pm-token-new',
       saved: true,
-      card: { first6: '400000', last4: '0000', card_type: 'Visa', expiry_month: '11', expiry_year: '2029' },
-      title: 'Visa *0000',
+      title: 'СБП',
     },
     metadata: { user_id: USER_ID, mode: 'update-card' },
   }
@@ -218,7 +224,17 @@ Deno.test('webhook: payment.succeeded mode=update-card — refund + email refund
   server.on('GET', '/v3/payments/yoo-update-card-1', verifyPayment(payment))
   server.on('POST', '/rest/v1/payment_events', () => ({ status: 201 }))
   server.on('PATCH', '/rest/v1/payment_methods', () => ({ status: 204 }))
-  server.on('POST', '/rest/v1/payment_methods', () => ({ status: 201 }))
+  // upsertReturning → внутренний uuid строки payment_methods
+  server.on('POST', '/rest/v1/payment_methods', () => ({
+    status: 201,
+    body: [{ id: 'pm-row-uuid', user_id: USER_ID, provider: 'yookassa', external_id: 'pm-token-new', method_type: 'sbp', is_active: true }],
+  }))
+  // selectOne valid_until (текущий период) + PATCH привязки
+  server.on('GET', '/rest/v1/user_entitlements', () => ({
+    status: 200,
+    body: [{ valid_until: '2026-08-06T00:00:00Z' }],
+  }))
+  server.on('PATCH', '/rest/v1/user_entitlements', () => ({ status: 204 }))
   // ЮKassa refund
   server.on('POST', '/v3/refunds', () => ({
     status: 200,
@@ -251,15 +267,23 @@ Deno.test('webhook: payment.succeeded mode=update-card — refund + email refund
     const pmRow = JSON.parse(pmCall!.body)[0] ?? JSON.parse(pmCall!.body)
     assertEquals(pmRow.external_id, 'pm-token-new')
 
+    // dev.6.10.1: entitlement ОБНОВЛЯЕТСЯ через PATCH (одношаговый флоу):
+    // auto_renew=true, cancel_at_period_end=false, payment_method_id=внутренний uuid.
+    const entPatch = server.findCall('PATCH', '/rest/v1/user_entitlements')
+    assert(entPatch !== undefined, 'user_entitlements PATCH not called')
+    const entRow = JSON.parse(entPatch!.body)
+    assertEquals(entRow.payment_method_id, 'pm-row-uuid')
+    assertEquals(entRow.auto_renew, true)
+    assertEquals(entRow.cancel_at_period_end, false)
+    assertEquals(entRow.renewal_attempts_count, 0)
+    assertEquals(entRow.next_renewal_at, '2026-08-06T00:00:00Z')
+
     // Refund вызван
     const refundCall = server.findCall('POST', '/v3/refunds')
     assert(refundCall !== undefined, 'refund not initiated')
     const refundBody = JSON.parse(refundCall!.body)
     assertEquals(refundBody.payment_id, 'yoo-update-card-1')
     assertEquals(refundBody.amount.value, '1.00')
-
-    // user_entitlements НЕ должен обновляться (update-card не трогает подписку)
-    assertEquals(server.calls.filter((c) => c.method === 'POST' && c.path === '/rest/v1/user_entitlements').length, 0)
   } finally {
     restore()
     await server.stop()

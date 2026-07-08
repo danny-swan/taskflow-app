@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (c) 2026 Daniil Lebedev (danny-swan)
 //
-// v0.9.35-dev.6.9.2 — Supabase Edge Function: payment-webhook
+// v0.9.35-dev.6.10.1 — Supabase Edge Function: payment-webhook
 //
-// dev.6.9.2 — баг #2 (двухшаговое «Включить автопродление»):
-//   в режиме update-card теперь проставляем entitlement.payment_method_id
-//   (токен ЮKassa), но НЕ включаем auto_renew — это делает
-//   reactivate-subscription отдельным явным шагом.
+// dev.6.10.1 — ФИКС бага привязки карты (СБП/update-card):
+//   1) payment_method_id (FK на payment_methods.id) теперь получает
+//      ВНУТРЕННИЙ uuid строки payment_methods (savePaymentMethod возвращает
+//      его через return=representation), а НЕ токен ЮKassa. Раньше
+//      токен шёл в FK-колонку → FK падал тихо → payment_method_id=NULL →
+//      кнопка «Включить автопродление» не появлялась (тупик).
+//      Аналогично исправлено в trial и purchase.
+//   2) ОДНОШАГОВЫЙ flow: update-card с сохранённым методом сразу
+//      выставляет auto_renew=true, cancel_at_period_end=false (привязка
+//      карты через 1₽ = явное согласие). Отключение — detach-payment-method.
+//   3) Ошибка bind больше не глотается тихо — пишется в payment_events.error.
 //
 // Принимает уведомления от ЮKassa (payment.succeeded, payment.canceled,
 // refund.succeeded), верифицирует их и обновляет user_entitlements.
@@ -126,6 +133,27 @@ class AdminClient {
       body: JSON.stringify([row]),
     })
     if (resp.ok) return { ok: true, status: resp.status }
+    const errJson = await resp.json().catch(() => ({}))
+    return { ok: false, status: resp.status, error: { message: errJson.message ?? `HTTP ${resp.status}` } }
+  }
+
+  // Как upsert, но возвращает представление вставленной/обновлённой строки
+  // (нужно, чтобы получить внутренний uuid payment_methods.id).
+  async upsertReturning<T = Record<string, unknown>>(
+    table: string,
+    row: Record<string, unknown>,
+    onConflict: string,
+  ): Promise<{ ok: boolean; status: number; data?: T | null; error?: { message: string } }> {
+    const url = `${this.baseUrl}/rest/v1/${table}?on_conflict=${onConflict}`
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: this.headers({ Prefer: 'return=representation,resolution=merge-duplicates' }),
+      body: JSON.stringify([row]),
+    })
+    if (resp.ok) {
+      const arr = await resp.json().catch(() => []) as T[]
+      return { ok: true, status: resp.status, data: Array.isArray(arr) && arr.length > 0 ? arr[0] : null }
+    }
     const errJson = await resp.json().catch(() => ({}))
     return { ok: false, status: resp.status, error: { message: errJson.message ?? `HTTP ${resp.status}` } }
   }
@@ -323,45 +351,75 @@ async function handlePaymentSucceeded(
     }
   }
 
-  // 1) Сохранение способа оплаты (если ЮKassa прислала payment_method.saved=true)
+  // 1) Сохранение способа оплаты (если ЮKassa прислала payment_method.saved=true).
+  //
+  // savedMethodId    = токен ЮKassa (payment_method.id) — храним в payment_methods.external_id.
+  // savedMethodRowId = внутренний uuid строки payment_methods.id — именно его
+  //                    требует user_entitlements.payment_method_id (FK на payment_methods.id).
+  // Раньше (баг dev.6.9.2) в FK-колонку писался токен ЮKassa — FK падал
+  // тихо, payment_method_id оставался NULL, кнопка «Включить» не появлялась.
   let savedMethodId: string | null = null
+  let savedMethodRowId: string | null = null
   if (payment.payment_method?.saved === true && payment.payment_method?.id) {
     const smRes = await savePaymentMethod(admin, userId, payment)
     if (!smRes.ok) {
       return { ok: false, msg: 'payment_method save failed', error: smRes.error }
     }
     savedMethodId = payment.payment_method.id
+    savedMethodRowId = smRes.internalId ?? null
   }
 
-  // 2) Режим update-card — сохраняем способ оплаты в entitlement + refund 1₽.
+  // 2) Режим update-card — привязываем карту к подписке + refund 1₽.
   //
-  // dev.6.9.2 (двухшаговый акцепт): проставляем entitlement.payment_method_id =
-  // <токен ЮKassa>, чтобы reactivate-subscription смог включить автопродление.
-  // ВАЖНО: auto_renew и cancel_at_period_end здесь НЕ трогаем — включение
-  // рекуррентных списаний требует отдельного явного согласия пользователя
-  // (фронт вызывает reactivate-subscription по возврату). Это симметрично
-  // detach-payment-method, где всё обнуляется одним действием.
+  // dev.6.10.1 (ОДНОШАГОВЫЙ flow): сам факт привязки карты через
+  // платёж 1₽ = явное согласие на автопродление. Поэтому сразу
+  // выставляем auto_renew=true, cancel_at_period_end=false и привязываем
+  // payment_method_id = ВНУТРЕННИЙ uuid строки payment_methods (savedMethodRowId),
+  // а не токен ЮKassa. Отключение — отдельным действием
+  // (detach-payment-method), что закрывает требование ЮKassa «отвязать самостоятельно».
   if (isUpdateCard) {
-    if (savedMethodId) {
-      // Привязываем сохранённый метод к подписке. Только payment_method_id —
-      // без auto_renew (двухшаговый flow «Включить автопродление»).
+    if (savedMethodRowId) {
+      // Продление: valid_until не трогаем (это не покупка), но next_renewal_at
+      // должен указывать на конец текущего периода, чтобы cron забрал.
+      const existing = await admin.selectOne<{ valid_until: string | null }>(
+        'user_entitlements',
+        'valid_until',
+        { user_id: userId },
+      )
+      const validUntil = existing.ok ? (existing.data?.valid_until ?? null) : null
+      const bindPatch: Record<string, unknown> = {
+        payment_method_id: savedMethodRowId,
+        auto_renew: true,
+        cancel_at_period_end: false,
+        renewal_attempts_count: 0,
+        updated_at: new Date().toISOString(),
+      }
+      if (validUntil) {
+        bindPatch.next_renewal_at = validUntil
+      }
       const bindRes = await admin.update(
         'user_entitlements',
         { user_id: userId },
-        { payment_method_id: savedMethodId, updated_at: new Date().toISOString() },
+        bindPatch,
       )
       if (!bindRes.ok) {
-        // Метод сохранён в payment_methods, но не привязан к entitlement —
-        // не критично для возврата денег, но фиксируем ошибку явно.
+        // Метод сохранён в payment_methods, но не привязан к entitlement.
+        // Рефанд всё равно делаем (деньги важнее), но возвращаем ok=false,
+        // чтобы ошибка попала в payment_events.error и была видна.
         console.error(
           `update-card: failed to bind payment_method_id for user ${userId}: ${bindRes.error?.message}`,
         )
-        // Всё равно инициируем refund ниже — деньги пользователю важнее.
+        await initiateRefund(shopId, yooSecretKey, payment)
+        return {
+          ok: false,
+          msg: 'update-card: bind failed (refund still initiated)',
+          error: `bind payment_method_id failed: ${bindRes.error?.message ?? 'unknown'}`,
+        }
       }
     } else {
-      // update-card без сохранённого метода — ситуация аномальная (возможно,
-      // гео-ограничение, SBP-разовый, банковский кошелёк без рекуррента).
-      // Всё равно refund'им 1₽, но логгируем — автопродление включить нельзя.
+      // update-card без сохранённого метода — аномалия (гео-ограничение,
+      // разовый СБП без saved=true и т.п.). Refund'им, но автопродление
+      // включить нельзя — нет токена для рекуррентных списаний.
       console.warn(`update-card without saved method for user ${userId}, payment ${payment.id}`)
     }
     const refundRes = await initiateRefund(shopId, yooSecretKey, payment)
@@ -370,7 +428,7 @@ async function handlePaymentSucceeded(
     }
     return {
       ok: true,
-      msg: `update-card: bound method ${savedMethodId ?? '—'} to entitlement, refund ${refundRes.refundId ?? 'initiated'}`,
+      msg: `update-card: bound method ${savedMethodRowId ?? '—'} + auto_renew=true, refund ${refundRes.refundId ?? 'initiated'}`,
     }
   }
 
@@ -417,13 +475,14 @@ async function handlePaymentSucceeded(
       activated_at: now.toISOString(),
       source: 'trial',
       trial_used: true,
-      auto_renew: savedMethodId ? true : false,
+      auto_renew: savedMethodRowId ? true : false,
       cancel_at_period_end: false,
       notes: 'Trial started via card binding (payment-webhook)',
       updated_at: now.toISOString(),
     }
-    if (savedMethodId) {
-      trialPatch.payment_method_id = savedMethodId
+    // FK на payment_methods.id — пишем внутренний uuid строки, не токен ЮKassa.
+    if (savedMethodRowId) {
+      trialPatch.payment_method_id = savedMethodRowId
     }
 
     const upsertTrialRes = await admin.upsert('user_entitlements', trialPatch, 'user_id')
@@ -508,8 +567,9 @@ async function handlePaymentSucceeded(
     // вручную снова — снимаем cancel_at_period_end.
     patch.auto_renew = true
     patch.cancel_at_period_end = false
-    if (savedMethodId) {
-      patch.payment_method_id = savedMethodId
+    // FK на payment_methods.id — пишем внутренний uuid строки, не токен ЮKassa.
+    if (savedMethodRowId) {
+      patch.payment_method_id = savedMethodRowId
     }
     patch.next_renewal_at = validUntil // продлеваем на дату окончания
     patch.renewal_attempts_count = 0 // сбрасываем счётчик провалов
@@ -734,7 +794,7 @@ async function savePaymentMethod(
   admin: AdminClient,
   userId: string,
   payment: YooKassaPaymentObject,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; internalId?: string; error?: string }> {
   const pm = payment.payment_method
   if (!pm?.id) {
     return { ok: false, error: 'payment_method.id missing' }
@@ -771,11 +831,17 @@ async function savePaymentMethod(
     saved_at: nowIso,
   }
 
-  const upsertRes = await admin.upsert('payment_methods', row, 'provider,external_id')
+  // return=representation — нужен внутренний uuid payment_methods.id, чтобы
+  // привязать его к user_entitlements.payment_method_id (FK на payment_methods.id).
+  const upsertRes = await admin.upsertReturning<{ id: string }>(
+    'payment_methods',
+    row,
+    'provider,external_id',
+  )
   if (!upsertRes.ok) {
     return { ok: false, error: `upsert failed: ${upsertRes.error?.message}` }
   }
-  return { ok: true }
+  return { ok: true, internalId: upsertRes.data?.id }
 }
 
 async function initiateRefund(

@@ -3162,15 +3162,14 @@ function SubscriptionSection() {
                 {detachBusy ? t('Отключаем…', 'Disabling…') : t('Отключить', 'Disable')}
               </button>
             )}
-            {/* v0.9.35-dev.6.9.3: кнопка включения автопродления.
-                Показываем, если карта привязана (paymentMethodId != null),
-                но автопродление сейчас не активно — это покрывает ДВА случая:
-                  • cancelAtPeriodEnd=true (юзер отменял) → «Включить обратно»;
-                  • !autoRenew && !cancel (карта только что привязана через
-                    update-card, шаг 2 двухшагового флоу) → «Включить».
+            {/* v0.9.35-dev.6.10.1: кнопка включения автопродления (fallback).
+                При ОДНОШАГОВОМ флоу webhook сам включает auto_renew сразу
+                после привязки карты — поэтому обычно здесь сразу видна кнопка
+                «Отключить». Эта кнопка остаётся как fallback для двух ситуаций:
+                  • cancelAtPeriodEnd=true (юзер раньше отключал) → «Включить обратно»;
+                  • legacy/рассинхрон (карта привязана, но auto_renew=false) → «Включить».
                 Оба вызывают reactivate-subscription (auto_renew=true,
-                cancel_at_period_end=false). Раньше кнопка требовала
-                cancelAtPeriodEnd → после привязки карты был тупик. */}
+                cancel_at_period_end=false). */}
             {entitlement.paymentMethodId && !entitlement.autoRenew && (
               <button
                 type="button"
@@ -3233,16 +3232,34 @@ function SubscriptionSection() {
               </p>
             )}
             {!pmLoading && paymentMethods.length > 0 && paymentMethods.map((pm) => {
+              // v0.9.35-dev.6.10.1: различаем тип метода. У СБП/ЮMoney/кошельков
+              // нет номера карты — показываем название без маски «••••»,
+              // чтобы не рисовать вводящее в заблуждение «Карта •••• ••••».
+              const mt = (pm.method_type ?? '').toLowerCase();
+              const isCard = mt === 'bank_card' || mt === '' || (!!pm.card_last4);
               const expStr = (pm.card_expiry_month != null && pm.card_expiry_year != null)
                 ? ` · ${String(pm.card_expiry_month).padStart(2, '0')}/${String(pm.card_expiry_year).slice(-2)}`
                 : '';
+              // Человекочитаемое название для не-карточных методов.
+              const methodLabel = (() => {
+                switch (mt) {
+                  case 'sbp': return t('СБП', 'SBP');
+                  case 'yoo_money': return t('ЮMoney', 'YooMoney');
+                  case 'sberbank': return t('SberPay', 'SberPay');
+                  case 'tinkoff_bank': return t('T-Pay', 'T-Pay');
+                  case 'qiwi': return 'QIWI';
+                  default: return t('Электронный кошелёк', 'E-wallet');
+                }
+              })();
               const brandStr = pm.card_brand ? pm.card_brand.toUpperCase() : t('Карта', 'Card');
               return (
                 <div key={pm.id} className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <CreditCard size={14} className="text-muted shrink-0" />
                     <span className="text-[13px] font-mono tabular-nums">
-                      {brandStr} •••• {pm.card_last4 ?? '••••'}{expStr}
+                      {isCard
+                        ? `${brandStr} •••• ${pm.card_last4 ?? '••••'}${expStr}`
+                        : methodLabel}
                     </span>
                   </div>
                   {/* v0.9.35-dev.6.9.3: в блоке карты остаётся только «Обновить».

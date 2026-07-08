@@ -698,6 +698,10 @@ export interface PaymentMethodRow {
   card_expiry_year: number | null;
   is_active: boolean;
   saved_at: string;
+  // v0.9.35-dev.6.10.1: тип метода (СБП/ЮMoney/карта и т.п.), чтобы UI
+  // не показывал «Карта ••••» для СБП без номера карты.
+  method_type: string | null;
+  card_type: string | null;
 }
 
 /**
@@ -708,7 +712,7 @@ export async function fetchActivePaymentMethods(
 ): Promise<PaymentMethodRow[]> {
   const { data, error } = await supabase
     .from('payment_methods')
-    .select('id, user_id, provider, external_id, card_brand, card_last4, card_expiry_month, card_expiry_year, is_active, saved_at')
+    .select('id, user_id, provider, external_id, card_brand, card_last4, card_expiry_month, card_expiry_year, is_active, saved_at, method_type, card_type')
     .eq('user_id', userId)
     .eq('is_active', true)
     .order('saved_at', { ascending: false });
