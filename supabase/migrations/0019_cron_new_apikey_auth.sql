@@ -29,34 +29,58 @@
 --
 -- Старый секрет service_role_key в Vault больше этим job не используется
 -- (оставляем его в Vault на случай отката, но из тела job убираем).
+--
+-- CI-ЗАМЕЧАНИЕ (dev.6.10.2): на vanilla-Postgres (GitHub Actions) расширения
+-- pg_cron/pg_net недоступны. Чтобы миграция проходила и там, весь cron-блок
+-- обёрнут в тот же guard по pg_available_extensions, что и в 0015/0018.
+-- На реальном Supabase Pro расширения есть → расписание пересоздаётся с новой
+-- auth-моделью как раньше (поведение не изменилось, это no-op для прода).
 -- ============================================================================
 
 -- Пересоздаём расписание с новой авторизацией. Идемпотентно: сначала снимаем
 -- существующее задание, затем создаём заново.
-DO $$
+DO $mig$
+DECLARE
+  has_pg_cron boolean;
+  has_pg_net  boolean;
 BEGIN
-  PERFORM cron.unschedule('taskflow-renew-subscriptions');
-EXCEPTION WHEN OTHERS THEN
-  NULL;
-END $$;
+  SELECT exists(SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron') INTO has_pg_cron;
+  SELECT exists(SELECT 1 FROM pg_available_extensions WHERE name = 'pg_net')  INTO has_pg_net;
 
-SELECT cron.schedule(
-  'taskflow-renew-subscriptions',
-  '0 * * * *',
-  $CRON$
-  SELECT net.http_post(
-    url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'project_url' LIMIT 1)
-           || '/functions/v1/renew-subscription',
-    headers := jsonb_build_object(
-      'Content-Type',   'application/json',
-      'apikey',         (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'secret_api_key' LIMIT 1),
-      'x-cron-secret',  (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'cron_shared_secret' LIMIT 1)
-    ),
-    body := '{}'::jsonb,
-    timeout_milliseconds := 25000
+  IF NOT has_pg_cron OR NOT has_pg_net THEN
+    RAISE NOTICE '[migration 0019] pg_cron/pg_net NOT available — skipping cron reschedule (CI/vanilla Postgres).';
+    RETURN;
+  END IF;
+
+  -- Идемпотентно снимаем предыдущее задание (если было).
+  BEGIN
+    PERFORM cron.unschedule('taskflow-renew-subscriptions');
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+
+  -- Создаём расписание заново с новой auth-моделью (apikey + x-cron-secret).
+  PERFORM cron.schedule(
+    'taskflow-renew-subscriptions',
+    '0 * * * *',
+    $CRON$
+    SELECT net.http_post(
+      url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'project_url' LIMIT 1)
+             || '/functions/v1/renew-subscription',
+      headers := jsonb_build_object(
+        'Content-Type',   'application/json',
+        'apikey',         (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'secret_api_key' LIMIT 1),
+        'x-cron-secret',  (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'cron_shared_secret' LIMIT 1)
+      ),
+      body := '{}'::jsonb,
+      timeout_milliseconds := 25000
+    );
+    $CRON$
   );
-  $CRON$
-);
+
+  RAISE NOTICE '[migration 0019] pg_cron schedule updated (new apikey auth).';
+END
+$mig$;
 
 -- ============================================================================
 -- Проверка после применения:
