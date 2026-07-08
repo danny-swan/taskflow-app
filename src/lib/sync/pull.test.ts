@@ -240,9 +240,10 @@ describe('pull worker: applier statuses', () => {
 });
 
 describe('pull worker: applier tasks', () => {
-  it('task с неизвестным status_id пропускается (deferred)', async () => {
+  it('task с неизвестным status_id СКИПАЕТСЯ только если статусов нет вообще', async () => {
     const { _internals } = await import('./pull');
-    // Локально нет status'а с uuid 'st-missing' → applier должен вернуть false.
+    // В этом тесте таблица statuses пуста (seed не вызывался) → fallback не найдёт
+    // ни top-, ни любого статуса → задача пропускается (return false).
     const changed = _internals.applyCloudRowTasks({
       id: 'tk-1',
       title: 'orphan task',
@@ -264,6 +265,73 @@ describe('pull worker: applier tasks', () => {
     // Локальной задачи не появилось.
     const row = liveDb!.exec(`SELECT COUNT(*) FROM tasks WHERE uuid='tk-1'`)[0].values[0][0];
     expect(row).toBe(0);
+  });
+
+  it('Баг #4: task с неизвестным status_id → fallback на первый top-статус', async () => {
+    const { _internals } = await import('./pull');
+    // Создаём top-статус локально (behavior='top', hidden=0).
+    liveDb!.run(
+      `INSERT INTO statuses (name, color, sort_order, behavior, hidden, uuid, version, client_id, updated_at)
+       VALUES ('Top', '#111', 0, 'top', 0, 'st-top', 1, 'test', '2026-07-05T10:00:00Z')`,
+    );
+    const topId = liveDb!.exec(`SELECT id FROM statuses WHERE uuid='st-top'`)[0].values[0][0] as number;
+
+    // Облачная задача ссылается на несуществующий локально status_id.
+    const changed = _internals.applyCloudRowTasks({
+      id: 'tk-orphan',
+      title: 'orphan with fallback',
+      comment: '',
+      status_id: 'st-does-not-exist',
+      tag_id: null,
+      start_date: null,
+      deadline: null,
+      finish_date: null,
+      sort_order: 0,
+      archived: false,
+      updated_at: '2026-07-05T12:00:00Z',
+      created_at: '2026-07-05T12:00:00Z',
+      deleted_at: null,
+      version: 1,
+      client_id: 'other',
+    });
+    // Задача ВСТАВЛЕНА (не пропущена) с top-статусом.
+    expect(changed).toBe(true);
+    const row = liveDb!.exec(
+      `SELECT title, status_id FROM tasks WHERE uuid='tk-orphan'`,
+    )[0].values[0];
+    expect(row[0]).toBe('orphan with fallback');
+    expect(row[1]).toBe(topId);
+  });
+
+  it('Баг #4: нет top-статуса → fallback на любой доступный статус', async () => {
+    const { _internals } = await import('./pull');
+    // Только middle-статус (top отсутствует).
+    liveDb!.run(
+      `INSERT INTO statuses (name, color, sort_order, behavior, hidden, uuid, version, client_id, updated_at)
+       VALUES ('Middle', '#222', 0, 'middle', 0, 'st-mid', 1, 'test', '2026-07-05T10:00:00Z')`,
+    );
+    const midId = liveDb!.exec(`SELECT id FROM statuses WHERE uuid='st-mid'`)[0].values[0][0] as number;
+
+    const changed = _internals.applyCloudRowTasks({
+      id: 'tk-anyfb',
+      title: 'orphan any fallback',
+      comment: '',
+      status_id: 'st-missing',
+      tag_id: null,
+      start_date: null,
+      deadline: null,
+      finish_date: null,
+      sort_order: 0,
+      archived: false,
+      updated_at: '2026-07-05T12:00:00Z',
+      created_at: '2026-07-05T12:00:00Z',
+      deleted_at: null,
+      version: 1,
+      client_id: 'other',
+    });
+    expect(changed).toBe(true);
+    const row = liveDb!.exec(`SELECT status_id FROM tasks WHERE uuid='tk-anyfb'`)[0].values[0];
+    expect(row[0]).toBe(midId);
   });
 
   it('task с известным status_id — INSERT', async () => {

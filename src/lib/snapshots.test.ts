@@ -131,6 +131,77 @@ describe('snapshots — среда', () => {
   });
 });
 
+describe('snapshots — изоляция реестра по аккаунту (Баг #3)', () => {
+  it('снимки userA не видны под userB (разные ключи реестра)', async () => {
+    // Под userA создаём снимок.
+    setBoundUserId('user-A');
+    const metaA = await createSnapshot('manual');
+    expect(readRegistry()).toHaveLength(1);
+    expect(readRegistry()[0].id).toBe(metaA.id);
+
+    // Переключаемся на userB — его реестр пуст.
+    setBoundUserId('user-B');
+    expect(readRegistry()).toEqual([]);
+
+    // userB создаёт свой снимок — он не смешивается с userA.
+    const metaB = await createSnapshot('manual');
+    const regB = readRegistry();
+    expect(regB).toHaveLength(1);
+    expect(regB[0].id).toBe(metaB.id);
+    expect(regB[0].id).not.toBe(metaA.id);
+
+    // Возвращаемся к userA — его снимок на месте и не затронут.
+    setBoundUserId('user-A');
+    const regA = readRegistry();
+    expect(regA).toHaveLength(1);
+    expect(regA[0].id).toBe(metaA.id);
+  });
+
+  it('снимки хранятся под ключом snapshot_registry_v1_<userId>', async () => {
+    setBoundUserId('user-X');
+    await createSnapshot('manual');
+    // Персональный ключ заполнен, общий — нет.
+    expect(settingsStore.get('snapshot_registry_v1_user-X')).toBeTruthy();
+    expect(settingsStore.get('snapshot_registry_v1')).toBeUndefined();
+  });
+
+  it('миграция: старый общий реестр переезжает в персональный ключ userA', () => {
+    // Симулируем старую базу: общий реестр со снимком userA (и одним без привязки).
+    const legacy = JSON.stringify([
+      { id: 'old-A', label: 'manual', createdAt: '2026-07-01T00:00:00Z', size: 1, platform: 'web', boundUserId: 'user-A' },
+      { id: 'old-null', label: 'manual', createdAt: '2026-07-02T00:00:00Z', size: 1, platform: 'web', boundUserId: null },
+    ]);
+    settingsStore.set('snapshot_registry_v1', legacy);
+    setBoundUserId('user-A');
+
+    // Первое чтение под userA запускает миграцию.
+    const reg = readRegistry();
+    // Свои + непривязанные снимки мигрировали (2 шт).
+    expect(reg).toHaveLength(2);
+    const ids = reg.map((s) => s.id).sort();
+    expect(ids).toEqual(['old-A', 'old-null']);
+
+    // Старый общий ключ удалён, персональный — заполнен.
+    expect(settingsStore.get('snapshot_registry_v1')).toBeUndefined();
+    expect(settingsStore.get('snapshot_registry_v1_user-A')).toBeTruthy();
+  });
+
+  it('миграция: чужие снимки из старого реестра отбрасываются', () => {
+    // Общий реестр содержит ТОЛЬКО снимки userB.
+    const legacy = JSON.stringify([
+      { id: 'old-B', label: 'manual', createdAt: '2026-07-01T00:00:00Z', size: 1, platform: 'web', boundUserId: 'user-B' },
+    ]);
+    settingsStore.set('snapshot_registry_v1', legacy);
+    setBoundUserId('user-A');
+
+    // Под userA чужой снимок не появляется.
+    const reg = readRegistry();
+    expect(reg).toEqual([]);
+    // Старый ключ всё равно вычищен (чтобы не тянуть чужое дальше).
+    expect(settingsStore.get('snapshot_registry_v1')).toBeUndefined();
+  });
+});
+
 describe('snapshots — web CRUD', () => {
   it('create → list → restore → delete', async () => {
     const meta = await createSnapshot('manual');
