@@ -2309,6 +2309,7 @@ function SyncSection() {
   const [syncing, setSyncing] = useState(false);
   const syncModuleRef = useRef<any>(null);
   const pushToast = useStore(s => s.pushToast);
+  const refresh = useStore(s => s.refresh);
 
   // ─── Снимки локальной базы (v0.9.35-dev.6.9.0) ───────────────────────────
   const [snapshots, setSnapshots] = useState<import('../lib/snapshots').SnapshotMeta[]>([]);
@@ -2389,6 +2390,10 @@ function SyncSection() {
       if (needsRestart) {
         setRestartAfterRestore(true);
       } else {
+        // v0.9.35-dev.6.10.4: без этого вызова стор оставался со старыми
+        // данными в памяти — восстановление реально применялось к базе,
+        // но пользователь ничего не видел на экране до перезагрузки страницы.
+        refresh();
         pushToast(t('Снимок восстановлен', 'Snapshot restored'));
       }
     } catch (e) {

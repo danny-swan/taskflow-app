@@ -1083,6 +1083,14 @@ export async function applyBackup(
     templates: Array.isArray(payload.templates),
   };
 
+  // v0.9.35-dev.6.10.4: восстановленные строки обязаны сохранять свою
+  // sync-идентичность (uuid/client_id/deleted_at/version) — иначе они
+  // невидимы для outbox, и первый же pull переигрывает их обратно в
+  // состояние из облака (баг: «снимок восстановлен, а задача не вернулась»).
+  const nowIso = new Date().toISOString();
+  const clientId = get<{ value: string }>(`SELECT value FROM settings WHERE key='client_id'`)?.value ?? null;
+  const restoredUuids: { table: 'statuses' | 'tags' | 'tasks' | 'task_templates'; uuid: string }[] = [];
+
   // Helper to do the run in both Tauri and web modes
   const sync = async (sql: string, params: any[] = []) => {
     if (IS_TAURI) {
@@ -1112,11 +1120,15 @@ export async function applyBackup(
       const name = String(s.name ?? '').trim();
       if (!name) continue;
       if (mode === 'merge' && existing.has(name.toLowerCase())) continue;
+      const uuid = typeof s.uuid === 'string' && s.uuid ? s.uuid : uuidv7();
+      const version = typeof s.version === 'number' ? s.version + 1 : 1;
       await sync(
-        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
-        [name, s.color ?? '#888', s.behavior ?? 'middle', s.sort_order ?? 0, s.is_seed ?? 0, s.is_technical ?? 0, s.hidden ?? 0, s.default_collapsed ?? 0]
+        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed, uuid, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [name, s.color ?? '#888', s.behavior ?? 'middle', s.sort_order ?? 0, s.is_seed ?? 0, s.is_technical ?? 0, s.hidden ?? 0, s.default_collapsed ?? 0,
+         uuid, nowIso, s.deleted_at ?? null, version, s.client_id ?? clientId]
       );
       counts.statuses++;
+      restoredUuids.push({ table: 'statuses', uuid });
     }
   }
 
@@ -1128,11 +1140,14 @@ export async function applyBackup(
       const name = String(t.name ?? '').trim();
       if (!name) continue;
       if (mode === 'merge' && existing.has(name.toLowerCase())) continue;
+      const uuid = typeof t.uuid === 'string' && t.uuid ? t.uuid : uuidv7();
+      const version = typeof t.version === 'number' ? t.version + 1 : 1;
       await sync(
-        `INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)`,
-        [name, t.color ?? '#888', t.sort_order ?? 0]
+        `INSERT INTO tags (name, color, sort_order, uuid, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?)`,
+        [name, t.color ?? '#888', t.sort_order ?? 0, uuid, nowIso, t.deleted_at ?? null, version, t.client_id ?? clientId]
       );
       counts.tags++;
+      restoredUuids.push({ table: 'tags', uuid });
     }
   }
 
@@ -1182,8 +1197,10 @@ export async function applyBackup(
         }
       }
 
+      const uuid = typeof t.uuid === 'string' && t.uuid ? t.uuid : uuidv7();
+      const version = typeof t.version === 'number' ? t.version + 1 : 1;
       await sync(
-        `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           title,
           t.comment ?? '',
@@ -1193,12 +1210,17 @@ export async function applyBackup(
           t.deadline ?? null,
           t.finish_date ?? null,
           t.created_at ?? now,
-          t.updated_at ?? now,
+          nowIso,
           t.sort_order ?? 0,
           t.archived ?? 0,
+          uuid,
+          t.deleted_at ?? null,
+          version,
+          t.client_id ?? clientId,
         ]
       );
       counts.tasks++;
+      restoredUuids.push({ table: 'tasks', uuid });
     }
   }
 
@@ -1236,14 +1258,32 @@ export async function applyBackup(
       }
 
       try {
+        const uuid = typeof tpl.uuid === 'string' && tpl.uuid ? tpl.uuid : uuidv7();
+        const version = typeof tpl.version === 'number' ? tpl.version + 1 : 1;
         await sync(
-          `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order) VALUES (?,?,?,?,?,?)`,
-          [name, String(tpl.title ?? ''), String(tpl.comment ?? ''), statusId, tagId, tpl.sort_order ?? 0]
+          `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, uuid, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          [name, String(tpl.title ?? ''), String(tpl.comment ?? ''), statusId, tagId, tpl.sort_order ?? 0, uuid, nowIso, tpl.deleted_at ?? null, version, tpl.client_id ?? clientId]
         );
         counts.templates++;
+        restoredUuids.push({ table: 'task_templates', uuid });
       } catch {
         // task_templates table missing (very old DB without v2 migration) — skip silently
       }
+    }
+  }
+
+  // v0.9.35-dev.6.10.4: ставим все восстановленные строки в очередь на push —
+  // иначе они остаются локальными «призраками», а следующий pull затирает
+  // их обратно состоянием из облака (не пушим сами — не знаем, что менялось).
+  for (const { table, uuid } of restoredUuids) {
+    try {
+      await sync(
+        `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES (?,?,?,datetime('now'),0)
+         ON CONFLICT(entity_table, entity_uuid) DO UPDATE SET op=excluded.op, queued_at=excluded.queued_at, attempt_count=0, last_attempt_at=NULL, last_error=NULL`,
+        [table, uuid, 'upsert']
+      );
+    } catch (e) {
+      console.warn('[applyBackup] enqueue outbox failed for', table, uuid, e);
     }
   }
 
