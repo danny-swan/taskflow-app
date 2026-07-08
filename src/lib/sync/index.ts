@@ -232,6 +232,29 @@ export async function syncNow(): Promise<SyncResult> {
       }
       // Если что-то реально применено — обновляем UI.
       await refreshStoreAfterPull(pullResult.applied);
+
+      // v0.9.35-dev.6.10.3: гарантируем базовый набор статусов ПОСЛЕ первого pull.
+      //
+      // Сценарий: после «загрузить из облака» (clearUserData) база пуста. Если в
+      // облаке нет статусов (исторические сид-статусы без uuid никогда туда не
+      // попадали), pull приносит только задачи — а они без статусов откладываются
+      // (deferred). ensureSeededIfEmpty засеет базовые статусы/теги (с uuid + outbox),
+      // а шаг 5 (push ниже) отправит их в облако — закрывая историческую дыру.
+      // Идемпотентно: если статусы уже есть — ничего не делает. Lazy import,
+      // чтобы не тянуть db в unit-тесты оркестратора. Ошибки глотаем — сев
+      // вторичен по отношению к основному sync-циклу.
+      try {
+        const dbMod = await import('../db');
+        if (typeof dbMod.ensureSeededIfEmpty === 'function') {
+          const seeded = await dbMod.ensureSeededIfEmpty();
+          if (seeded) {
+            logger.info('[sync/orchestrator] базовые статусы засеяны (облако было без статусов)');
+            await refreshStoreAfterPull(1); // обновить UI: появились колонки
+          }
+        }
+      } catch (e) {
+        logger.warn('[sync/orchestrator] ensureSeededIfEmpty failed:', e);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.warn('[sync/orchestrator] pull failed:', msg);

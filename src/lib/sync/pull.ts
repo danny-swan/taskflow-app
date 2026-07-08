@@ -30,6 +30,22 @@ import {
   type TableSpec,
 } from './mappers';
 
+/**
+ * v0.9.35-dev.6.10.3 — Маркер «отложить строку» (deferred by design).
+ *
+ * Отличает ОЖИДАЕМОЕ отложение (например, задача-сирота, чей статус ещё не
+ * пришёл из облака) от НАСТОЯЩЕЙ ошибки (сеть, RLS, битый SQL). Отложение —
+ * это нормальная часть протокола: строка просто применится на следующем pull,
+ * когда придёт её parent. Поэтому оно НЕ должно поднимать статус sync в 'error'
+ * в UI (иначе у пользователя вечная «ошибка синхронизации» — это была Проблема №3).
+ */
+export class DeferRowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeferRowError';
+  }
+}
+
 /** Ключ в settings для хранения last_pulled cursor per-table. */
 function lastPulledKey(cloudTable: string): string {
   return `sync_last_pulled_${cloudTable}`;
@@ -114,38 +130,27 @@ function applyCloudRowTasks(row: CloudRow): boolean {
   }
 
   // Локальной строки нет — INSERT новую с сохранением uuid.
-  let statusIntId = resolveStatusIdByUuid(row.status_id);
+  const statusIntId = resolveStatusIdByUuid(row.status_id);
   if (statusIntId === null) {
-    // Статус не найден локально — назначаем fallback.
-    // Предпочитаем первый top-статус (начальный); если нет — любой доступный.
-    const fallbackTop = db.get<{ id: number }>(
-      `SELECT id FROM statuses WHERE behavior='top' AND deleted_at IS NULL AND hidden=0 ORDER BY sort_order LIMIT 1`,
+    // v0.9.35-dev.6.10.3 — ФИКС сирот-задач (Проблема №1: всё улетало в «Важно»).
+    //
+    // Раньше: если статус задачи не найден локально — мы молча кидали её в
+    // первый top-статус («Важно»). На аккаунте, где сид-статусы исторически
+    // не попали в облако (создавались без uuid до миграции v9), ВСЕ задачи оказывались
+    // сиротами и падали в «Важно» — распределение молча ломалось.
+    //
+    // Теперь: не применяем задачу без валидного статуса — откладываем (deferred).
+    // pull идёт в порядке statuses → tags → tasks (PUSH_ORDER), поэтому если статус
+    // есть в облаке — он уже применён к этому моменту, и сюда мы не попадём.
+    // Если же статуса нет ни локально, ни в облаке — задача останется deferred до
+    // тех пор, пока статус не появится (например, когда «правильное» устройство
+    // запушит свои сид-статусы после миграции v9). Курсор last_pulled по
+    // задачам НЕ сдвигается за неприменённую строку (deferred → throw ниже),
+    // поэтому она будет перечитана на следующем pull.
+    throw new DeferRowError(
+      `status ${row.status_id} not found locally for task ${row.id} — deferring ` +
+      `(cloud statuses not yet pulled or missing)`,
     );
-    if (fallbackTop) {
-      statusIntId = fallbackTop.id;
-      logger.warn(
-        `[sync/pull] task ${row.id}: status ${row.status_id} not found locally, ` +
-        `using fallback top-status id=${statusIntId}`,
-      );
-    } else {
-      const fallbackAny = db.get<{ id: number }>(
-        `SELECT id FROM statuses WHERE deleted_at IS NULL ORDER BY sort_order LIMIT 1`,
-      );
-      if (fallbackAny) {
-        statusIntId = fallbackAny.id;
-        logger.warn(
-          `[sync/pull] task ${row.id}: status ${row.status_id} not found locally, ` +
-          `no top-status available, using any fallback id=${statusIntId}`,
-        );
-      } else {
-        // Нет вообще никаких статусов — скипаем задачу.
-        logger.warn(
-          `[sync/pull] task ${row.id}: status ${row.status_id} not found locally and no ` +
-          `fallback statuses available — skipping`,
-        );
-        return false;
-      }
-    }
   }
   db.run(
     `INSERT INTO tasks
@@ -259,8 +264,11 @@ function applyCloudRowOverdueEvents(row: CloudRow): boolean {
   // Новая строка. Нужна локальная task_id (int).
   const taskId = resolveTaskIdByUuid(row.task_id);
   if (taskId === null) {
-    logger.warn(`[sync/pull] overdue_event ${row.id}: task ${row.task_id} не локально, deferred`);
-    return false;
+    // v0.9.35-dev.6.10.3 — отложение, а не «false» (иначе курсор сдвинется и
+    // событие потеряется). Помечаем DeferRowError → курсор заморозится.
+    throw new DeferRowError(
+      `overdue_event ${row.id}: task ${row.task_id} not local yet — deferring`,
+    );
   }
   db.run(
     `INSERT INTO overdue_events
@@ -382,18 +390,35 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
     if (!data || data.length === 0) return result;
 
     let maxCursor = lastPulled;
+    // v0.9.35-dev.6.10.3 — Консервативный курсор при deferred-строках.
+    // Строки приходят отсортированными по cursorCol по возрастанию. Если какая-то
+    // строка отложена (deferred, напр. задача-сирота без статуса), мы НЕ должны
+    // двигать курсор дальше её — иначе на следующем pull мы её больше не перечитаем
+    // (её updated_at < нового курсора) и она навсегда останется неприменённой. Поэтому
+    // после первой deferred-строки перестаём сдвигать курсор для этой таблицы.
+    let cursorFrozen = false;
     for (const raw of data as CloudRow[]) {
       try {
         const changed = applier(raw);
         if (changed) result.applied++;
         else result.skipped++;
         const rowCursor = String((raw as any)[cursorCol] ?? '');
-        if (rowCursor > maxCursor) maxCursor = rowCursor;
+        if (!cursorFrozen && rowCursor > maxCursor) maxCursor = rowCursor;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        logger.warn(`[sync/pull] ${spec.cloud} apply failed for ${raw.id}:`, msg);
+        if (e instanceof DeferRowError) {
+          // ОЖИДАЕМОЕ отложение (parent ещё не пришёл) — НЕ считаем ошибкой sync.
+          // Не пишем в firstError, чтобы UI не показывал «ошибку синхронизации».
+          logger.info(`[sync/pull] ${spec.cloud} row ${raw.id} deferred: ${msg}`);
+        } else {
+          // Настоящая ошибка (сеть/RLS/SQL) — поднимаем в firstError.
+          logger.warn(`[sync/pull] ${spec.cloud} apply failed for ${raw.id}:`, msg);
+          if (!result.firstError) result.firstError = msg;
+        }
         result.deferred++;
-        if (!result.firstError) result.firstError = msg;
+        // Замораживаем курсор: всё, что после этой строки, будет перечитано
+        // заново на следующем pull (включая саму deferred-строку).
+        cursorFrozen = true;
       }
     }
 

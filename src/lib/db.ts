@@ -19,6 +19,34 @@ import { uuidv7 } from './uuid';
 const STORAGE_KEY = 'taskflow.sqlite.v1';
 const STORAGE_KEY_TS = 'taskflow.sqlite.v1.ts';
 
+// ─── v0.9.35-dev.6.10.3: единый источник правды для сид-справочников ──────────
+// Раньше список статусов/тегов дублировался в seed() (web) и tauriSeed() (Tauri).
+// Любое расхождение приводило к разным справочникам на разных платформах, что
+// критично для sync (uuid у одинаковых по смыслу статусов должны совпадать в
+// пределах устройства, а набор — быть идентичным). Выносим в константы, чтобы
+// seed(), tauriSeed() и ensureSeededIfEmpty() сеяли ОДНО И ТО ЖЕ.
+interface SeedStatus {
+  name: string; color: string; behavior: string;
+  hidden: 0 | 1; default_collapsed: 0 | 1; is_technical: 0 | 1;
+}
+const SEED_STATUSES: SeedStatus[] = [
+  { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
+  // Технический статус «Удалено» — скрыт в списке задач и в топбаре (hidden=1).
+  { name: 'Удалено',        color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
+];
+const SEED_TAGS: { name: string; color: string }[] = [
+  { name: 'OPS', color: '#5B7FB8' },
+  { name: 'DEV', color: '#437A22' },
+  { name: 'MTG', color: '#C44A8E' },
+  { name: 'LRN', color: '#D98F2B' },
+  { name: 'PRS', color: '#7A7974' },
+];
+
 let SQL: SqlJsStatic | null = null;
 let webDb: Database | null = null;
 let storageAvailable = true;
@@ -182,16 +210,8 @@ async function tauriSeed(): Promise<void> {
 
   // v0.9.0: «В процессе» теперь идёт ПЕРЕД «Взять в работу» — это активный статус,
   // ему логично быть выше в списке.
-  const statuses = [
-    { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
-    // Технический статус «Удалено» — создаём сразу, чтобы работало удаление.
-    { name: 'Удалено',        color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
-  ];
+  // v0.9.35-dev.6.10.3: список вынесен в SEED_STATUSES (единый источник правды).
+  const statuses = SEED_STATUSES;
   const statusUuids: string[] = [];
   for (let i = 0; i < statuses.length; i++) {
     const s = statuses[i];
@@ -206,13 +226,7 @@ async function tauriSeed(): Promise<void> {
     );
   }
 
-  const tags = [
-    { name: 'OPS', color: '#5B7FB8' },
-    { name: 'DEV', color: '#437A22' },
-    { name: 'MTG', color: '#C44A8E' },
-    { name: 'LRN', color: '#D98F2B' },
-    { name: 'PRS', color: '#7A7974' },
-  ];
+  const tags = SEED_TAGS;
   const tagUuids: string[] = [];
   for (let i = 0; i < tags.length; i++) {
     const uuid = uuidv7();
@@ -434,16 +448,8 @@ function seed(d: Database) {
 
   // v0.8.2: hidden and default_collapsed per status
   // v0.9.0: «В процессе» теперь идёт ПЕРЕД «Взять в работу»
-  const statuses = [
-    { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
-    // Технический статус «Удалено» — скрыт в списке задач и в топбаре (hidden=1).
-    { name: 'Удалено',        color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
-  ];
+  // v0.9.35-dev.6.10.3: список вынесен в SEED_STATUSES (единый источник правды).
+  const statuses = SEED_STATUSES;
   const statusUuids: string[] = [];
   statuses.forEach((s, i) => {
     const uuid = uuidv7();
@@ -457,13 +463,7 @@ function seed(d: Database) {
     );
   });
 
-  const tags = [
-    { name: 'OPS', color: '#5B7FB8' },
-    { name: 'DEV', color: '#437A22' },
-    { name: 'MTG', color: '#C44A8E' },
-    { name: 'LRN', color: '#D98F2B' },
-    { name: 'PRS', color: '#7A7974' },
-  ];
+  const tags = SEED_TAGS;
   const tagUuids: string[] = [];
   tags.forEach((t, i) => {
     const uuid = uuidv7();
@@ -662,6 +662,132 @@ export async function clearUserData(): Promise<void> {
 
   // Персистим web-кэш.
   if (!IS_TAURI) save();
+}
+
+// ─── v0.9.35-dev.6.10.3: ensureSeededIfEmpty ─────────────────────────────────
+//
+// Закрывает две связанные проблемы, всплывшие при «загрузить из облака»
+// (clearUserData) на аккаунтах, чьи сид-статусы были созданы ДО миграции v9
+// (то есть без uuid и потому НЕ попавшие в облако):
+//
+//   1. Пустой список статусов. После clearUserData база пуста, а pull из такого
+//      облака приносит только задачи — статусов там нет. Задачи-сироты
+//      откладываются (deferred, см. pull.ts DeferRowError), и пользователь видит
+//      пустой экран без единой колонки. Раньше при рестарте initDb засеивал
+//      заново и создавал ОДНУ welcome-задачу («одна стартовая задача») — но это
+//      происходило слишком поздно и без нужных статусов.
+//
+//   2. Историческая дыра в облаке. Сид-статусы без uuid никогда не пушились,
+//      поэтому на всех устройствах этого аккаунта их нет в облаке. Пересеивая
+//      их ЗДЕСЬ (с uuid + enqueue в sync_outbox), мы отдаём их в облако при
+//      ближайшем push — и будущие устройства получат нормальный набор статусов.
+//
+// Функция ИДЕМПОТЕНТНА: сеет только если статусов реально нет (COUNT=0).
+// НЕ создаёт welcome-задачу (иначе на «пустом» аккаунте после каждого pull
+// плодилась бы лишняя «стартовая задача» — это и есть баг №3). Работает и в
+// web (webDb.run), и в Tauri (getTauriDb().execute), заполняя оба зеркала.
+//
+// Возвращает true, если сев произошёл (статусов не было), иначе false.
+export async function ensureSeededIfEmpty(): Promise<boolean> {
+  // 1. Проверяем, есть ли уже статусы. Считаем по «главному» хранилищу:
+  //    в Tauri — нативная БД, в web — webDb.
+  let statusCount = 0;
+  try {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      const rows: any[] = await d.select(`SELECT COUNT(*) AS cnt FROM statuses`);
+      statusCount = Number(rows[0]?.cnt ?? 0);
+    } else if (webDb) {
+      const stmt = webDb.prepare(`SELECT COUNT(*) AS cnt FROM statuses`);
+      if (stmt.step()) statusCount = Number((stmt.getAsObject() as any).cnt ?? 0);
+      stmt.free();
+    }
+  } catch (e) {
+    console.warn('[ensureSeededIfEmpty] count failed:', e);
+    // Безопасный дефолт: если посчитать не удалось — НЕ сеем (лучше пустой
+    // экран, чем риск задвоить статусы).
+    return false;
+  }
+  if (statusCount > 0) return false; // Уже есть статусы — ничего не делаем.
+
+  const now = new Date().toISOString();
+
+  // Универсальный executor: пишем в оба зеркала, где они доступны.
+  const execBoth = async (sql: string, params: any[] = []) => {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      try { await d.execute(sql, params); } catch (e) { console.warn('[ensureSeededIfEmpty][tauri]', e); }
+    }
+    if (webDb) {
+      try { webDb.run(sql, params); } catch (e) { console.warn('[ensureSeededIfEmpty][web]', e); }
+    }
+  };
+
+  // client_id (проставлен миграцией v5/v9). Читаем из доступного хранилища.
+  let clientId: string | null = null;
+  try {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      const rows: any[] = await d.select(`SELECT value FROM settings WHERE key='client_id'`);
+      clientId = rows[0]?.value ?? null;
+    } else if (webDb) {
+      const stmt = webDb.prepare(`SELECT value FROM settings WHERE key='client_id' LIMIT 1`);
+      if (stmt.step()) clientId = ((stmt.getAsObject() as any).value as string) ?? null;
+      stmt.free();
+    }
+  } catch (e) { console.warn('[ensureSeededIfEmpty] read client_id:', e); }
+
+  // Статусы. ВАЖНО: генерируем ОДИН uuid на статус и пишем его в оба зеркала,
+  // чтобы web и Tauri ссылались на одинаковые uuid (иначе рассинхрон в sync).
+  const statusUuids: string[] = [];
+  for (let i = 0; i < SEED_STATUSES.length; i++) {
+    const s = SEED_STATUSES[i];
+    const uuid = uuidv7();
+    statusUuids.push(uuid);
+    await execBoth(
+      `INSERT INTO statuses
+         (uuid, name, color, behavior, sort_order, is_seed, is_technical,
+          hidden, default_collapsed, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?,?,?,?,1,?)`,
+      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId]
+    );
+  }
+
+  // Теги.
+  const tagUuids: string[] = [];
+  for (let i = 0; i < SEED_TAGS.length; i++) {
+    const t = SEED_TAGS[i];
+    const uuid = uuidv7();
+    tagUuids.push(uuid);
+    await execBoth(
+      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?)`,
+      [uuid, t.name, t.color, i, now, clientId]
+    );
+  }
+
+  // Enqueue в sync_outbox — чтобы засеянные статусы/теги ушли в облако при
+  // ближайшем push (закрывает историческую дыру: раньше их там не было).
+  for (const uuid of statusUuids) {
+    await execBoth(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  }
+  for (const uuid of tagUuids) {
+    await execBoth(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('tags', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  }
+
+  // Персистим web-кэш.
+  if (!IS_TAURI) save();
+
+  console.info(`[ensureSeededIfEmpty] seeded ${statusUuids.length} statuses + ${tagUuids.length} tags (no welcome task)`);
+  return true;
 }
 
 // ─── PUBLIC init ──────────────────────────────────────────────────────────────

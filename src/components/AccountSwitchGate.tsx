@@ -40,6 +40,7 @@ import {
   setBoundUserId,
   isWebSnapshotLimited,
 } from '../lib/snapshots';
+import { getEntitlement, isProOrTrial } from '../lib/entitlements';
 import * as db from '../lib/db';
 
 // ─── i18n локально (компактный диф, как в PaywallModal) ───────────────────────
@@ -134,8 +135,18 @@ export function AccountSwitchGate() {
   const handledForUserRef = useRef<string | null>(null);
 
   const sessionUserId = auth.session?.user?.id ?? null;
+  const sessionUserEmail = auth.session?.user?.email ?? null;
 
   // Детект смены аккаунта: при появлении/смене сессии сверяем bound_user_id.
+  //
+  // v0.9.35-dev.6.10.3 — Entitlement-гейт (фикс: окно смены аккаунта показывалось
+  // даже free-аккаунту без подписки).
+  //   Синхронизация — платная фича (гейт в lib/sync/index.ts блокирует free/expired
+  //   как status='paywalled'). Значит для free-аккаунта нет самой синхронизации, а
+  //   все три варианта окна (cloud/local/merge) её так или иначе дёргают. Показывать
+  //   это окно free-аккаунту бессмысленно и вводит в заблуждение. Поэтому перед
+  //   открытием проверяем entitlement: если не Pro/Trial/Lifetime — окно не
+  //   показываем (данные при этом не трогаются, привязка bound_user_id не меняется).
   useEffect(() => {
     if (!sessionUserId) {
       setOpen(false);
@@ -148,17 +159,28 @@ export function AccountSwitchGate() {
       // после ready, но перестраховываемся).
       try {
         const check = checkAccountBinding(sessionUserId);
-        if (!cancelled && check.mismatch) {
-          setOpen(true);
+        if (cancelled || !check.mismatch) return;
+
+        // Есть расхождение аккаунтов — но показываем окно только если у нового
+        // аккаунта есть право на синхронизацию (Pro/Trial/Lifetime). getEntitlement
+        // при офлайне падает на локальный кэш, поэтому не блокирует вход.
+        const ent = await getEntitlement(sessionUserId, sessionUserEmail);
+        if (cancelled) return;
+        if (!isProOrTrial(ent)) {
+          // Free-аккаунт: синхронизации нет — окно не нужно. Помечаем сессию
+          // обработанной, чтобы не дёргать getEntitlement повторно.
+          handledForUserRef.current = sessionUserId;
+          return;
         }
+        setOpen(true);
       } catch {
-        /* если settings недоступны — не блокируем вход */
+        /* если settings/сеть недоступны — не блокируем вход */
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [sessionUserId]);
+  }, [sessionUserId, sessionUserEmail]);
 
   const finishForSession = useCallback(() => {
     if (sessionUserId) handledForUserRef.current = sessionUserId;
