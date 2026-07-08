@@ -69,6 +69,9 @@ vi.mock('../db', () => ({
     liveDb.run(sql, params);
     return { rowsAffected: liveDb.getRowsModified(), lastInsertId: 0 };
   }),
+  // v0.9.35-dev.6.9.0: snapshots.setBoundUserId() дёргает db.save() (no-op в web-моке).
+  save: vi.fn(() => {}),
+  isTauri: vi.fn(() => false),
 }));
 
 // Mock supabase state
@@ -259,5 +262,65 @@ describe('sync orchestrator', () => {
     expect(dev!.rows[0].id).toBe('test-client-id');
     expect(dev!.rows[0].user_id).toBe('user-1');
     expect(dev!.rows[0].last_seen_at).toBeTruthy();
+  });
+});
+
+// v0.9.35-dev.6.9.0: после успешного sync локальная база привязывается к аккаунту
+// (bound_user_id в settings) — это то, на что опирается детект смены аккаунта
+// (AccountSwitchGate). Проверяем запись напрямую в settings через liveDb.
+describe('sync orchestrator — привязка базы к аккаунту (bound_user_id)', () => {
+  const boundUserId = (): string | null => {
+    const res = liveDb!.exec(`SELECT value FROM settings WHERE key = 'bound_user_id'`);
+    if (!res.length || !res[0].values.length) return null;
+    return res[0].values[0][0] as string;
+  };
+
+  it('после первого synced bound_user_id = id текущего аккаунта', async () => {
+    const { syncNow, getSyncState } = await import('./index');
+    session = { user: { id: 'user-1' } };
+    // До sync база не привязана.
+    expect(boundUserId()).toBeNull();
+
+    await syncNow();
+    expect(getSyncState().status).toBe('synced');
+    expect(boundUserId()).toBe('user-1');
+  });
+
+  it('привязка обновляется при синке под другим аккаунтом (тот же device)', async () => {
+    const { syncNow, _resetForTests } = await import('./index');
+
+    session = { user: { id: 'user-1' } };
+    await syncNow();
+    expect(boundUserId()).toBe('user-1');
+
+    // Сессия сменилась на другой аккаунт (в реальности перед этим сработал бы
+    // AccountSwitchGate; здесь проверяем именно фиксацию новой привязки).
+    _resetForTests();
+    session = { user: { id: 'user-2' } };
+    await syncNow();
+    expect(boundUserId()).toBe('user-2');
+  });
+
+  it('повторный synced под тем же аккаунтом не меняет привязку', async () => {
+    const { syncNow, _resetForTests } = await import('./index');
+    session = { user: { id: 'user-1' } };
+    await syncNow();
+    expect(boundUserId()).toBe('user-1');
+
+    _resetForTests();
+    await syncNow();
+    expect(boundUserId()).toBe('user-1');
+  });
+
+  it('запись привязки не роняет sync (state=synced даже если что-то пошло не так)', async () => {
+    // Best-effort: даже при проблемах с записью bound_user_id sync считается
+    // успешным. Здесь happy-path — просто фиксируем, что state = synced и
+    // привязка выставлена (регрессия на случай, если запись начнёт бросать).
+    const { syncNow, getSyncState } = await import('./index');
+    session = { user: { id: 'user-1' } };
+    const result = await syncNow();
+    expect(result.ok).toBe(true);
+    expect(getSyncState().status).toBe('synced');
+    expect(boundUserId()).toBe('user-1');
   });
 });
