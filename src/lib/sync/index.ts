@@ -435,6 +435,30 @@ export function _resetForTests(): void {
   unsubscribeRealtime();
 }
 
+/**
+ * Быстрая проверка: есть ли в облаке хоть одна запись для данного пользователя.
+ *
+ * Используется в AccountSwitchGate перед вызовом clearUserData(),
+ * чтобы не стирать локальные данные вслепую если облако пустое.
+ *
+ * Проверяем sync_statuses (родительская таблица): если статусы есть,
+ * значит аккаунт хоть раз полностью синхронизировался.
+ * Если ошибка сети — возвращаем true (не блокируем операцию из-за оффлайна).
+ */
+export async function cloudHasData(userId: string): Promise<boolean> {
+  try {
+    const { count, error } = await supabase
+      .from('sync_statuses')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .is('deleted_at', null);
+    if (error) return true; // ошибка — делаем вид что данные есть (безопаснее)
+    return (count ?? 0) > 0;
+  } catch {
+    return true; // оффлайн / неизвестная ошибка — не блокируем
+  }
+}
+
 /** Экспорт для тестов. */
 export const _internals = {
   ensureDeviceRegistered,

@@ -429,6 +429,84 @@ export const MIGRATIONS: Migration[] = [
       // bound_user_id не создаём — отсутствие строки трактуется как «not bound».
     },
   },
+
+  // ================================================================
+  // v9 (v0.9.35-dev.6.10.0): Починить seed-строки, которые были созданы
+  // без uuid/updated_at/client_id и поэтому НИКОГДА не попадали в облако.
+  //
+  // Проблема: tauriSeed()/seed() вызываются ПОСЛЕ runMigrations(), поэтому
+  // v5 (backfill uuid) и v7 (backfill sync_outbox) отрабатывают на пустой
+  // базе и не обрабатывают seed-строки. В итоге:
+  //   - статусы, теги и welcome-задача создаются без uuid → uuid = NULL;
+  //   - enqueueOutbox молча пропускает их (guard на !uuid);
+  //   - push никогда их не отправляет.
+  //
+  // Решение: при обновлении существующей базы (v8→v9) обнаруживаем все
+  // строки с uuid = NULL во всех sync-таблицах, проставляем им uuid,
+  // updated_at (если NULL), client_id (если NULL), и добавляем в outbox.
+  //
+  // Для новых установок (seed после этой миграции): seed исправлен и теперь
+  // сам генерирует uuid/updated_at/client_id и вызывает enqueueOutbox.
+  // Тогда эта миграция просто найдёт 0 строк без uuid и завершится мгновенно.
+  // ================================================================
+  {
+    version: 9,
+    description:
+      'Fix seed rows missing uuid/updated_at/client_id + backfill sync_outbox (v0.9.35-dev.6.10.0)',
+    up: async ({ exec, select }) => {
+      const tables = ['tasks', 'tags', 'statuses', 'task_templates', 'overdue_events'];
+      const now = new Date().toISOString();
+
+      // Читаем client_id этого устройства (может быть NULL для очень старых баз).
+      const cidRows = await select<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'client_id'`,
+      );
+      const clientId: string = cidRows[0]?.value ?? uuidv7();
+      // Сохраняем, если не было.
+      await exec(
+        `INSERT OR IGNORE INTO settings (key, value) VALUES ('client_id', ?)`,
+        [clientId],
+      );
+
+      for (const t of tables) {
+        try {
+          // 1. Проставляем uuid там, где NULL.
+          const rows = await select<{ id: number }>(
+            `SELECT id FROM ${t} WHERE uuid IS NULL`,
+          );
+          for (const r of rows) {
+            await exec(`UPDATE ${t} SET uuid = ? WHERE id = ?`, [uuidv7(), r.id]);
+          }
+
+          // 2. Проставляем updated_at там, где NULL (только у tags/statuses/overdue_events).
+          await exec(
+            `UPDATE ${t} SET updated_at = ? WHERE updated_at IS NULL`,
+            [now],
+          );
+
+          // 3. Проставляем client_id там, где NULL.
+          await exec(
+            `UPDATE ${t} SET client_id = ? WHERE client_id IS NULL`,
+            [clientId],
+          );
+
+          // 4. Добавляем все живые строки в outbox (INSERT OR IGNORE — не трогаем
+          //    уже стоящие в очереди строки, чтобы не сбивать attempt_count).
+          await exec(
+            `INSERT OR IGNORE INTO sync_outbox
+               (entity_table, entity_uuid, op, queued_at, attempt_count)
+             SELECT ?, uuid, 'upsert', datetime('now'), 0
+             FROM ${t}
+             WHERE uuid IS NOT NULL AND deleted_at IS NULL`,
+            [t],
+          );
+        } catch (e) {
+          // task_templates / overdue_events могут отсутствовать в крайне старых базах.
+          console.warn(`[migrate v9] skipped for ${t}:`, e);
+        }
+      }
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */

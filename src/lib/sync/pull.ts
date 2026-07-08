@@ -114,12 +114,38 @@ function applyCloudRowTasks(row: CloudRow): boolean {
   }
 
   // Локальной строки нет — INSERT новую с сохранением uuid.
-  const statusIntId = resolveStatusIdByUuid(row.status_id);
+  let statusIntId = resolveStatusIdByUuid(row.status_id);
   if (statusIntId === null) {
-    // Нельзя вставить задачу без статуса. Логируем и скипаем — pull подхватит
-    // при следующей итерации, когда статус подтянется.
-    logger.warn(`[sync/pull] task ${row.id}: status ${row.status_id} not yet local, skipping`);
-    return false;
+    // Статус не найден локально — назначаем fallback.
+    // Предпочитаем первый top-статус (начальный); если нет — любой доступный.
+    const fallbackTop = db.get<{ id: number }>(
+      `SELECT id FROM statuses WHERE behavior='top' AND deleted_at IS NULL AND hidden=0 ORDER BY sort_order LIMIT 1`,
+    );
+    if (fallbackTop) {
+      statusIntId = fallbackTop.id;
+      logger.warn(
+        `[sync/pull] task ${row.id}: status ${row.status_id} not found locally, ` +
+        `using fallback top-status id=${statusIntId}`,
+      );
+    } else {
+      const fallbackAny = db.get<{ id: number }>(
+        `SELECT id FROM statuses WHERE deleted_at IS NULL ORDER BY sort_order LIMIT 1`,
+      );
+      if (fallbackAny) {
+        statusIntId = fallbackAny.id;
+        logger.warn(
+          `[sync/pull] task ${row.id}: status ${row.status_id} not found locally, ` +
+          `no top-status available, using any fallback id=${statusIntId}`,
+        );
+      } else {
+        // Нет вообще никаких статусов — скипаем задачу.
+        logger.warn(
+          `[sync/pull] task ${row.id}: status ${row.status_id} not found locally and no ` +
+          `fallback statuses available — skipping`,
+        );
+        return false;
+      }
+    }
   }
   db.run(
     `INSERT INTO tasks

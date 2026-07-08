@@ -126,8 +126,10 @@ export function AccountSwitchGate() {
   const t = useCallback((k: L10nKey) => L10N[langRef.current][k], []);
 
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<null | 'snapshot' | 'apply'>(null);
+  const [busy, setBusy] = useState<null | 'snapshot' | 'checking' | 'apply'>(null);
   const [error, setError] = useState<string | null>(null);
+  // Если true — облако пустое, показываем предупреждение перед стиранием.
+  const [cloudEmptyWarning, setCloudEmptyWarning] = useState(false);
   // Защита от повторного открытия для той же сессии (после выбора).
   const handledForUserRef = useRef<string | null>(null);
 
@@ -172,19 +174,34 @@ export function AccountSwitchGate() {
   }, []);
 
   const handleChoice = useCallback(
-    async (choice: Choice) => {
+    async (choice: Choice, forceCloud = false) => {
       if (!sessionUserId || busy) return;
       setError(null);
+      setCloudEmptyWarning(false);
       try {
         // 1. ВСЕГДА снимок текущей базы перед изменениями (никогда не теряем старое).
         setBusy('snapshot');
         await createSnapshot('before_account_switch');
 
         // 2. Применяем выбор.
-        setBusy('apply');
         if (choice === 'cloud') {
+          // Пред стиранием локальных — проверяем, есть ли что-то в облаке.
+          // Если облако пустое и пользователь не подтвердил операцию — показываем
+          // предупреждение (снимок уже сохранён, данные не потеряются).
+          if (!forceCloud) {
+            setBusy('checking');
+            const m = await import('../lib/sync');
+            const hasData = await m.cloudHasData(sessionUserId);
+            if (!hasData) {
+              setBusy(null);
+              setCloudEmptyWarning(true);
+              return;
+            }
+          }
+
           // Очистить локальные + снять привязку → sync подтянет облако нового
           // аккаунта и заново привяжет базу к нему.
+          setBusy('apply');
           await db.clearUserData();
           setBoundUserId(null);
           await runSync();
@@ -213,7 +230,7 @@ export function AccountSwitchGate() {
         setError(`${t('err_generic')}: ${msg}`);
       }
     },
-    [sessionUserId, busy, runSync, refresh, finishForSession, pushToast, language, t],
+    [sessionUserId, busy, runSync, refresh, finishForSession, pushToast, language, t, setCloudEmptyWarning],
   );
 
   const handleSignOut = useCallback(async () => {
@@ -306,11 +323,43 @@ export function AccountSwitchGate() {
           </button>
         </div>
 
+        {/* Предупреждение: облако пустое */}
+        {cloudEmptyWarning && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-3 mt-4 text-[12px] leading-relaxed">
+            <p className="text-amber-500 font-medium mb-2">
+              {language === 'ru'
+                ? '⚠️ Облако этого аккаунта пустое'
+                : '⚠️ This account’s cloud is empty'}
+            </p>
+            <p className="text-muted mb-3">
+              {language === 'ru'
+                ? 'Если продолжить, локальные данные будут стёрты, а загрузить будет нечего. Снимок уже сохранён — вы сможете восстановить данные из него. Всё равно продолжить?'
+                : 'If you continue, local data will be cleared and there is nothing to download. A snapshot has already been saved — you can restore it later. Continue anyway?'}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => handleChoice('cloud', true)}
+                className="flex-1 rounded-md border border-amber-500/40 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 text-[12px] font-medium py-1.5 transition-colors"
+              >
+                {language === 'ru' ? 'Да, стёрть и загрузить' : 'Yes, clear and load'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCloudEmptyWarning(false)}
+                className="flex-1 rounded-md border border-border hover:bg-surface text-muted text-[12px] font-medium py-1.5 transition-colors"
+              >
+                {language === 'ru' ? 'Отмена' : 'Cancel'}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Статус / ошибка */}
         {busy && (
           <div className="flex items-center gap-2 text-[12px] text-muted mt-4">
             <Loader2 size={14} className="animate-spin" />
-            <span>{busy === 'snapshot' ? t('creating_snapshot') : t('applying')}</span>
+            <span>{busy === 'snapshot' ? t('creating_snapshot') : busy === 'checking' ? (language === 'ru' ? 'Проверка облака…' : 'Checking cloud…') : t('applying')}</span>
           </div>
         )}
         {error && (

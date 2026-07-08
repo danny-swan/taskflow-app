@@ -14,6 +14,7 @@ import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 // @ts-ignore
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { runMigrations, tauriMigrationApi, webMigrationApi } from './migrations';
+import { uuidv7 } from './uuid';
 
 const STORAGE_KEY = 'taskflow.sqlite.v1';
 const STORAGE_KEY_TS = 'taskflow.sqlite.v1.ts';
@@ -173,6 +174,12 @@ async function tauriIsEmpty(): Promise<boolean> {
 async function tauriSeed(): Promise<void> {
   const d = await getTauriDb();
   const now = new Date().toISOString();
+
+  // v0.9.35-dev.6.10.0: читаем client_id (проставлен миграцией v5/v9).
+  // Если по какой-то причине его нет — продолжаем без него (второстепенный атрибут).
+  const cidRows: any[] = await d.select(`SELECT value FROM settings WHERE key='client_id'`);
+  const clientId: string | null = cidRows[0]?.value ?? null;
+
   // v0.9.0: «В процессе» теперь идёт ПЕРЕД «Взять в работу» — это активный статус,
   // ему логично быть выше в списке.
   const statuses = [
@@ -180,16 +187,22 @@ async function tauriSeed(): Promise<void> {
     { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom',  hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
     // Технический статус «Удалено» — создаём сразу, чтобы работало удаление.
-    { name: 'Удалено',         color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
+    { name: 'Удалено',        color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
   ];
+  const statusUuids: string[] = [];
   for (let i = 0; i < statuses.length; i++) {
     const s = statuses[i];
+    const uuid = uuidv7();
+    statusUuids.push(uuid);
     await d.execute(
-      'INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,?,?,?)',
-      [s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed]
+      `INSERT INTO statuses
+         (uuid, name, color, behavior, sort_order, is_seed, is_technical,
+          hidden, default_collapsed, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?,?,?,?,1,?)`,
+      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId]
     );
   }
 
@@ -200,15 +213,24 @@ async function tauriSeed(): Promise<void> {
     { name: 'LRN', color: '#D98F2B' },
     { name: 'PRS', color: '#7A7974' },
   ];
+  const tagUuids: string[] = [];
   for (let i = 0; i < tags.length; i++) {
-    await d.execute('INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)', [tags[i].name, tags[i].color, i]);
+    const uuid = uuidv7();
+    tagUuids.push(uuid);
+    await d.execute(
+      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?)`,
+      [uuid, tags[i].name, tags[i].color, i, now, clientId]
+    );
   }
 
   // Find "Сегодня" status and "PRS" tag IDs
-  const statusRows: any[] = await d.select(`SELECT id FROM statuses WHERE name='Сегодня' LIMIT 1`);
-  const tagRows: any[] = await d.select(`SELECT id FROM tags WHERE name='PRS' LIMIT 1`);
+  const statusRows: any[] = await d.select(`SELECT id, uuid FROM statuses WHERE name='Сегодня' LIMIT 1`);
+  const tagRows: any[] = await d.select(`SELECT id, uuid FROM tags WHERE name='PRS' LIMIT 1`);
   const statusId = statusRows[0]?.id ?? 1;
+  const statusUuid: string | null = statusRows[0]?.uuid ?? null;
   const tagId = tagRows[0]?.id ?? null;
+  const tagUuid: string | null = tagRows[0]?.uuid ?? null;
 
   // v0.9.31: используем локальную дату вместо UTC.
   const today = new Date();
@@ -223,15 +245,47 @@ async function tauriSeed(): Promise<void> {
   const dd = String(deadline.getDate()).padStart(2, '0');
   const deadlineStr = `${dy}-${dm}-${dd}`;
 
+  const taskUuid = uuidv7();
   await d.execute(
-    `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
-     VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
+    `INSERT INTO tasks
+       (uuid, title, comment, tag_id, status_id, start_date, deadline, finish_date,
+        created_at, updated_at, sort_order, archived, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?)`,
     [
+      taskUuid,
       'Добро пожаловать в TaskFlow',
       'Нажмите ✓ справа, чтобы выполнить задачу, или иконка корзины 🗑 в правом верхнем углу — чтобы удалить.',
-      tagId, statusId, todayStr, deadlineStr, null, now, now, 0,
+      tagId, statusId, todayStr, deadlineStr, null, now, now, 0, clientId,
     ]
   );
+
+  // v0.9.35-dev.6.10.0: добавляем seed-строки в sync_outbox, чтобы они
+  // отправились в облако при первой синхронизации.
+  // Статусы: все 7.
+  for (const uuid of statusUuids) {
+    await d.execute(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  }
+  // Теги: все 5.
+  for (const uuid of tagUuids) {
+    await d.execute(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('tags', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  }
+  // Welcome-задача.
+  await d.execute(
+    `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+     VALUES ('tasks', ?, 'upsert', datetime('now'), 0)`,
+    [taskUuid]
+  );
+
+  // Подавляем TS-предупреждения об unused (используются для outbox выше).
+  void statusUuid; void tagUuid;
 
   const defaults = [
     ['language', 'ru'],
@@ -371,6 +425,13 @@ function migrate(d: Database) {
 
 function seed(d: Database) {
   const now = new Date().toISOString();
+
+  // v0.9.35-dev.6.10.0: читаем client_id (проставлен миграцией v5/v9).
+  const cidStmt = d.prepare(`SELECT value FROM settings WHERE key='client_id' LIMIT 1`);
+  let clientId: string | null = null;
+  if (cidStmt.step()) { clientId = (cidStmt.getAsObject() as any).value as string ?? null; }
+  cidStmt.free();
+
   // v0.8.2: hidden and default_collapsed per status
   // v0.9.0: «В процессе» теперь идёт ПЕРЕД «Взять в работу»
   const statuses = [
@@ -378,14 +439,22 @@ function seed(d: Database) {
     { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0, is_technical: 0 },
+    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom',  hidden: 0, default_collapsed: 0, is_technical: 0 },
     { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
     // Технический статус «Удалено» — скрыт в списке задач и в топбаре (hidden=1).
-    { name: 'Удалено',         color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
+    { name: 'Удалено',        color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
   ];
+  const statusUuids: string[] = [];
   statuses.forEach((s, i) => {
-    d.run('INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,?,?,?)',
-      [s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed]);
+    const uuid = uuidv7();
+    statusUuids.push(uuid);
+    d.run(
+      `INSERT INTO statuses
+         (uuid, name, color, behavior, sort_order, is_seed, is_technical,
+          hidden, default_collapsed, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?,?,?,?,1,?)`,
+      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId]
+    );
   });
 
   const tags = [
@@ -395,8 +464,15 @@ function seed(d: Database) {
     { name: 'LRN', color: '#D98F2B' },
     { name: 'PRS', color: '#7A7974' },
   ];
+  const tagUuids: string[] = [];
   tags.forEach((t, i) => {
-    d.run('INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)', [t.name, t.color, i]);
+    const uuid = uuidv7();
+    tagUuids.push(uuid);
+    d.run(
+      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?)`,
+      [uuid, t.name, t.color, i, now, clientId]
+    );
   });
 
   // Welcome seed task (single task)
@@ -413,7 +489,7 @@ function seed(d: Database) {
   const dd = String(deadlineDate.getDate()).padStart(2, '0');
   const deadlineStr = `${dy}-${dm}-${dd}`;
 
-  // Get the "Сегодня" status (index 1 → id 2) and "PRS" tag (index 4 → id 5)
+  // Get the "Сегодня" status and "PRS" tag
   const statusStmt = d.prepare(`SELECT id FROM statuses WHERE name='Сегодня' LIMIT 1`);
   let statusId = 2;
   if (statusStmt.step()) { statusId = (statusStmt.getAsObject() as any).id as number; }
@@ -424,14 +500,39 @@ function seed(d: Database) {
   if (tagStmt.step()) { tagId = (tagStmt.getAsObject() as any).id as number; }
   tagStmt.free();
 
+  const taskUuid = uuidv7();
   d.run(
-    `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
-     VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
+    `INSERT INTO tasks
+       (uuid, title, comment, tag_id, status_id, start_date, deadline, finish_date,
+        created_at, updated_at, sort_order, archived, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?)`,
     [
+      taskUuid,
       'Добро пожаловать в TaskFlow',
       'Нажмите ✓ справа, чтобы выполнить задачу, или иконка корзины 🗑 в правом верхнем углу — чтобы удалить.',
-      tagId, statusId, todayStr, deadlineStr, null, now, now, 0,
+      tagId, statusId, todayStr, deadlineStr, null, now, now, 0, clientId,
     ]
+  );
+
+  // v0.9.35-dev.6.10.0: добавляем seed-строки в sync_outbox.
+  statusUuids.forEach(uuid => {
+    d.run(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  });
+  tagUuids.forEach(uuid => {
+    d.run(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('tags', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  });
+  d.run(
+    `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+     VALUES ('tasks', ?, 'upsert', datetime('now'), 0)`,
+    [taskUuid]
   );
 
   const defaults = [
@@ -441,8 +542,7 @@ function seed(d: Database) {
     ['default_tab', 'tasks'],
     ['font_size', '14'],
     // v0.9.34: автоочистка выполненных задач — включена по умолчанию для новых
-    // установок. Старые БД не трогаем — INSERT OR IGNORE не перезапишет. Режим по
-    // умолчанию — weekday (день недели), день = 1 (Пн), мин. возраст = 7 дней.
+    // установок. Старые БД не трогаем — INSERT OR IGNORE не перезапишет.
     ['autocleanup_enabled', '1'],
     ['autocleanup_mode', 'weekday'],
     ['autocleanup_day', '1'],

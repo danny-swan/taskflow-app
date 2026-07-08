@@ -32,8 +32,18 @@ import { logger } from './logger';
 /** Максимум хранимых снимков. Старые удаляются тихо при создании нового. */
 export const MAX_SNAPSHOTS = 5;
 
-/** Ключ реестра снимков в settings (совпадает с ключом из migration v8). */
-const REGISTRY_KEY = 'snapshot_registry_v1';
+/** Общий префикс ключа реестра (из migration v8). */
+const REGISTRY_KEY_BASE = 'snapshot_registry_v1';
+
+/**
+ * Возвращает ключ реестра снимков для данного userId.
+ * v0.9.35-dev.6.10.0: реестр изолирован по аккаунту, чтобы пользователи разных
+ * аккаунтов на одном устройстве не видели снимки друг друга.
+ * Если userId = null — возвращает общий ключ (обратная совместимость / база непривязана).
+ */
+function registryKey(userId: string | null): string {
+  return userId ? `${REGISTRY_KEY_BASE}_${userId}` : REGISTRY_KEY_BASE;
+}
 
 /** Префикс ключей localStorage для web-снимков (полезная нагрузка). */
 const WEB_PAYLOAD_PREFIX = 'taskflow.snapshot.';
@@ -66,28 +76,79 @@ export interface SnapshotMeta {
 
 // ─── Реестр (settings.snapshot_registry_v1) ──────────────────────────────────
 
-/** Читает реестр снимков из settings. Возвращает [] при любой ошибке. */
+/**
+ * Читает реестр снимков из settings для текущего bound_user_id.
+ * v0.9.35-dev.6.10.0: реестр изолирован по аккаунту.
+ *
+ * Логика миграции: если персональный ключ ещё пуст, но старый общий
+ * REGISTRY_KEY_BASE содержит снимки, у которых boundUserId совпадает
+ * с текущим userId (или null) — мигрируем их в персональный ключ и
+ * удаляем старый, чтобы не засорять settings.
+ *
+ * Возвращает [] при любой ошибке.
+ */
 export function readRegistry(): SnapshotMeta[] {
+  const userId = getBoundUserId();
+  const key = registryKey(userId);
   try {
     const row = db.get<{ value: string }>(
       'SELECT value FROM settings WHERE key=?',
-      [REGISTRY_KEY],
+      [key],
     );
-    if (!row?.value) return [];
-    const parsed = JSON.parse(row.value);
-    return Array.isArray(parsed) ? (parsed as SnapshotMeta[]) : [];
+    if (row?.value) {
+      const parsed = JSON.parse(row.value);
+      return Array.isArray(parsed) ? (parsed as SnapshotMeta[]) : [];
+    }
+
+    // Персональный ключ пуст — проверяем старый общий реестр (миграция).
+    if (userId) {
+      const oldRow = db.get<{ value: string }>(
+        'SELECT value FROM settings WHERE key=?',
+        [REGISTRY_KEY_BASE],
+      );
+      if (oldRow?.value) {
+        const oldParsed = JSON.parse(oldRow.value);
+        if (Array.isArray(oldParsed) && oldParsed.length > 0) {
+          // Фильтруем снимки, принадлежащие текущему пользователю (или без привязки).
+          const mine = (oldParsed as SnapshotMeta[]).filter(
+            (s) => !s.boundUserId || s.boundUserId === userId,
+          );
+          if (mine.length > 0) {
+            // Мигрируем в персональный ключ.
+            db.run(
+              `INSERT INTO settings (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+              [key, JSON.stringify(mine)],
+            );
+            // Удаляем старый общий ключ.
+            db.run('DELETE FROM settings WHERE key=?', [REGISTRY_KEY_BASE]);
+            db.save();
+            logger.info(
+              `[snapshots] migrated ${mine.length} snapshot(s) from shared registry to user-scoped key (${key})`,
+            );
+            return mine;
+          }
+          // Снимки есть, но все чужие — просто удаляем старый ключ.
+          db.run('DELETE FROM settings WHERE key=?', [REGISTRY_KEY_BASE]);
+          db.save();
+        }
+      }
+    }
+
+    return [];
   } catch (e) {
     logger.warn('[snapshots] readRegistry failed:', e);
     return [];
   }
 }
 
-/** Пишет реестр снимков в settings (перезаписывает целиком). */
+/** Пишет реестр снимков в settings (перезаписывает целиком) для текущего bound_user_id. */
 function writeRegistry(list: SnapshotMeta[]): void {
+  const key = registryKey(getBoundUserId());
   db.run(
     `INSERT INTO settings (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    [REGISTRY_KEY, JSON.stringify(list)],
+    [key, JSON.stringify(list)],
   );
   db.save();
 }
