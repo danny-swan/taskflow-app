@@ -38,6 +38,7 @@ import { pushAll, type PushResult } from './push';
 import { pullAll, type PullResult } from './pull';
 import { subscribeRealtime, unsubscribeRealtime } from './realtime';
 import { getEntitlement, isProOrTrial } from '../entitlements';
+import { setBoundUserId, getBoundUserId } from '../snapshots';
 
 /**
  * v0.9.35-dev.5: вызываем useStore.refresh() после успешного pull, чтобы
@@ -287,6 +288,20 @@ export async function syncNow(): Promise<SyncResult> {
         finalPullResult,
         error: firstErr,
       };
+    }
+
+    // v0.9.35-dev.6.9.0: после успешного sync локальная база однозначно
+    // принадлежит текущему аккаунту — фиксируем привязку, чтобы при
+    // следующем входе под другим аккаунтом сработал детект смены
+    // (checkAccountBinding). Пишем только если изменилось, чтобы не дёргать
+    // settings на каждый sync. Ошибки глотаем — привязка не критична для sync.
+    try {
+      if (getBoundUserId() !== userId) {
+        setBoundUserId(userId);
+        logger.info(`[sync/orchestrator] bound local DB to user ${userId}`);
+      }
+    } catch (e) {
+      logger.warn('[sync/orchestrator] failed to set bound_user_id:', e);
     }
 
     setState({ status: 'synced', lastSyncedAt: now, lastError: null });

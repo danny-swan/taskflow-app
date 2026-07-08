@@ -223,6 +223,209 @@ fn get_backup_path(state: tauri::State<AppState>, app: tauri::AppHandle) -> Stri
     format!("{}.backup", current_path)
 }
 
+// ================================================================
+// v0.9.35-dev.6.9.0: локальные снимки базы данных (Tauri).
+//
+// Снимки — это бинарные копии файла data.db, которые кладутся в
+// подпапку `snapshots/` рядом с текущим файлом БД. Имя файла:
+//   snapshot_<epoch_ms>_<safe_label>.db
+// где safe_label — очищенная от небезопасных символов метка (напр. reason).
+//
+// Реестр метаданных снимков (id, label, размер, дата) хранится во
+// фронте в settings.snapshot_registry_v1 — Rust отвечает только за файлы.
+// Ротацию (держим до 5) выполняет фронт через delete_snapshot.
+//
+// Зачем отдельная папка, а не .backup: .backup — это единственная
+// авто-копия при закрытии окна, её перезаписывает каждый выход.
+// Снимки же — именованные точки восстановления, которые не должны
+// затираться и переживают смену аккаунта.
+// ================================================================
+
+/// Возвращает текущий путь к файлу БД (кастомный либо дефолтный).
+/// Общий помощник, чтобы не дублировать логику в каждой команде.
+fn resolve_db_path(state: &tauri::State<AppState>, app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let current_path = {
+        let lock = state.db_path.lock().unwrap();
+        if let Some(ref p) = *lock {
+            p.clone()
+        } else {
+            let config_dir = app
+                .path()
+                .app_config_dir()
+                .map_err(|e| e.to_string())?;
+            config_dir.join("data.db").to_string_lossy().into_owned()
+        }
+    };
+    Ok(std::path::PathBuf::from(current_path))
+}
+
+/// Папка со снимками: `<dir с data.db>/snapshots`. Создаётся при необходимости.
+fn snapshots_dir(state: &tauri::State<AppState>, app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let db_path = resolve_db_path(state, app)?;
+    let dir = db_path
+        .parent()
+        .ok_or("не удалось определить папку БД")?
+        .join("snapshots");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("не удалось создать папку снимков: {}", e))?;
+    Ok(dir)
+}
+
+/// Очищает метку для использования в имени файла (только [a-zA-Z0-9_-]).
+fn sanitize_label(label: &str) -> String {
+    let cleaned: String = label
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let trimmed = cleaned.trim_matches('_');
+    let out = if trimmed.is_empty() { "snapshot" } else { trimmed };
+    // Ограничиваем длину, чтобы не упереться в лимит пути на Windows.
+    out.chars().take(40).collect()
+}
+
+#[derive(Debug, Serialize)]
+struct SnapshotFileInfo {
+    /// Полный путь к файлу снимка.
+    path: String,
+    /// Имя файла (без папки).
+    file_name: String,
+    /// Размер в байтах.
+    size: u64,
+}
+
+/// v0.9.35-dev.6.9.0: создаёт снимок текущей БД.
+/// Возвращает метаданные созданного файла (путь, имя, размер).
+/// `label` — человекочитаемая метка (напр. "before_account_switch").
+#[tauri::command]
+fn snapshot_db(
+    label: String,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<SnapshotFileInfo, String> {
+    let src = resolve_db_path(&state, &app)?;
+    if !src.exists() {
+        return Err(format!("файл БД не найден: {}", src.to_string_lossy()));
+    }
+    let dir = snapshots_dir(&state, &app)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let file_name = format!("snapshot_{}_{}.db", ts, sanitize_label(&label));
+    let dst = dir.join(&file_name);
+    std::fs::copy(&src, &dst).map_err(|e| format!("создание снимка не удалось: {}", e))?;
+    let size = std::fs::metadata(&dst).map(|m| m.len()).unwrap_or(0);
+    Ok(SnapshotFileInfo {
+        path: dst.to_string_lossy().into_owned(),
+        file_name,
+        size,
+    })
+}
+
+/// v0.9.35-dev.6.9.0: список файлов снимков в папке snapshots/.
+/// Сортировка не гарантируется — фронт сортирует по реестру.
+#[tauri::command]
+fn list_snapshots(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<SnapshotFileInfo>, String> {
+    let dir = snapshots_dir(&state, &app)?;
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(out), // папки может ещё не быть — это не ошибка
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_snapshot = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("snapshot_") && n.ends_with(".db"))
+            .unwrap_or(false);
+        if !is_snapshot {
+            continue;
+        }
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        out.push(SnapshotFileInfo {
+            path: path.to_string_lossy().into_owned(),
+            file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            size,
+        });
+    }
+    Ok(out)
+}
+
+/// v0.9.35-dev.6.9.0: восстанавливает БД из снимка.
+/// ВАЖНО: перед перезаписью делает страховочную копию текущей БД в
+/// snapshots/pre_restore_<ts>.db, чтобы восстановление тоже было обратимым.
+/// Возвращает путь к страховочной копии (может быть пустым, если БД не было).
+/// Фронт после успеха должен перезагрузить приложение (restart_app),
+/// т.к. sql-плагин мог держать файл открытым.
+#[tauri::command]
+fn restore_snapshot(
+    snapshot_path: String,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let src = std::path::PathBuf::from(&snapshot_path);
+    if !src.exists() {
+        return Err(format!("снимок не найден: {}", snapshot_path));
+    }
+    // Проверяем, что снимок действительно лежит в нашей папке (защита от
+    // произвольного пути / traversal).
+    let dir = snapshots_dir(&state, &app)?;
+    let canonical_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
+    let canonical_src = std::fs::canonicalize(&src).map_err(|e| e.to_string())?;
+    if !canonical_src.starts_with(&canonical_dir) {
+        return Err("снимок вне папки снимков — восстановление отклонено".to_string());
+    }
+    let db_path = resolve_db_path(&state, &app)?;
+    // Страховочная копия текущей БД (если есть).
+    let mut safety_path = String::new();
+    if db_path.exists() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let safety = dir.join(format!("snapshot_{}_pre_restore.db", ts));
+        if let Err(e) = std::fs::copy(&db_path, &safety) {
+            eprintln!("[dev.6.9.0] pre-restore safety copy failed: {}", e);
+        } else {
+            safety_path = safety.to_string_lossy().into_owned();
+        }
+    }
+    // Убираем возможные WAL/SHM, чтобы SQLite не смешал старое состояние.
+    for ext in ["-wal", "-shm"] {
+        let side = std::path::PathBuf::from(format!("{}{}", db_path.to_string_lossy(), ext));
+        if side.exists() {
+            let _ = std::fs::remove_file(&side);
+        }
+    }
+    std::fs::copy(&src, &db_path).map_err(|e| format!("восстановление не удалось: {}", e))?;
+    Ok(safety_path)
+}
+
+/// v0.9.35-dev.6.9.0: удаляет файл снимка (для ротации).
+/// Так же проверяет, что путь внутри папки снимков.
+#[tauri::command]
+fn delete_snapshot(
+    snapshot_path: String,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let src = std::path::PathBuf::from(&snapshot_path);
+    if !src.exists() {
+        return Ok(()); // уже нет — идемпотентно
+    }
+    let dir = snapshots_dir(&state, &app)?;
+    let canonical_dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
+    let canonical_src = std::fs::canonicalize(&src).map_err(|e| e.to_string())?;
+    if !canonical_src.starts_with(&canonical_dir) {
+        return Err("снимок вне папки снимков — удаление отклонено".to_string());
+    }
+    std::fs::remove_file(&src).map_err(|e| format!("удаление снимка не удалось: {}", e))?;
+    Ok(())
+}
+
 /// v0.8.12: returns the directory where logs are stored (= directory of
 /// current DB path). This keeps logs co-located with user data so they
 /// move together if the user changes the DB path.
@@ -379,6 +582,10 @@ fn main() {
             restart_app,
             backup_db,
             get_backup_path,
+            snapshot_db,
+            list_snapshots,
+            restore_snapshot,
+            delete_snapshot,
             log_line,
             get_log_path,
             clear_log

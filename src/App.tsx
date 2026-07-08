@@ -17,6 +17,7 @@ import { AuthScreen } from './components/AuthScreen';
 import { PasswordResetModal } from './components/PasswordResetModal';
 import { CommandPalette } from './components/CommandPalette';
 import { PaywallGate } from './components/PaywallModal';
+import { AccountSwitchGate } from './components/AccountSwitchGate';
 import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { pingSupabaseKeepAlive } from './lib/supabase';
@@ -296,6 +297,9 @@ function App() {
         {showPasswordReset && (
           <PasswordResetModal onClose={() => setShowPasswordReset(false)} />
         )}
+        {/* v0.9.35-dev.6.9.0: гейт смены аккаунта на одном устройстве.
+            Сам решает, показываться ли (bound_user_id != session). Не в e2e. */}
+        {!e2eBypass && <AccountSwitchGate />}
         {/* v0.9.29: Command Palette */}
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       </div>

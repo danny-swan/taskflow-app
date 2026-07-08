@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban, Unlink } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban, Unlink, History, Save, Loader2 } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
 import { useAuth, signOut, deleteAccount, updateEmail } from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
@@ -2308,6 +2308,126 @@ function SyncSection() {
   const [lastError, setLastError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const syncModuleRef = useRef<any>(null);
+  const pushToast = useStore(s => s.pushToast);
+
+  // ─── Снимки локальной базы (v0.9.35-dev.6.9.0) ───────────────────────────
+  const [snapshots, setSnapshots] = useState<import('../lib/snapshots').SnapshotMeta[]>([]);
+  const [snapsLoading, setSnapsLoading] = useState(true);
+  const [snapBusy, setSnapBusy] = useState<string | null>(null); // id операции или 'create'
+  const [webLimited, setWebLimited] = useState(false);
+  const [restartAfterRestore, setRestartAfterRestore] = useState(false);
+
+  const refreshSnapshots = async () => {
+    try {
+      const m = await import('../lib/snapshots');
+      setWebLimited(m.isWebSnapshotLimited());
+      const list = await m.listSnapshots();
+      setSnapshots(list);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[snapshots/settings] list failed:', e);
+    } finally {
+      setSnapsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshSnapshots();
+  }, []);
+
+  const snapshotLabel = (label: string): string => {
+    if (label === 'before_account_switch') return t('Перед сменой аккаунта', 'Before account switch');
+    if (label === 'manual') return t('Создан вручную', 'Manual');
+    if (label === 'before_restore') return t('Перед восстановлением', 'Before restore');
+    return label;
+  };
+
+  const formatSnapDate = (iso: string): string => {
+    try {
+      return new Date(iso).toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US', {
+        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+    } catch { return iso; }
+  };
+
+  const formatSize = (bytes: number): string => {
+    if (!bytes || bytes < 0) return '—';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const handleCreateSnapshot = async () => {
+    if (snapBusy) return;
+    setSnapBusy('create');
+    try {
+      const m = await import('../lib/snapshots');
+      await m.createSnapshot('manual');
+      await refreshSnapshots();
+      pushToast(t('Снимок создан', 'Snapshot created'));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[snapshots/settings] create failed:', e);
+      pushToast(t('Не удалось создать снимок', 'Failed to create snapshot'));
+    } finally {
+      setSnapBusy(null);
+    }
+  };
+
+  const handleRestoreSnapshot = async (id: string) => {
+    if (snapBusy) return;
+    const confirmMsg = t(
+      'Восстановить эту версию базы? Текущее состояние будет сохранено в отдельный снимок перед заменой. Это действие затронет все локальные задачи.',
+      'Restore this database version? The current state will be saved as a separate snapshot before replacing. This will affect all local tasks.',
+    );
+    if (!window.confirm(confirmMsg)) return;
+    setSnapBusy(id);
+    try {
+      const m = await import('../lib/snapshots');
+      const { needsRestart } = await m.restoreSnapshot(id);
+      await refreshSnapshots();
+      if (needsRestart) {
+        setRestartAfterRestore(true);
+      } else {
+        pushToast(t('Снимок восстановлен', 'Snapshot restored'));
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[snapshots/settings] restore failed:', e);
+      pushToast(t('Не удалось восстановить снимок', 'Failed to restore snapshot'));
+    } finally {
+      setSnapBusy(null);
+    }
+  };
+
+  const handleDeleteSnapshot = async (id: string) => {
+    if (snapBusy) return;
+    if (!window.confirm(t('Удалить этот снимок безвозвратно?', 'Delete this snapshot permanently?'))) return;
+    setSnapBusy(id);
+    try {
+      const m = await import('../lib/snapshots');
+      await m.deleteSnapshot(id);
+      await refreshSnapshots();
+      pushToast(t('Снимок удалён', 'Snapshot deleted'));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[snapshots/settings] delete failed:', e);
+      pushToast(t('Не удалось удалить снимок', 'Failed to delete snapshot'));
+    } finally {
+      setSnapBusy(null);
+    }
+  };
+
+  const handleRestartAfterRestore = async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('restart_app');
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[snapshots/settings] restart_app error:', e);
+      pushToast(t('Не удалось перезапустить. Закройте и запустите приложение вручную.', 'Restart failed. Please close and start the app manually.'));
+    }
+  };
 
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
@@ -2485,6 +2605,122 @@ function SyncSection() {
           </p>
         </div>
       </details>
+
+      {/* ─── Снимки локальной базы (v0.9.35-dev.6.9.0) ─────────────────────── */}
+      <div className="mt-6 pt-5 border-t border-border-soft">
+        <div className="flex items-center gap-2 mb-1">
+          <History size={15} className="text-muted" />
+          <h3 className="text-[14px] font-semibold">
+            {t('Снимки локальной базы', 'Local database snapshots')}
+          </h3>
+        </div>
+        <p className="text-[12px] text-muted mb-3">
+          {t(
+            'Снимок — это полная резервная копия локальной базы. Приложение автоматически создаёт снимок перед сменой аккаунта, чтобы вы всегда могли вернуть прежние данные. Хранятся последние 5 снимков, старые удаляются автоматически.',
+            'A snapshot is a full backup of your local database. The app automatically creates one before switching accounts so you can always roll back. The last 5 snapshots are kept; older ones are removed automatically.',
+          )}
+        </p>
+
+        {webLimited && (
+          <div className="mb-3 px-3 py-2 rounded-md border border-[var(--warning,#c90)]/40 bg-[var(--warning,#c90)]/10 text-[11px] text-muted flex items-start gap-2">
+            <AlertTriangle size={13} className="text-[var(--warning,#c90)] shrink-0 mt-0.5" />
+            <span>
+              {t(
+                'В веб-версии снимки хранятся в localStorage браузера и ограничены по размеру. Для полноценных снимков используйте десктоп-приложение.',
+                'In the web version snapshots are stored in browser localStorage and limited in size. Use the desktop app for full snapshots.',
+              )}
+            </span>
+          </div>
+        )}
+
+        <div className="mb-3">
+          <button
+            onClick={handleCreateSnapshot}
+            disabled={snapBusy !== null}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-soft text-[13px] font-medium hover:bg-[var(--surface-alt)]/60 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {snapBusy === 'create'
+              ? <Loader2 size={14} className="animate-spin" />
+              : <Save size={14} />}
+            {t('Создать снимок вручную', 'Create snapshot manually')}
+          </button>
+        </div>
+
+        {snapsLoading ? (
+          <div className="text-[12px] text-muted flex items-center gap-2 py-2">
+            <Loader2 size={13} className="animate-spin" />
+            {t('Загрузка снимков…', 'Loading snapshots…')}
+          </div>
+        ) : snapshots.length === 0 ? (
+          <div className="text-[12px] text-muted px-3 py-3 rounded-md border border-dashed border-border-soft text-center">
+            {t('Снимков пока нет.', 'No snapshots yet.')}
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {snapshots.map(snap => {
+              const busy = snapBusy === snap.id;
+              return (
+                <li
+                  key={snap.id}
+                  className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-md border border-border-soft bg-surface"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium truncate">
+                      {snapshotLabel(snap.label)}
+                    </div>
+                    <div className="text-[11px] text-muted flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span>{formatSnapDate(snap.createdAt)}</span>
+                      <span className="opacity-50">•</span>
+                      <span>{formatSize(snap.size)}</span>
+                      {typeof snap.taskCount === 'number' && (
+                        <>
+                          <span className="opacity-50">•</span>
+                          <span>{t(`${snap.taskCount} задач`, `${snap.taskCount} tasks`)}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => handleRestoreSnapshot(snap.id)}
+                      disabled={snapBusy !== null}
+                      title={t('Восстановить', 'Restore')}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border-soft text-[12px] font-medium hover:bg-[var(--surface-alt)]/60 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {busy
+                        ? <Loader2 size={13} className="animate-spin" />
+                        : <RotateCcw size={13} />}
+                      <span className="hidden sm:inline">{t('Восстановить', 'Restore')}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteSnapshot(snap.id)}
+                      disabled={snapBusy !== null}
+                      title={t('Удалить', 'Delete')}
+                      className="inline-flex items-center justify-center p-1.5 rounded-md text-muted hover:text-[var(--error,#c33)] hover:bg-[var(--error,#c33)]/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {/* Диалог перезапуска после восстановления (Tauri) */}
+      <ConfirmDialog
+        open={restartAfterRestore}
+        title={t('Снимок восстановлен', 'Snapshot restored')}
+        message={t(
+          'База данных заменена восстановленным снимком. Чтобы изменения вступили в силу, необходимо перезапустить приложение.',
+          'The database has been replaced with the restored snapshot. The app needs to restart for changes to take effect.',
+        )}
+        confirmLabel={t('Перезапустить сейчас', 'Restart now')}
+        cancelLabel={t('Позже', 'Later')}
+        onConfirm={() => { setRestartAfterRestore(false); void handleRestartAfterRestore(); }}
+        onCancel={() => setRestartAfterRestore(false)}
+      />
     </div>
   );
 }

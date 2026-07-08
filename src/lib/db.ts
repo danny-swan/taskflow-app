@@ -514,6 +514,56 @@ export async function resetDatabase(): Promise<void> {
   }
 }
 
+// ─── v0.9.35-dev.6.9.0: clearUserData ────────────────────────────────────────
+// Очищает ЛОКАЛЬНЫЕ пользовательские данные без re-seed'а. Используется для
+// варианта «Загрузить облачные» при смене аккаунта: после очистки следующий
+// sync подтянет данные нового аккаунта через pull.
+//
+// Что удаляется:
+//   • tasks, tags, statuses, task_templates, overdue_events — все данные;
+//   • sync_outbox — очередь пуша (иначе старые локальные строки утекут в облако);
+//   • sync_last_pulled_* курсоры в settings — чтобы pull забрал всё заново.
+//
+// Что СОХРАНЯЕТСЯ (намеренно, это не данные аккаунта):
+//   • client_id — идентификатор устройства;
+//   • snapshot_registry_v1 — реестр снимков (снимки не трогаем!);
+//   • bound_user_id — вызывающий сам решает, снять ли привязку (обычно да,
+//     через snapshots.setBoundUserId(null), чтобы sync привязал к новому);
+//   • UI-настройки (theme, lang, font_size, autocleanup_* и т.п.).
+//
+// ВАЖНО: НЕ вызывает seed(). Если облако пустое, база останется без
+// seed-статусов — это ожидаемо для «загрузить облачные» (пользователь получит
+// ровно то, что в облаке). initDb при следующем старте засеет, только если
+// таблицы реально пусты И это не сценарий clearUserData (мы вызываем sync
+// сразу после, до перезапуска).
+export async function clearUserData(): Promise<void> {
+  const execBoth = async (sql: string, params: any[] = []) => {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      try { await d.execute(sql, params); } catch (e) { console.warn('[clearUserData][tauri]', sql, e); }
+    }
+    if (webDb) {
+      try { webDb.run(sql, params); } catch (e) { console.warn('[clearUserData][web]', sql, e); }
+    }
+  };
+
+  // Порядок: сначала зависимые (overdue_events ссылается на tasks), потом
+  // tasks, потом справочники. FK не жёсткие, но порядок делаем логичным.
+  await execBoth('DELETE FROM overdue_events');
+  await execBoth('DELETE FROM tasks');
+  await execBoth('DELETE FROM task_templates');
+  await execBoth('DELETE FROM tags');
+  await execBoth('DELETE FROM statuses');
+  await execBoth('DELETE FROM sync_outbox');
+  // AUTOINCREMENT счётчики — чтобы новые id начинались с 1 (чистая база).
+  try { await execBoth(`DELETE FROM sqlite_sequence WHERE name IN ('tasks','tags','statuses','task_templates','overdue_events')`); } catch { /* may not exist */ }
+  // Сбрасываем курсоры pull, чтобы забрать всё облако заново.
+  await execBoth(`DELETE FROM settings WHERE key LIKE 'sync_last_pulled_%'`);
+
+  // Персистим web-кэш.
+  if (!IS_TAURI) save();
+}
+
 // ─── PUBLIC init ──────────────────────────────────────────────────────────────
 export async function initDb(): Promise<void> {
   // Always initialise the in-memory sql.js database as a synchronous cache layer.

@@ -207,13 +207,13 @@ const sectionsRu: HelpSection[] = [
         q: 'Можно ли держать БД в OneDrive / Dropbox / Яндекс.Диске?',
         a: (
           <>
-            <p>Можно, но с оговорками. SQLite блокирует файл во время работы приложения — если на двух устройствах TaskFlow будет открыт одновременно и облако синхронизирует <code>data.db</code> на лету, база может повредиться.</p>
-            <p className="mt-2">Безопасный сценарий:</p>
+            <p>Можно, но это не рекомендуется. SQLite блокирует файл во время работы приложения — если на двух устройствах TaskFlow будет открыт одновременно и облачный клиент (OneDrive/Dropbox/Яндекс.Диск) синхронизирует <code>data.db</code> на лету, база может повредиться.</p>
+            <p className="mt-2">⚡ Для переноса данных между устройствами используйте <strong>встроенную синхронизацию</strong> (планы Pro/Trial, вкладка Настройки → Синхронизация) — она безопасно обменивает задачи через облако без риска для файла базы.</p>
+            <p className="mt-2">Если всё же храните файл базы в облачной папке — безопасный сценарий:</p>
             <ul className="mt-1 list-disc pl-4 space-y-1">
               <li>Используйте TaskFlow только на одном устройстве за раз.</li>
               <li>Перед запуском дождитесь, пока облачный клиент завершит синхронизацию папки.</li>
               <li>Полностью закрывайте приложение (а не сворачивайте) перед сменой устройства, чтобы файлы <code>data.db</code>, <code>data.db-wal</code> и <code>data.db-shm</code> успели уйти в облако.</li>
-              <li>Для надёжного переноса между устройствами лучше используйте Экспорт/Импорт в JSON.</li>
             </ul>
           </>
         ),
@@ -326,9 +326,53 @@ const sectionsRu: HelpSection[] = [
         q: 'Где хранятся мои задачи?',
         a: (
           <>
-            <p>Все задачи, комментарии, тэги, настройки и шаблоны лежат в локальной SQLite-базе (<code>data.db</code>) рядом с приложением. В облако задачи пока не синхронизируются — это в роадмэпе.</p>
-            <p className="mt-2">Аккаунт нужен только для авторизации (email + пароль) через Supabase — чтобы можно было восстановить пароль и в будущем подключить cloud sync.</p>
+            <p>Все задачи, комментарии, тэги, настройки и шаблоны лежат в локальной SQLite-базе (<code>data.db</code>) рядом с приложением. Приложение работает полностью локально — вы всегда владеете своими данными.</p>
+            <p className="mt-2">Если вы вошли в аккаунт (Pro/Trial), задачи, тэги, статусы и шаблоны <strong>синхронизируются между устройствами</strong> через облако Supabase. Синхронизация опциональна: без входа всё остаётся только на этом устройстве.</p>
+            <p className="mt-2">Аккаунт (email + пароль) нужен для авторизации через Supabase — восстановление пароля и облачная синхронизация.</p>
             <p className="mt-2"><strong>Offline-грейс</strong>: если сети нет, приложение работает без повторного входа в течение 7 дней — все данные лежат локально.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как работает синхронизация с облаком?',
+        a: (
+          <>
+            <p>Синхронизация доступна на планах <strong>Pro и Trial</strong>. Она двусторонняя: локальные изменения отправляются в облако, а облачные — скачиваются обратно.</p>
+            <ul className="list-disc pl-5 mt-2 space-y-1">
+              <li><strong>Конфликты:</strong> правило last-write-wins — побеждает более позднее изменение (по <code>updated_at</code>).</li>
+              <li><strong>Удаление:</strong> soft-delete — запись помечается удалённой, но остаётся в облаке для истории.</li>
+              <li><strong>Склейка:</strong> записи сопоставляются по уникальному UUID — дубликаты не создаются.</li>
+            </ul>
+            <p className="mt-2">Запустить синхронизацию вручную можно в <strong>Настройки → Синхронизация</strong> кнопкой «Синхронизировать сейчас». В релизной сборке она также запускается автоматически: при старте, возврате фокуса и через 2 секунды после любого изменения.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Я вошёл под другим аккаунтом — что будет с моими задачами?',
+        a: (
+          <>
+            <p>Локальная база — один файл на устройство. Если вы выходите и входите под <strong>другим аккаунтом</strong>, приложение замечает это и предлагает выбор, что делать с текущими локальными данными:</p>
+            <ul className="list-disc pl-5 mt-2 space-y-1">
+              <li><strong>Загрузить облачные:</strong> локальные данные очищаются, и скачиваются задачи нового аккаунта из облака.</li>
+              <li><strong>Оставить локальные:</strong> текущие задачи остаются и будут записаны в облако нового аккаунта.</li>
+              <li><strong>Объединить:</strong> локальные и облачные задачи сливаются вместе.</li>
+            </ul>
+            <p className="mt-2">Перед любым из этих действий приложение <strong>автоматически создаёт снимок</strong> текущей локальной базы. Даже если вы выберете «Загрузить облачные», старые локальные задачи можно вернуть из снимка.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как восстановить данные из снимка?',
+        a: (
+          <>
+            <p><strong>Снимок</strong> — это полная резервная копия локальной базы на определённый момент. Приложение создаёт снимок автоматически перед сменой аккаунта и перед восстановлением другого снимка.</p>
+            <ol className="list-decimal pl-5 mt-2 space-y-1">
+              <li>Откройте <strong>Настройки → Синхронизация</strong>, блок «Снимки локальной базы».</li>
+              <li>Найдите нужный снимок по дате и метке и нажмите «Восстановить».</li>
+              <li>Перед заменой текущее состояние сохраняется в отдельный снимок — откат всегда обратим.</li>
+              <li>На десктопе после восстановления приложение попросит перезапуститься — это нужно, чтобы подхватить новый файл базы.</li>
+            </ol>
+            <p className="mt-2">Хранятся последние <strong>5 снимков</strong>, самые старые удаляются автоматически. На десктопе (Tauri) снимки — полноценные файловые копии рядом с базой; в веб-версии — в localStorage браузера (ограничены по размеру).</p>
           </>
         ),
       },
@@ -450,8 +494,9 @@ const sectionsEn: HelpSection[] = [
       },
     ],
   },
-  // v0.9.26: renamed section, removed outdated "cloud sync" FAQ
-  // (cloud sync is on the roadmap, not shipped), added "Where are my tasks stored?".
+  // v0.9.26: renamed section, added "Where are my tasks stored?".
+  // v0.9.35-dev.6.9.0: cloud sync shipped (Pro/Trial) + snapshots — FAQ updated
+  // to describe sync, account-switch behaviour and snapshot restore.
   {
     title: '📋 Basics',
     items: [
@@ -619,13 +664,13 @@ const sectionsEn: HelpSection[] = [
         q: 'Can I keep the DB on OneDrive / Dropbox / Google Drive?',
         a: (
           <>
-            <p>You can, but with caveats. SQLite locks the file while the app runs — if TaskFlow is open on two devices at once and the cloud syncs <code>data.db</code> on the fly, the database may get corrupted.</p>
-            <p className="mt-2">Safe pattern:</p>
+            <p>You can, but it's not recommended. SQLite locks the file while the app runs — if TaskFlow is open on two devices at once and a cloud client (OneDrive/Dropbox/Google Drive) syncs <code>data.db</code> on the fly, the database may get corrupted.</p>
+            <p className="mt-2">⚡ For cross-device transfer use the <strong>built-in sync</strong> (Pro/Trial plans, Settings → Sync) — it safely exchanges tasks through the cloud with no risk to the database file.</p>
+            <p className="mt-2">If you still keep the database file in a cloud folder — safe pattern:</p>
             <ul className="mt-1 list-disc pl-4 space-y-1">
               <li>Only use TaskFlow on one device at a time.</li>
               <li>Before launching, wait until the cloud client finishes syncing the folder.</li>
               <li>Close the app completely (don't just minimise) before switching devices, so <code>data.db</code>, <code>data.db-wal</code> and <code>data.db-shm</code> have time to upload.</li>
-              <li>For reliable cross-device transfer, prefer Export/Import in JSON.</li>
             </ul>
           </>
         ),
@@ -738,8 +783,52 @@ const sectionsEn: HelpSection[] = [
         q: 'Where are my tasks stored?',
         a: (
           <>
-            <p>All tasks live in a local SQLite database on your machine — everything works fully offline, no network required. The database file lives in the TaskFlow app data folder (Windows: <code>%APPDATA%\\TaskFlow\\</code>).</p>
-            <p className="mt-2">The Supabase account is used <strong>only</strong> for authentication (sign-in, password recovery, email confirmation) and for future features. Task content is not uploaded to the cloud — cross-device sync is on the roadmap.</p>
+            <p>All tasks live in a local SQLite database on your machine — everything works fully offline, no network required. The database file lives in the TaskFlow app data folder (Windows: <code>%APPDATA%\\TaskFlow\\</code>). You always own your data.</p>
+            <p className="mt-2">When you're signed in (Pro/Trial), tasks, tags, statuses and templates <strong>sync across your devices</strong> via the Supabase cloud. Sync is optional: without signing in, everything stays only on this device.</p>
+            <p className="mt-2">The Supabase account (email + password) is used for authentication — sign-in, password recovery and cloud sync.</p>
+          </>
+        ),
+      },
+      {
+        q: 'How does cloud sync work?',
+        a: (
+          <>
+            <p>Sync is available on the <strong>Pro and Trial</strong> plans. It's two-way: local changes are pushed to the cloud and cloud changes are pulled back.</p>
+            <ul className="list-disc pl-5 mt-2 space-y-1">
+              <li><strong>Conflicts:</strong> last-write-wins — the more recent change wins (by <code>updated_at</code>).</li>
+              <li><strong>Deletion:</strong> soft-delete — the row is marked deleted but stays in the cloud for history.</li>
+              <li><strong>Matching:</strong> rows are matched by a unique UUID — no duplicates are created.</li>
+            </ul>
+            <p className="mt-2">You can run sync manually in <strong>Settings → Sync</strong> with the "Sync now" button. In release builds it also runs automatically: on startup, focus return, and 2 seconds after any change.</p>
+          </>
+        ),
+      },
+      {
+        q: 'I signed in with a different account — what happens to my tasks?',
+        a: (
+          <>
+            <p>The local database is one file per device. If you sign out and sign in with a <strong>different account</strong>, the app detects this and asks what to do with your current local data:</p>
+            <ul className="list-disc pl-5 mt-2 space-y-1">
+              <li><strong>Load cloud data:</strong> local data is cleared and the new account's tasks are downloaded from the cloud.</li>
+              <li><strong>Keep local data:</strong> your current tasks stay and get written to the new account's cloud.</li>
+              <li><strong>Merge:</strong> local and cloud tasks are merged together.</li>
+            </ul>
+            <p className="mt-2">Before any of these actions the app <strong>automatically creates a snapshot</strong> of the current local database. Even if you choose "Load cloud data", the old local tasks can be restored from the snapshot.</p>
+          </>
+        ),
+      },
+      {
+        q: 'How do I restore data from a snapshot?',
+        a: (
+          <>
+            <p>A <strong>snapshot</strong> is a full backup of the local database at a point in time. The app creates one automatically before switching accounts and before restoring another snapshot.</p>
+            <ol className="list-decimal pl-5 mt-2 space-y-1">
+              <li>Open <strong>Settings → Sync</strong>, the "Local database snapshots" block.</li>
+              <li>Find the snapshot you need by its date and label and click "Restore".</li>
+              <li>Before replacing, the current state is saved to a separate snapshot — rollback is always reversible.</li>
+              <li>On desktop, after restoring the app asks to restart — this is needed to pick up the new database file.</li>
+            </ol>
+            <p className="mt-2">The last <strong>5 snapshots</strong> are kept; the oldest are removed automatically. On desktop (Tauri) snapshots are full file copies next to the database; in the web version they live in browser localStorage (size-limited).</p>
           </>
         ),
       },
