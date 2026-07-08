@@ -722,8 +722,10 @@ async function savePaymentMethod(
     return { ok: false, error: `deactivate old methods failed: ${deactRes.error?.message}` }
   }
 
-  // 2) Upsert новый метод (на случай если такой payment_method_id уже был
-  // — conflict по (user_id, provider, external_id), см. миграцию 0014)
+  // 2) Upsert новый метод (на случай если такой payment_method_id уже был).
+  // Conflict по (provider, external_id): токен ЮKassa глобально уникален,
+  // это единственное UNIQUE-ограничение таблицы (миграция 0014). user_id в ключ
+  // НЕ входит — один токен не может принадлежать двум пользователям.
   const card = pm.card ?? {}
   const nowIso = new Date().toISOString()
   const row: Record<string, unknown> = {
@@ -741,7 +743,7 @@ async function savePaymentMethod(
     saved_at: nowIso,
   }
 
-  const upsertRes = await admin.upsert('payment_methods', row, 'user_id,provider,external_id')
+  const upsertRes = await admin.upsert('payment_methods', row, 'provider,external_id')
   if (!upsertRes.ok) {
     return { ok: false, error: `upsert failed: ${upsertRes.error?.message}` }
   }
