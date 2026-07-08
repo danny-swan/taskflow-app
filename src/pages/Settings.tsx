@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban, Unlink, History, Save, Loader2 } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban, History, Save, Loader2 } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
 import { useAuth, signOut, deleteAccount, updateEmail } from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
@@ -16,7 +16,7 @@ import { logger } from '../lib/logger';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { useEntitlement, submitActivationRequest, cancelSubscription, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, changePlan, type PaymentMethodRow } from '../lib/entitlements';
+import { useEntitlement, submitActivationRequest, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, changePlan, type PaymentMethodRow } from '../lib/entitlements';
 import { supabase } from '../lib/supabase';
 
 type Sub = 'general' | 'account' | 'subscription' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
@@ -2801,10 +2801,10 @@ function SubscriptionSection() {
   const [submitting, setSubmitting] = useState(false);
 
   // v0.9.35-dev.6.5.1 — recurring management
-  const [cancelBusy, setCancelBusy] = useState(false);
+  // v0.9.35-dev.6.9.3: cancel-subscription больше не используется в UI —
+  // отключение автопродления идёт через detach (одно действие).
   const [reactivateBusy, setReactivateBusy] = useState(false);
-  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
-  // v0.9.35-dev.6.5.2 — отвязка карты (требование ЮKassa)
+  // v0.9.35-dev.6.5.2 — отвязка карты (требование ЮKassa) = отключение автопродления
   const [detachBusy, setDetachBusy] = useState(false);
   const [detachConfirmOpen, setDetachConfirmOpen] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodRow[]>([]);
@@ -2857,22 +2857,8 @@ function SubscriptionSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, entitlement.effectivePlan, entitlement.paymentMethodId]);
 
-  const handleCancelSubscription = async () => {
-    setCancelBusy(true);
-    try {
-      const res = await cancelSubscription();
-      if (res.ok) {
-        pushToast(t('Автопродление отменено', 'Auto-renewal cancelled'));
-      } else {
-        pushToast(t('Не удалось отменить: ', 'Failed to cancel: ') + res.error);
-      }
-    } catch (e: any) {
-      pushToast(e?.message ?? t('Ошибка отмены', 'Cancel error'));
-    } finally {
-      setCancelBusy(false);
-      setCancelConfirmOpen(false);
-    }
-  };
+  // v0.9.35-dev.6.9.3: handleCancelSubscription удалён — отключение
+  // автопродления теперь всегда через handleDetachPaymentMethod.
 
   const handleReactivateSubscription = async () => {
     setReactivateBusy(true);
@@ -3159,18 +3145,33 @@ function SubscriptionSection() {
                 </p>
               )}
             </div>
+            {/* v0.9.35-dev.6.9.3: единая кнопка «Отключить автопродление» (detach).
+                Заменяет прежнюю «Отменить» (cancel-subscription): по решению
+                оставляем одно понятное действие, симметричное «Включить».
+                detach: is_active=false у карт, payment_method_id=null,
+                auto_renew=false, cancel_at_period_end=true. Доступ до valid_until
+                сохраняется. Показываем, когда автопродление активно. */}
             {entitlement.autoRenew && !entitlement.cancelAtPeriodEnd && (
               <button
                 type="button"
-                onClick={() => setCancelConfirmOpen(true)}
-                disabled={cancelBusy}
+                onClick={() => setDetachConfirmOpen(true)}
+                disabled={detachBusy}
                 className="text-[12px] px-3 py-1.5 rounded-md border border-border-soft hover:bg-surface disabled:opacity-60 flex items-center gap-1.5"
               >
                 <Ban size={12} />
-                {t('Отменить', 'Cancel')}
+                {detachBusy ? t('Отключаем…', 'Disabling…') : t('Отключить', 'Disable')}
               </button>
             )}
-            {entitlement.cancelAtPeriodEnd && entitlement.paymentMethodId && (
+            {/* v0.9.35-dev.6.9.3: кнопка включения автопродления.
+                Показываем, если карта привязана (paymentMethodId != null),
+                но автопродление сейчас не активно — это покрывает ДВА случая:
+                  • cancelAtPeriodEnd=true (юзер отменял) → «Включить обратно»;
+                  • !autoRenew && !cancel (карта только что привязана через
+                    update-card, шаг 2 двухшагового флоу) → «Включить».
+                Оба вызывают reactivate-subscription (auto_renew=true,
+                cancel_at_period_end=false). Раньше кнопка требовала
+                cancelAtPeriodEnd → после привязки карты был тупик. */}
+            {entitlement.paymentMethodId && !entitlement.autoRenew && (
               <button
                 type="button"
                 onClick={handleReactivateSubscription}
@@ -3181,7 +3182,9 @@ function SubscriptionSection() {
                 <RotateCcw size={12} />
                 {reactivateBusy
                   ? t('Включаем…', 'Enabling…')
-                  : t('Включить обратно', 'Re-enable')}
+                  : entitlement.cancelAtPeriodEnd
+                    ? t('Включить обратно', 'Re-enable')
+                    : t('Включить автопродление', 'Enable auto-renewal')}
               </button>
             )}
           </div>
@@ -3226,7 +3229,7 @@ function SubscriptionSection() {
             {pmLoading && <p className="text-[12px] text-muted">{t('Загрузка…', 'Loading…')}</p>}
             {!pmLoading && paymentMethods.length === 0 && (
               <p className="text-[12px] text-muted">
-                {t('Карта не привязана. Автопродление невозможно.', 'No card linked. Auto-renewal not available.')}
+                {t('Карта не привязана. Чтобы подписка продлевалась автоматически, включите автопродление.', 'No card linked. To keep your subscription active automatically, enable auto-renewal.')}
               </p>
             )}
             {!pmLoading && paymentMethods.length > 0 && paymentMethods.map((pm) => {
@@ -3242,35 +3245,37 @@ function SubscriptionSection() {
                       {brandStr} •••• {pm.card_last4 ?? '••••'}{expStr}
                     </span>
                   </div>
+                  {/* v0.9.35-dev.6.9.3: в блоке карты остаётся только «Обновить».
+                      Отключение автопродления (detach) переехало в блок
+                      статуса выше — одно понятное действие «Отключить». */}
                   <div className="flex items-center gap-3 shrink-0">
                     <button
                       type="button"
                       onClick={() => navigate('/checkout?mode=update-card')}
                       className="text-[12px] underline text-muted hover:text-fg"
                     >
-                      {t('Обновить', 'Update')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDetachConfirmOpen(true)}
-                      disabled={detachBusy}
-                      className="text-[12px] px-2.5 py-1 rounded-md border border-border-soft hover:bg-surface disabled:opacity-60 flex items-center gap-1.5"
-                    >
-                      <Unlink size={12} />
-                      {detachBusy ? t('Отвязываем…', 'Detaching…') : t('Отвязать', 'Detach')}
+                      {t('Обновить карту', 'Update card')}
                     </button>
                   </div>
                 </div>
               );
             })}
-            {!pmLoading && paymentMethods.length === 0 && entitlement.autoRenew === false && (
+            {/* v0.9.35-dev.6.9.3: единая кнопка «Включить автопродление»
+                вместо «Привязать карту». Клик → checkout (шаг 1: привязка
+                карты через 1₽ + возврат). После возврата карта появляется
+                через realtime, и выше (блок статуса) появляется кнопка
+                «Включить автопродление» (шаг 2: reactivate). Показываем только
+                когда карты нет И нет привязки (чтобы не дублировать кнопку
+                статуса в случае, когда pm_id есть). */}
+            {!pmLoading && paymentMethods.length === 0 && !entitlement.paymentMethodId && !entitlement.autoRenew && (
               <button
                 type="button"
                 onClick={() => navigate('/checkout?mode=update-card')}
-                className="mt-2 text-[12px] px-3 py-1.5 rounded-md border border-border-soft hover:bg-surface flex items-center gap-1.5"
+                style={{ background: 'var(--accent, #01696F)' }}
+                className="mt-2 text-white text-[12px] px-3 py-1.5 rounded-md hover:opacity-90 transition-opacity flex items-center gap-1.5"
               >
-                <CreditCard size={12} />
-                {t('Привязать карту', 'Link card')}
+                <RotateCcw size={12} />
+                {t('Включить автопродление', 'Enable auto-renewal')}
               </button>
             )}
           </div>
@@ -3285,38 +3290,24 @@ function SubscriptionSection() {
         </div>
       )}
 
-      {/* Модалка подтверждения отмены */}
+      {/* v0.9.35-dev.6.9.3: модалка подтверждения отключения автопродления (detach).
+          Прежняя отдельная модалка cancel удалена — осталось одно действие. */}
       <ConfirmDialog
-        open={cancelConfirmOpen}
-        title={t('Отменить автопродление?', 'Cancel auto-renewal?')}
+        open={detachConfirmOpen}
+        title={t('Отключить автопродление?', 'Disable auto-renewal?')}
         message={
           validUntilStr
             ? t(
-                `Доступ к Pro-функциям сохранится до ${validUntilStr}, дальше аккаунт вернётся на Free. Деньги за текущий период не возвращаются.`,
-                `Pro access remains until ${validUntilStr}, then the account downgrades to Free. The current period is non-refundable.`,
+                `Карта будет отвязана, автопродление отключится. Доступ к Pro-функциям сохранится до ${validUntilStr}, дальше аккаунт вернётся на Free. Деньги за текущий период не возвращаются. Чтобы снова включить автопродление, потребуется привязать карту заново.`,
+                `Your card will be detached and auto-renewal disabled. Pro access remains until ${validUntilStr}, then the account downgrades to Free. The current period is non-refundable. To re-enable auto-renewal, you will need to link a card again.`,
               )
             : t(
-                'Доступ к Pro-функциям сохранится до конца оплаченного периода.',
-                'Pro access remains until the end of the paid period.',
+                'Карта будет отвязана, автопродление отключится. Доступ к Pro-функциям сохранится до конца оплаченного периода. Чтобы снова включить автопродление, потребуется привязать карту заново.',
+                'Your card will be detached and auto-renewal disabled. Pro access remains until the end of the paid period. To re-enable auto-renewal, you will need to link a card again.',
               )
         }
-        confirmLabel={cancelBusy ? t('Отменяем…', 'Cancelling…') : t('Отменить автопродление', 'Cancel auto-renewal')}
+        confirmLabel={detachBusy ? t('Отключаем…', 'Disabling…') : t('Отключить автопродление', 'Disable auto-renewal')}
         cancelLabel={t('Оставить', 'Keep')}
-        danger
-        onConfirm={handleCancelSubscription}
-        onCancel={() => setCancelConfirmOpen(false)}
-      />
-
-      {/* Модалка подтверждения отвязки карты (v0.9.35-dev.6.5.2) */}
-      <ConfirmDialog
-        open={detachConfirmOpen}
-        title={t('Отвязать карту?', 'Detach card?')}
-        message={t(
-          'Карта будет удалена из сервиса, автопродление отключится. Доступ к Pro-функциям сохранится до конца оплаченного периода. Чтобы снова включить автопродление, потребуется привязать карту заново.',
-          'The card will be removed from the service and auto-renewal will be disabled. Pro access remains until the end of the paid period. To re-enable auto-renewal, you will need to link a card again.',
-        )}
-        confirmLabel={detachBusy ? t('Отвязываем…', 'Detaching…') : t('Отвязать карту', 'Detach card')}
-        cancelLabel={t('Отмена', 'Cancel')}
         danger
         onConfirm={handleDetachPaymentMethod}
         onCancel={() => setDetachConfirmOpen(false)}
@@ -3431,8 +3422,8 @@ function SubscriptionSection() {
         <p className="text-[11px] text-muted flex items-start gap-1">
           <Info size={11} className="mt-0.5 shrink-0" />
           {t(
-            'Оплата через ЮKassa. Пока магазин в test-режиме (prod-модерация). Автопродление появится в ближайшем релизе.',
-            'Payment via YooKassa. Store is in test mode (prod moderation). Auto-renewal comes in the next release.',
+            'Оплата через ЮKassa. Пока магазин в test-режиме (prod-модерация). После оплаты автопродление можно включить в настройках подписки.',
+            'Payment via YooKassa. Store is in test mode (prod moderation). After payment you can enable auto-renewal in subscription settings.',
           )}
         </p>
       </div>}
