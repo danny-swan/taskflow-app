@@ -58,16 +58,19 @@
 //   INTERNAL_SHARED_SECRET (для вызова send-user-email)
 //   CRON_SHARED_SECRET (авторизация входящего cron-вызова через x-cron-secret)
 
+import { TIER_PRICING } from '../_shared/pricing.ts'
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-cron-secret',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-// tier → days для расчёта суммы (совпадает с create-payment TIERS)
+// tier → сумма/дни берём из общего прайса (_shared/pricing.ts) — единый
+// источник, без дубля чисел (см. аудит п.12). Локальны только description.
 const TIER_AMOUNTS: Record<string, { amount: string; description: string; days: number }> = {
-  monthly: { amount: '299.00', description: 'Продление подписки TaskFlow Pro — 1 месяц', days: 30 },
-  annual: { amount: '2990.00', description: 'Продление подписки TaskFlow Pro — 1 год', days: 365 },
+  monthly: { amount: TIER_PRICING.monthly.amount, description: 'Продление подписки TaskFlow Pro — 1 месяц', days: TIER_PRICING.monthly.days as number },
+  annual: { amount: TIER_PRICING.annual.amount, description: 'Продление подписки TaskFlow Pro — 1 год', days: TIER_PRICING.annual.days as number },
 }
 
 const MAX_ATTEMPTS = 3

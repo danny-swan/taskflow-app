@@ -56,6 +56,8 @@
 // external_id (=payment.id ЮKassa) уникален в payment_events через
 // UNIQUE (provider, external_id) (миграция 0007). Дубль → 200 OK + skipped.
 
+import { TIER_PRICING, verifyPaymentAmount } from '../_shared/pricing.ts'
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -72,14 +74,18 @@ const YOOKASSA_IP_RANGES = [
 ]
 const YOOKASSA_IPV6_PREFIX = '2a02:5180:'
 
+// Дни/recurring берём из общего прайса (_shared/pricing.ts) — единый источник
+// истины, без дублирования чисел (см. аудит п.12).
 const TIER_TO_DAYS: Record<string, number | null> = {
-  monthly: 30,
-  annual: 365,
-  lifetime: null,
+  monthly: TIER_PRICING.monthly.days,
+  annual: TIER_PRICING.annual.days,
+  lifetime: TIER_PRICING.lifetime.days,
 }
 
-// Tier'ы, которые обновляются автоматически (совпадает с create-payment TIERS.recurring)
-const RECURRING_TIERS = new Set(['monthly', 'annual'])
+// Tier'ы, которые обновляются автоматически.
+const RECURRING_TIERS = new Set(
+  (Object.keys(TIER_PRICING) as Array<keyof typeof TIER_PRICING>).filter((t) => TIER_PRICING[t].recurring),
+)
 
 // Параметры автопродления — должны совпадать с renew-subscription (index.ts).
 // Нужны, чтобы при payment.canceled прямо в вебхуке отправить пользователю
@@ -384,6 +390,13 @@ async function handlePaymentSucceeded(
   // а не токен ЮKassa. Отключение — отдельным действием
   // (detach-payment-method), что закрывает требование ЮKassa «отвязать самостоятельно».
   if (isUpdateCard) {
+    // N9: update-card — ожидаем ровно верификационный 1 ₽. Несовпадение →
+    // не привязываем метод, логируем, entitlement не трогаем.
+    const amtCheck = verifyPaymentAmount({ mode: 'update-card', amount: payment.amount })
+    if (!amtCheck.ok) {
+      console.error(`[payment-webhook] update-card amount check failed for user ${userId}, payment ${payment.id}: ${amtCheck.reason}`)
+      return { ok: false, msg: 'amount verification failed (update-card)', error: amtCheck.reason }
+    }
     if (savedMethodRowId) {
       // Продление: valid_until не трогаем (это не покупка), но next_renewal_at
       // должен указывать на конец текущего периода, чтобы cron забрал.
@@ -440,6 +453,12 @@ async function handlePaymentSucceeded(
 
   // 3) Режим trial — refund 1₽ + активируем trial на 14 дней
   if (isTrialMode) {
+    // N9: trial активируется тоже через верификационный 1 ₽ — сверяем сумму.
+    const amtCheck = verifyPaymentAmount({ mode: 'trial', amount: payment.amount })
+    if (!amtCheck.ok) {
+      console.error(`[payment-webhook] trial amount check failed for user ${userId}, payment ${payment.id}: ${amtCheck.reason}`)
+      return { ok: false, msg: 'amount verification failed (trial)', error: amtCheck.reason }
+    }
     // Проверяем что метод привязан
     if (!savedMethodId) {
       console.warn(`trial without saved method for user ${userId}, payment ${payment.id}`)
@@ -517,6 +536,15 @@ async function handlePaymentSucceeded(
 
   if (!(tier in TIER_TO_DAYS)) {
     return { ok: false, msg: 'invalid tier', error: `Unknown tier: ${tier}` }
+  }
+
+  // N9: сверяем сумму+валюту против серверной цены tier ДО выдачи entitlement.
+  // Платёж на неверную сумму НЕ активирует подписку — логируем и выходим
+  // (handler вернёт 200, ошибка попадёт в payment_events.error).
+  const amtCheck = verifyPaymentAmount({ mode: 'purchase', tier, amount: payment.amount })
+  if (!amtCheck.ok) {
+    console.error(`[payment-webhook] purchase amount check failed for user ${userId}, tier ${tier}, payment ${payment.id}: ${amtCheck.reason}`)
+    return { ok: false, msg: 'amount verification failed', error: amtCheck.reason }
   }
 
   const days = TIER_TO_DAYS[tier]
