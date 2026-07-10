@@ -19,14 +19,17 @@
 // is_active=true до момента, когда юзер явно поменяет карту.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-}
+import { corsHeaders } from '../_shared/cors.ts'
 
 export const handler = async (req: Request): Promise<Response> => {
+  const CORS_HEADERS = corsHeaders(req)
+
+  const json = (body: unknown, status = 200): Response =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    })
+
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS })
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
 
@@ -141,9 +144,3 @@ export const handler = async (req: Request): Promise<Response> => {
 
 Deno.serve(handler)
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-  })
-}

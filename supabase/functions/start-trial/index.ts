@@ -17,16 +17,19 @@
 //   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY  (Supabase проставит сама)
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-}
+import { corsHeaders } from '../_shared/cors.ts'
 
 const TRIAL_DAYS = 14
 
 Deno.serve(async (req) => {
+  const CORS_HEADERS = corsHeaders(req)
+
+  const json = (body: unknown, status = 200): Response =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    })
+
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS })
   }
@@ -132,10 +135,3 @@ Deno.serve(async (req) => {
     return json({ error: (e as Error).message ?? 'Unknown error' }, 500)
   }
 })
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-  })
-}
