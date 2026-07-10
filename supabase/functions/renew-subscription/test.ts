@@ -215,6 +215,84 @@ Deno.test('renew: 3-я попытка → downgrade и renewal_failed email', as
   }
 })
 
+Deno.test('renew: F5 — синхронный canceled НЕ шлёт письмо, НЕ инкрементит, НЕ логирует', async () => {
+  const server = await MockServer.start()
+
+  server.on('GET', '/rest/v1/user_entitlements', () => ({
+    status: 200,
+    body: [{
+      user_id: USER_ID_1,
+      plan: 'pro',
+      valid_until: '2026-07-01T00:00:00Z',
+      tier_hint: 'payment_id=xxx, tier=monthly',
+      payment_method_id: 'pm-row-uuid',
+      renewal_attempts_count: 0,
+      last_renewal_attempt_at: null,
+      last_payment_id: 'xxx',
+    }],
+  }))
+  server.on('GET', '/rest/v1/payment_methods', () => ({
+    status: 200,
+    body: [{ id: 'pm-row-uuid', external_id: 'yk-token-xyz', is_active: true, provider: 'yookassa' }],
+  }))
+  server.on('GET', '/rest/v1/profiles', () => ({
+    status: 200,
+    body: [{ email: 'user1@example.com' }],
+  }))
+  // ЮKassa синхронно вернула canceled в теле ответа (HTTP 200, status=canceled).
+  server.on('POST', '/v3/payments', () => ({
+    status: 200,
+    body: {
+      id: 'sync-canceled-payment-id',
+      status: 'canceled',
+      cancellation_details: { reason: 'card_expired', party: 'payment_network' },
+    },
+  }))
+  // Разрешаем эндпоинты, чтобы отловить нежелательные вызовы (их быть НЕ должно).
+  server.on('POST', '/rest/v1/renewal_attempts_log', () => ({ status: 201 }))
+  server.on('POST', '/functions/v1/send-user-email', () => ({ status: 200, body: { ok: true } }))
+  server.on('PATCH', '/rest/v1/user_entitlements', () => ({ status: 204 }))
+
+  const restore = baseEnv(server)
+  try {
+    const req = new Request(server.url + '/', {
+      method: 'POST',
+      headers: CRON_HEADERS,
+      body: '{}',
+    })
+    const res = await handler(req)
+    assertEquals(res.status, 200)
+    const body = await res.json()
+    assertEquals(body.processed, 1)
+    assertEquals(body.failed, 1)
+    // F5: cron НЕ делает downgrade в синхронной canceled-ветке — это забота webhook'а.
+    assertEquals(body.downgraded, 0)
+
+    // F5: письмо renewal_failed из cron НЕ отправляется (его пошлёт webhook).
+    assertEquals(
+      server.calls.filter((c) => c.method === 'POST' && c.path.includes('/functions/v1/send-user-email')).length,
+      0,
+    )
+    // F5: запись в renewal_attempts_log из cron НЕ делается (её сделает webhook).
+    assertEquals(
+      server.calls.filter((c) => c.method === 'POST' && c.path.includes('/rest/v1/renewal_attempts_log')).length,
+      0,
+    )
+
+    // Единственный побочный эффект cron — PATCH last_renewal_attempt_at (без инкремента/downgrade).
+    const patchCalls = server.calls.filter((c) => c.method === 'PATCH' && c.path.includes('user_entitlements'))
+    assertEquals(patchCalls.length, 1)
+    const patchBody = JSON.parse(patchCalls[0].body)
+    assert(typeof patchBody.last_renewal_attempt_at === 'string')
+    // Никакого инкремента счётчика и никакого downgrade в этом PATCH.
+    assertEquals(patchBody.renewal_attempts_count, undefined)
+    assertEquals(patchBody.plan, undefined)
+  } finally {
+    restore()
+    await server.stop()
+  }
+})
+
 Deno.test('renew: payment_method inactive → skip без ЮKassa-вызова', async () => {
   const server = await MockServer.start()
 
