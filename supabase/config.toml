@@ -19,15 +19,57 @@ project_id = "sejpmzrmtgcvevukggkx"
 # больше не принимается gateway'ем (UNAUTHORIZED_LEGACY_JWT). Новые secret-ключи
 # (sb_secret_...) — НЕ JWT, поэтому их нельзя слать в Authorization: Bearer.
 #
-# renew-subscription дёргается pg_cron'ом без пользовательского JWT, поэтому
-# verify_jwt = false: платформа НЕ проверяет вызывающего. Авторизацию делает
-# сам код функции — сверяет заголовок x-cron-secret с Edge-secret
-# CRON_SHARED_SECRET (тот же паттерн, что x-internal-token у send-user-email).
+# N14 (Wave 4): verify_jwt зафиксирован ЯВНО для КАЖДОЙ функции — config.toml
+# теперь единый источник истины, а не «настроено где-то на сервере». Значения
+# выведены из фактического кода каждой функции (проверено, а не по списку):
 #
-# Прочие функции здесь НЕ перечислены намеренно: их настройки уже заданы на
-# сервере (payment-webhook, send-user-email — verify_jwt=false; клиентские
-# функции — verify_jwt=true). Деплой по имени (`supabase functions deploy
-# renew-subscription`) не трогает настройки других функций.
+#   verify_jwt = true  → функция ждёт пользовательский JWT в
+#     `Authorization: Bearer <jwt>` и резолвит юзера через `auth.getUser()`.
+#     Платформенная проверка = дополнительный слой поверх кода.
+#   verify_jwt = false → вызывается НЕ из браузера под user-JWT; авторизацию
+#     делает сам код своим секретом, а платформенный gate только помешал бы:
+#       payment-webhook    — публичный вебхук ЮKassa (dual-verify GET /v3/payments)
+#       renew-subscription — pg_cron, заголовок x-cron-secret (CRON_SHARED_SECRET)
+#       activation-notify  — Database Webhook, заголовок x-webhook-secret
+#       send-user-email    — cross-function вызов, заголовок x-internal-token
+#
+# ⚠️ Деплой edge-функций из этой ветки НЕ входит в задачу PR — фиксируем только
+# config.toml как источник истины. Runtime уже задеплоенных функций не меняем
+# (см. PR-описание). Значения verify_jwt для payment-webhook/renew-subscription
+# на проде уже false — совпадают с зафиксированным здесь.
+
+[functions.activation-notify]
+verify_jwt = false
+
+[functions.admin-actions]
+verify_jwt = true
+
+[functions.cancel-subscription]
+verify_jwt = true
+
+[functions.change-plan]
+verify_jwt = true
+
+[functions.create-payment]
+verify_jwt = true
+
+[functions.delete_account]
+verify_jwt = true
+
+[functions.detach-payment-method]
+verify_jwt = true
+
+[functions.payment-webhook]
+verify_jwt = false
+
+[functions.reactivate-subscription]
+verify_jwt = true
 
 [functions.renew-subscription]
 verify_jwt = false
+
+[functions.send-user-email]
+verify_jwt = false
+
+[functions.start-trial]
+verify_jwt = true
