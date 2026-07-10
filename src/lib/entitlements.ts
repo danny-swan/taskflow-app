@@ -105,7 +105,7 @@ export interface EntitlementRow {
   auto_renew?: boolean;
   cancel_at_period_end?: boolean;
   next_renewal_at?: string | null; // ISO timestamp
-  renewal_attempts?: number;
+  renewal_attempts_count?: number;
   payment_method_id?: string | null; // FK → payment_methods.id
 }
 
@@ -210,7 +210,7 @@ export function resolveEntitlement(
   const autoRenew = row.auto_renew ?? false;
   const cancelAtPeriodEnd = row.cancel_at_period_end ?? false;
   const nextRenewalAt = row.next_renewal_at ? new Date(row.next_renewal_at) : null;
-  const renewalAttempts = row.renewal_attempts ?? 0;
+  const renewalAttempts = row.renewal_attempts_count ?? 0;
   const paymentMethodId = row.payment_method_id ?? null;
 
   // Case 3: lifetime — навсегда.
@@ -361,7 +361,7 @@ export function writeCachedRow(row: EntitlementRow | null): void {
 export async function fetchEntitlementRow(userId: string): Promise<EntitlementRow | null> {
   const { data, error } = await supabase
     .from('user_entitlements')
-    .select('user_id, plan, valid_until, activated_at, source, trial_used, notes, updated_at, auto_renew, cancel_at_period_end, next_renewal_at, renewal_attempts, payment_method_id')
+    .select('user_id, plan, valid_until, activated_at, source, trial_used, notes, updated_at, auto_renew, cancel_at_period_end, next_renewal_at, renewal_attempts_count, payment_method_id')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -692,7 +692,7 @@ export interface PaymentMethodRow {
   user_id: string;
   provider: string;
   external_id: string;
-  card_brand: string | null;
+  card_first6: string | null;
   card_last4: string | null;
   card_expiry_month: number | null;
   card_expiry_year: number | null;
@@ -712,7 +712,7 @@ export async function fetchActivePaymentMethods(
 ): Promise<PaymentMethodRow[]> {
   const { data, error } = await supabase
     .from('payment_methods')
-    .select('id, user_id, provider, external_id, card_brand, card_last4, card_expiry_month, card_expiry_year, is_active, saved_at, method_type, card_type')
+    .select('id, user_id, provider, external_id, card_first6, card_last4, card_expiry_month, card_expiry_year, is_active, saved_at, method_type, card_type')
     .eq('user_id', userId)
     .eq('is_active', true)
     .order('saved_at', { ascending: false });

@@ -285,13 +285,17 @@ export const handler = async (req: Request): Promise<Response> => {
       }
       const spec = TIER_AMOUNTS[tier]
 
-      // 2b) Проверяем payment_method активен
-      const pmRes = await admin.selectOne<{ external_id: string; is_active: boolean; provider: string }>(
+      // 2b) Резолвим способ оплаты по ВНУТРЕННЕМУ uuid (user_entitlements.payment_method_id
+      // = payment_methods.id, FK). Из строки берём external_id — это НАСТОЯЩИЙ токен
+      // способа оплаты в ЮKassa, именно его требует POST /v3/payments. Раньше здесь
+      // ошибочно фильтровали по external_id и слали uuid в ЮKassa → все автосписания
+      // падали (payment_method_not_found).
+      const pmRes = await admin.selectOne<{ external_id: string | null; is_active: boolean; provider: string }>(
         'payment_methods',
         'external_id,is_active,provider',
-        { user_id: uid, external_id: cand.payment_method_id, provider: 'yookassa' },
+        { id: cand.payment_method_id, user_id: uid, provider: 'yookassa' },
       )
-      if (!pmRes.ok || !pmRes.data || pmRes.data.is_active === false) {
+      if (!pmRes.ok || !pmRes.data || pmRes.data.is_active === false || !pmRes.data.external_id) {
         // Метод удалён или неактивен — не пытаемся, downgrade сразу нет смысла (пусть юзер обновит карту)
         await logAttempt(admin, uid, 'canceled', null, 'payment_method_inactive', 'payment_method not active in DB', (cand.renewal_attempts_count ?? 0) + 1)
         await incrementAttempts(admin, uid, cand.renewal_attempts_count, MAX_ATTEMPTS)
@@ -299,6 +303,7 @@ export const handler = async (req: Request): Promise<Response> => {
         details.push({ user_id: uid, error: 'payment_method inactive' })
         continue
       }
+      const yooPaymentMethodToken = pmRes.data.external_id
 
       // 2c) Читаем email юзера из public.profiles (нужен для чека НПД).
       // auth.users через PostgREST недоступна (только public схема), но у нас
@@ -321,7 +326,7 @@ export const handler = async (req: Request): Promise<Response> => {
       const yooBody = {
         amount: { value: spec.amount, currency: 'RUB' },
         capture: true,
-        payment_method_id: cand.payment_method_id,
+        payment_method_id: yooPaymentMethodToken,
         description: spec.description,
         metadata: {
           user_id: uid,

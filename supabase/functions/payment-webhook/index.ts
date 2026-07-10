@@ -81,6 +81,12 @@ const TIER_TO_DAYS: Record<string, number | null> = {
 // Tier'ы, которые обновляются автоматически (совпадает с create-payment TIERS.recurring)
 const RECURRING_TIERS = new Set(['monthly', 'annual'])
 
+// Параметры автопродления — должны совпадать с renew-subscription (index.ts).
+// Нужны, чтобы при payment.canceled прямо в вебхуке отправить пользователю
+// то же уведомление renewal_failed, что и cron-путь renew-subscription.
+const MAX_RENEWAL_ATTEMPTS = 3
+const RENEWAL_ATTEMPT_WINDOW_HOURS = 20
+
 // ═══ Admin PostgREST client через raw fetch ══════════════════════════════════
 // Никаких supabase-js. Только apikey header, без Authorization.
 class AdminClient {
@@ -295,7 +301,7 @@ export const handler = async (req: Request): Promise<Response> => {
         procResult = await handlePaymentSucceeded(admin, verified, shopId, yooSecretKey, supabaseUrl, supabaseSecretKey)
         break
       case 'payment.canceled':
-        procResult = await handlePaymentCanceled(admin, verified)
+        procResult = await handlePaymentCanceled(admin, verified, supabaseUrl, supabaseSecretKey)
         break
       case 'refund.succeeded':
         procResult = await handleRefundSucceeded(admin, verified, shopId, yooSecretKey, supabaseUrl, supabaseSecretKey)
@@ -635,6 +641,8 @@ async function handlePaymentSucceeded(
 async function handlePaymentCanceled(
   admin: AdminClient,
   payment: YooKassaPaymentObject,
+  supabaseUrl: string,
+  supabaseSecretKey: string,
 ): Promise<{ ok: boolean; msg: string; error?: string }> {
   const meta = payment.metadata ?? {}
   const userId = meta.user_id
@@ -653,19 +661,21 @@ async function handlePaymentCanceled(
   const cancellationDetails = payment.cancellation_details as { reason?: string; party?: string } | undefined
   const errorCode = cancellationDetails?.reason ?? 'unknown'
 
-  // Читаем текущий counter, чтобы его инкрементить в патче (без PostgREST RPC).
-  const existingRes = await admin.selectOne<{ renewal_attempts_count: number | null }>(
+  // Читаем текущий counter + valid_until, чтобы инкрементить и посчитать access_until.
+  const existingRes = await admin.selectOne<{ renewal_attempts_count: number | null; valid_until: string | null }>(
     'user_entitlements',
-    'renewal_attempts_count',
+    'renewal_attempts_count,valid_until',
     { user_id: userId },
   )
   const currentCount = existingRes.ok ? (existingRes.data?.renewal_attempts_count ?? 0) : 0
+  const validUntil = existingRes.ok ? (existingRes.data?.valid_until ?? null) : null
+  const attemptNo = currentCount + 1
 
   const upd = await admin.update(
     'user_entitlements',
     { user_id: userId },
     {
-      renewal_attempts_count: currentCount + 1,
+      renewal_attempts_count: attemptNo,
       last_renewal_attempt_at: nowIso,
     },
   )
@@ -679,7 +689,7 @@ async function handlePaymentCanceled(
     attempted_at: nowIso,
     status: 'canceled',
     yookassa_payment_id: payment.id,
-    attempt_number: currentCount + 1,
+    attempt_number: attemptNo,
     error_code: errorCode,
     error_message: cancellationDetails?.party ? `party=${cancellationDetails.party}` : null,
   })
@@ -687,7 +697,35 @@ async function handlePaymentCanceled(
     return { ok: false, msg: 'renewal_attempts_log insert failed', error: logRes.error?.message }
   }
 
-  return { ok: true, msg: `Renewal failed (attempt ${currentCount + 1}) — ${errorCode}` }
+  // Уведомляем пользователя о неудачном автосписании — тем же письмом renewal_failed,
+  // что и cron-путь renew-subscription. Раньше при payment.canceled прямо в вебхуке
+  // (например 3DS-отказ, пришедший асинхронно) письмо не отправлялось совсем.
+  // isLastAttempt считаем по достижению лимита; сам downgrade делает renew-subscription.
+  const isLastAttempt = attemptNo >= MAX_RENEWAL_ATTEMPTS
+  const contact = await loadUserContact(admin, userId)
+  const amountRub = payment.amount?.value ? Number(payment.amount.value) : 0
+  const tier = meta.tier ?? 'monthly'
+  const retryAt = isLastAttempt
+    ? null
+    : new Date(Date.now() + RENEWAL_ATTEMPT_WINDOW_HOURS * 3600 * 1000).toISOString()
+  const accessUntil = isLastAttempt ? nowIso : (validUntil ?? nowIso)
+  await sendUserEmailAsync(
+    supabaseUrl,
+    supabaseSecretKey,
+    contact.email,
+    contact.language,
+    'renewal_failed',
+    {
+      plan: tier,
+      amount_rub: amountRub,
+      attempt_no: attemptNo,
+      max_attempts: MAX_RENEWAL_ATTEMPTS,
+      retry_at: retryAt,
+      access_until: accessUntil,
+    },
+  )
+
+  return { ok: true, msg: `Renewal failed (attempt ${attemptNo}) — ${errorCode}` }
 }
 
 // ─── refund.succeeded ───────────────────────────────────────────────────────────────────────────────────────────────

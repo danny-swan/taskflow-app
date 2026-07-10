@@ -20,7 +20,13 @@ function baseEnv(server: MockServer) {
     YOOKASSA_SECRET_KEY: 'fake-yoo-secret',
     YOOKASSA_API_BASE: server.url,
     INTERNAL_SHARED_SECRET: 'fake-internal-secret',
+    CRON_SHARED_SECRET: 'fake-cron-secret',
   })
+}
+
+const CRON_HEADERS = {
+  Authorization: 'Bearer fake-service-role',
+  'x-cron-secret': 'fake-cron-secret',
 }
 
 Deno.test('renew: no candidates → processed=0', async () => {
@@ -30,7 +36,7 @@ Deno.test('renew: no candidates → processed=0', async () => {
   try {
     const req = new Request(server.url + '/', {
       method: 'POST',
-      headers: { Authorization: 'Bearer fake-service-role' },
+      headers: CRON_HEADERS,
       body: '{}',
     })
     const res = await handler(req)
@@ -55,16 +61,17 @@ Deno.test('renew: happy path — payment создан, last_renewal_attempt_at �
       plan: 'pro',
       valid_until: '2026-07-01T00:00:00Z',
       tier_hint: 'payment_id=xxx, tier=monthly',
-      payment_method_id: 'pm-token-abc',
+      // ВНУТРЕННИЙ uuid строки payment_methods (FK), НЕ токен ЮKassa.
+      payment_method_id: 'pm-row-uuid',
       renewal_attempts_count: 0,
       last_renewal_attempt_at: null,
       last_payment_id: 'xxx',
     }],
   }))
-  // Активный payment method
+  // Активный payment method: резолвится по id (uuid), в ЮKassa уходит external_id.
   server.on('GET', '/rest/v1/payment_methods', () => ({
     status: 200,
-    body: [{ external_id: 'pm-token-abc', is_active: true, provider: 'yookassa' }],
+    body: [{ id: 'pm-row-uuid', external_id: 'yk-token-xyz', is_active: true, provider: 'yookassa' }],
   }))
   // Email из profiles
   server.on('GET', '/rest/v1/profiles', () => ({
@@ -83,7 +90,7 @@ Deno.test('renew: happy path — payment создан, last_renewal_attempt_at �
   try {
     const req = new Request(server.url + '/', {
       method: 'POST',
-      headers: { Authorization: 'Bearer fake-service-role' },
+      headers: CRON_HEADERS,
       body: '{}',
     })
     const res = await handler(req)
@@ -98,8 +105,15 @@ Deno.test('renew: happy path — payment создан, last_renewal_attempt_at �
     assert(yooCall !== undefined)
     const yooBody = JSON.parse(yooCall!.body)
     assertEquals(yooBody.amount.value, '299.00')
-    assertEquals(yooBody.payment_method_id, 'pm-token-abc')
+    // F1-регрессия: в ЮKassa должен уйти external_id (токен), а НЕ внутренний uuid.
+    assertEquals(yooBody.payment_method_id, 'yk-token-xyz')
     assertEquals(yooBody.metadata.tier, 'monthly')
+
+    // F1-регрессия: payment_methods резолвится по внутреннему id (uuid), не по external_id.
+    const pmCall = server.findCall('GET', '/rest/v1/payment_methods')
+    assert(pmCall !== undefined)
+    assertEquals(pmCall!.query.get('id'), 'eq.pm-row-uuid')
+    assertEquals(pmCall!.query.get('external_id'), null)
     assertEquals(yooBody.metadata.renewal, 'true')
     assertEquals(yooBody.metadata.attempt_no, '1')
     // Idempotence-Key — 64 hex-символа (SHA-256)
@@ -128,7 +142,7 @@ Deno.test('renew: 3-я попытка → downgrade и renewal_failed email', as
       plan: 'pro',
       valid_until: '2026-07-01T00:00:00Z',
       tier_hint: 'payment_id=xxx, tier=monthly',
-      payment_method_id: 'pm-token-abc',
+      payment_method_id: 'pm-row-uuid',
       renewal_attempts_count: 2, // третья попытка после этой = downgrade
       last_renewal_attempt_at: null,
       last_payment_id: 'xxx',
@@ -136,7 +150,7 @@ Deno.test('renew: 3-я попытка → downgrade и renewal_failed email', as
   }))
   server.on('GET', '/rest/v1/payment_methods', () => ({
     status: 200,
-    body: [{ external_id: 'pm-token-abc', is_active: true, provider: 'yookassa' }],
+    body: [{ id: 'pm-row-uuid', external_id: 'yk-token-xyz', is_active: true, provider: 'yookassa' }],
   }))
   server.on('GET', '/rest/v1/profiles', (call) => {
     // Для email lookup
@@ -165,7 +179,7 @@ Deno.test('renew: 3-я попытка → downgrade и renewal_failed email', as
   try {
     const req = new Request(server.url + '/', {
       method: 'POST',
-      headers: { Authorization: 'Bearer fake-service-role' },
+      headers: CRON_HEADERS,
       body: '{}',
     })
     const res = await handler(req)
@@ -211,7 +225,7 @@ Deno.test('renew: payment_method inactive → skip без ЮKassa-вызова',
       plan: 'pro',
       valid_until: '2026-07-01T00:00:00Z',
       tier_hint: 'tier=monthly',
-      payment_method_id: 'pm-inactive',
+      payment_method_id: 'pm-inactive-uuid',
       renewal_attempts_count: 0,
       last_renewal_attempt_at: null,
       last_payment_id: null,
@@ -219,7 +233,7 @@ Deno.test('renew: payment_method inactive → skip без ЮKassa-вызова',
   }))
   server.on('GET', '/rest/v1/payment_methods', () => ({
     status: 200,
-    body: [{ external_id: 'pm-inactive', is_active: false, provider: 'yookassa' }],
+    body: [{ id: 'pm-inactive-uuid', external_id: 'yk-token-inactive', is_active: false, provider: 'yookassa' }],
   }))
   server.on('POST', '/rest/v1/renewal_attempts_log', () => ({ status: 201 }))
   server.on('PATCH', '/rest/v1/user_entitlements', () => ({ status: 204 }))
@@ -228,7 +242,7 @@ Deno.test('renew: payment_method inactive → skip без ЮKassa-вызова',
   try {
     const req = new Request(server.url + '/', {
       method: 'POST',
-      headers: { Authorization: 'Bearer fake-service-role' },
+      headers: CRON_HEADERS,
       body: '{}',
     })
     const res = await handler(req)

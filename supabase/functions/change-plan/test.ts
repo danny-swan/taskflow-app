@@ -136,7 +136,7 @@ Deno.test('change-plan: 400 no saved payment method', async () => {
 
 Deno.test('change-plan: 200 upgrade monthly→annual (payment succeeded)', async () => {
   const { server, restore } = await setup()
-  const pm = { id: 'pm-uuid', external_id: 'yk-pm-123', card_last4: '4444', card_brand: 'Mir', title: 'Mir •••• 4444' }
+  const pm = { id: 'pm-uuid', external_id: 'yk-pm-123', card_last4: '4444', card_type: 'Mir', title: 'Mir •••• 4444' }
   const paymentId = 'test-payment-id-' + Date.now()
 
   server.on('GET', '/rest/v1/user_entitlements', () => ({
@@ -193,7 +193,7 @@ Deno.test('change-plan: 200 upgrade monthly→annual (payment succeeded)', async
 
 Deno.test('change-plan: 402 when YooKassa declines', async () => {
   const { server, restore } = await setup()
-  const pm = { id: 'pm-uuid', external_id: 'yk-pm-123', card_last4: '4444', card_brand: 'Mir', title: 'Mir •••• 4444' }
+  const pm = { id: 'pm-uuid', external_id: 'yk-pm-123', card_last4: '4444', card_type: 'Mir', title: 'Mir •••• 4444' }
 
   server.on('GET', '/rest/v1/user_entitlements', () => ({
     status: 200,
