@@ -78,6 +78,13 @@ verify_jwt = true
 [functions.change-plan]
 verify_jwt = true
 
+# ВНИМАНИЕ (сверено с прод 2026-07-10 через list_edge_functions): на проде эта
+# функция задеплоена с verify_jwt = FALSE (исторический артефакт). Код при этом
+# ТРЕБУЕТ Authorization и валидирует JWT сам (userClient.auth.getUser() →
+# 401 без валидного токена), поэтому фактической дыры нет. Фиксируем намерение
+# = true (gateway-проверка усилит защиту и совместима с кодом). ⚠️ Значение
+# применится только при следующем деплое delete_account — в PR-A эта функция НЕ
+# передеплоивается, прод-поведение не меняется.
 [functions.delete_account]
 verify_jwt = true
 
