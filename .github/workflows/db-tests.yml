@@ -131,4 +131,5 @@ jobs:
           pg_prove --verbose \
             supabase/tests/01_grants_test.sql \
             supabase/tests/02_rls_test.sql \
-            supabase/tests/03_functions_test.sql
+            supabase/tests/03_functions_test.sql \
+            supabase/tests/04_wave2_test.sql
