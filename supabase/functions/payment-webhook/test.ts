@@ -455,27 +455,84 @@ Deno.test('webhook: payment.canceled (не renewal) — без изменени�
   }
 })
 
-Deno.test('webhook: 403 когда IP не в whitelist (и SKIP=false)', async () => {
+Deno.test('webhook (N8): поддельный X-Forwarded-For НЕ обходит проверку — решает dual-verify', async () => {
   const server = await MockServer.start()
+
+  // Реальный платёж у ЮKassa ещё pending, хотя подделанное уведомление
+  // заявляет payment.succeeded. Атакующий также подделал «доверенный» IP.
+  const payment = {
+    id: 'yoo-forged-1',
+    status: 'pending',
+    amount: { value: '299.00', currency: 'RUB' },
+    metadata: { user_id: USER_ID, tier: 'monthly', plan: 'pro', mode: 'purchase' },
+  }
+  server.on('GET', '/v3/payments/yoo-forged-1', verifyPayment(payment))
+
   const restore = withEnv({
     SUPABASE_URL: server.url,
     SUPABASE_SERVICE_ROLE_KEY: 'fake-service-role-key',
     YOOKASSA_SHOP_ID: '1402561',
     YOOKASSA_SECRET_KEY: 'fake-yoo-secret',
-    // YOOKASSA_SKIP_IP_CHECK не задан → check включён
+    YOOKASSA_API_BASE: server.url,
+    // YOOKASSA_SKIP_IP_CHECK не задан → IP-логика активна (но best-effort).
   })
   try {
-    const notification = { type: 'notification', event: 'payment.succeeded', object: { id: 'x' } }
+    const notification = { type: 'notification', event: 'payment.succeeded', object: { id: 'yoo-forged-1' } }
     const req = new Request(server.url + '/', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Forwarded-For': '1.2.3.4', // не ЮKassa IP
+        'X-Forwarded-For': '185.71.76.1', // подделка whitelisted ЮKassa IP
       },
       body: JSON.stringify(notification),
     })
     const res = await handler(req)
-    assertEquals(res.status, 403)
+    // Раньше подделка IP решала исход. Теперь IP ничего не решает: источник
+    // истины — dual-verify. Реальный статус pending ≠ succeeded → 400.
+    assertEquals(res.status, 400)
+    const body = await res.json()
+    assert(String(body.error).includes('Dual-verify rejected'))
+    // Никакого upsert entitlement не произошло.
+    assertEquals(server.calls.filter((c) => c.method === 'POST' && c.path === '/rest/v1/user_entitlements').length, 0)
+  } finally {
+    restore()
+    await server.stop()
+  }
+})
+
+Deno.test('webhook (N9): неверная сумма покупки → entitlement НЕ выдаётся', async () => {
+  const server = await MockServer.start()
+
+  // Реальный succeeded платёж (dual-verify пройдёт), но сумма 1₽ не совпадает
+  // с ценой monthly (299₽) — активировать подписку нельзя.
+  const payment = {
+    id: 'yoo-badamount-1',
+    status: 'succeeded',
+    amount: { value: '1.00', currency: 'RUB' },
+    captured_at: '2026-07-07T10:00:00Z',
+    created_at: '2026-07-07T09:59:00Z',
+    metadata: { user_id: USER_ID, tier: 'monthly', plan: 'pro', mode: 'purchase' },
+  }
+  server.on('GET', '/v3/payments/yoo-badamount-1', verifyPayment(payment))
+  server.on('POST', '/rest/v1/payment_events', () => ({ status: 201 }))
+  server.on('PATCH', '/rest/v1/payment_events', () => ({ status: 204 }))
+
+  const restore = baseEnv(server)
+  try {
+    const notification = { type: 'notification', event: 'payment.succeeded', object: { id: 'yoo-badamount-1' } }
+    const req = new Request(server.url + '/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(notification),
+    })
+    const res = await handler(req)
+    // Webhook возвращает 200 (чтобы ЮKassa не ретраила), но ok=false и
+    // entitlement не апсертится.
+    assertEquals(res.status, 200)
+    const body = await res.json()
+    assertEquals(body.ok, false)
+    assert(String(body.error).includes('amount mismatch'))
+    assertEquals(server.calls.filter((c) => c.method === 'POST' && c.path === '/rest/v1/user_entitlements').length, 0)
   } finally {
     restore()
     await server.stop()
