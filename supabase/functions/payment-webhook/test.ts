@@ -344,6 +344,117 @@ Deno.test('webhook: refund.succeeded (downgrade) — plan сбрасываетс
   }
 })
 
+Deno.test('webhook: payment.canceled (renewal) — счётчик +1 + renewal_failed email (F4)', async () => {
+  const server = await MockServer.start()
+
+  const payment = {
+    id: 'yoo-renewal-canceled-1',
+    status: 'canceled',
+    amount: { value: '299.00', currency: 'RUB' },
+    created_at: '2026-07-07T09:59:00Z',
+    cancellation_details: { reason: 'card_expired', party: 'payment_network' },
+    metadata: { user_id: USER_ID, tier: 'monthly', plan: 'pro', mode: 'purchase', renewal: 'true' },
+  }
+
+  server.on('GET', '/v3/payments/yoo-renewal-canceled-1', verifyPayment(payment))
+  server.on('POST', '/rest/v1/payment_events', () => ({ status: 201 }))
+  // Текущий счётчик + valid_until (для access_until)
+  server.on('GET', '/rest/v1/user_entitlements', () => ({
+    status: 200,
+    body: [{ renewal_attempts_count: 0, valid_until: '2026-08-06T00:00:00Z' }],
+  }))
+  server.on('PATCH', '/rest/v1/user_entitlements', () => ({ status: 204 }))
+  server.on('POST', '/rest/v1/renewal_attempts_log', () => ({ status: 201 }))
+  server.on('PATCH', '/rest/v1/payment_events', () => ({ status: 204 }))
+  server.on('GET', '/rest/v1/profiles', () => ({
+    status: 200,
+    body: [{ email: 'user1@example.com', metadata: { language: 'ru' } }],
+  }))
+  server.on('POST', '/functions/v1/send-user-email', () => ({ status: 200, body: { ok: true } }))
+
+  const restore = baseEnv(server)
+  try {
+    const notification = {
+      type: 'notification',
+      event: 'payment.canceled',
+      object: { id: 'yoo-renewal-canceled-1', metadata: { user_id: USER_ID } },
+    }
+    const req = new Request(server.url + '/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(notification),
+    })
+    const res = await handler(req)
+    assertEquals(res.status, 200)
+    const body = await res.json()
+    assertEquals(body.ok, true)
+    assertEquals(body.event, 'payment.canceled')
+
+    // Счётчик инкрементнут
+    const entPatch = server.findCall('PATCH', '/rest/v1/user_entitlements')
+    assert(entPatch !== undefined, 'user_entitlements PATCH not called')
+    const entRow = JSON.parse(entPatch!.body)
+    assertEquals(entRow.renewal_attempts_count, 1)
+
+    // F4: renewal_failed email отправлен (раньше в этой ветке письма не было)
+    const emailCall = server.findCall('POST', '/functions/v1/send-user-email')
+    assert(emailCall !== undefined, 'renewal_failed email not sent')
+    assertEquals(emailCall!.headers['x-internal-token'], 'fake-internal-secret')
+    const emailBody = JSON.parse(emailCall!.body)
+    assertEquals(emailBody.template, 'renewal_failed')
+    assertEquals(emailBody.to, 'user1@example.com')
+    assertEquals(emailBody.params.attempt_no, 1)
+    assertEquals(emailBody.params.max_attempts, 3)
+    assertEquals(emailBody.params.access_until, '2026-08-06T00:00:00Z')
+    assert(typeof emailBody.params.retry_at === 'string')
+  } finally {
+    restore()
+    await server.stop()
+  }
+})
+
+Deno.test('webhook: payment.canceled (не renewal) — без изменений и без письма', async () => {
+  const server = await MockServer.start()
+
+  const payment = {
+    id: 'yoo-canceled-primary',
+    status: 'canceled',
+    amount: { value: '299.00', currency: 'RUB' },
+    created_at: '2026-07-07T09:59:00Z',
+    cancellation_details: { reason: 'general_decline' },
+    metadata: { user_id: USER_ID, tier: 'monthly', plan: 'pro', mode: 'purchase' },
+  }
+
+  server.on('GET', '/v3/payments/yoo-canceled-primary', verifyPayment(payment))
+  server.on('POST', '/rest/v1/payment_events', () => ({ status: 201 }))
+  server.on('PATCH', '/rest/v1/payment_events', () => ({ status: 204 }))
+  server.on('POST', '/functions/v1/send-user-email', () => ({ status: 200, body: { ok: true } }))
+
+  const restore = baseEnv(server)
+  try {
+    const notification = {
+      type: 'notification',
+      event: 'payment.canceled',
+      object: { id: 'yoo-canceled-primary', metadata: { user_id: USER_ID } },
+    }
+    const req = new Request(server.url + '/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(notification),
+    })
+    const res = await handler(req)
+    assertEquals(res.status, 200)
+    const body = await res.json()
+    assertEquals(body.ok, true)
+
+    // Не renewal → письмо renewal_failed НЕ отправляем
+    assertEquals(server.calls.filter((c) => c.method === 'POST' && c.path.includes('send-user-email')).length, 0)
+  } finally {
+    restore()
+    await server.stop()
+  }
+})
+
 Deno.test('webhook: 403 когда IP не в whitelist (и SKIP=false)', async () => {
   const server = await MockServer.start()
   const restore = withEnv({

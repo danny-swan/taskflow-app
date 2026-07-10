@@ -115,7 +115,7 @@ export const handler = async (req: Request): Promise<Response> => {
     // ─── Проверяем сохранённую карту ─────────────────────────────────────────
     const { data: pm, error: pmErr } = await adminClient
       .from('payment_methods')
-      .select('id, external_id, card_last4, card_brand, title')
+      .select('id, external_id, card_last4, card_type, title')
       .eq('user_id', userId)
       .eq('is_active', true)
       .maybeSingle()
