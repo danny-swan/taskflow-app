@@ -15,3 +15,4 @@ ADR — это запись одного значимого архитектур
 | # | Решение | Статус | Файл |
 |---|---------|--------|------|
 | 0001 | payment_method_id vs external_id — источник истины для токена ЮKassa | accepted | 0001-payment-method-id-vs-external-id.md |
+| 0002 | get_users_emails — внутренний admin-гейт вместо REVOKE от authenticated (N15) | accepted | 0002-get-users-emails-internal-admin-gate.md |
