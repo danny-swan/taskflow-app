@@ -17,3 +17,4 @@ ADR — это запись одного значимого архитектур
 | 0001 | payment_method_id vs external_id — источник истины для токена ЮKassa | accepted | 0001-payment-method-id-vs-external-id.md |
 | 0002 | get_users_emails — внутренний admin-гейт вместо REVOKE от authenticated (N15) | accepted | 0002-get-users-emails-internal-admin-gate.md |
 | 0003 | renewal idempotency-guard — сверка GET /v3/payments до создания платежа автопродления (N10) | accepted | 0003-renewal-idempotency-guard.md |
+| 0004 | rate limiting — счётчики в таблице Postgres + атомарный SECURITY DEFINER RPC (N13) | accepted | 0004-rate-limiting-table-based.md |

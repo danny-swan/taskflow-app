@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, configDefaults } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
@@ -19,6 +19,15 @@ export default defineConfig({
     // Deno-тесты edge-функций живут в файлах `test.ts` (не *.test.ts) и сюда
     // не попадают — их гоняет `deno test` отдельно.
     include: ['src/**/*.{test,spec}.{ts,tsx}', 'supabase/functions/**/*.{test,spec}.ts'],
+    // Deno-флейвор тесты в _shared импортят https://deno.land/* — vitest их не
+    // загрузит (ESM-лоадер не умеет https:). Их гоняет `deno test` отдельно
+    // (см. .github/workflows/test.yml, job edge-functions). Здесь исключаем,
+    // сохраняя vitest-совместимые pricing.test.ts / yookassa-verify.test.ts.
+    exclude: [
+      ...configDefaults.exclude,
+      'supabase/functions/_shared/cors.test.ts',
+      'supabase/functions/_shared/rate-limit.test.ts',
+    ],
     // Tauri APIs и другие браузерные штуки, которых нет в jsdom
     // мокаются в setup.ts / отдельных тестах.
     coverage: {

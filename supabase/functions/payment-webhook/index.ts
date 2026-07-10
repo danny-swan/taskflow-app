@@ -58,6 +58,7 @@
 
 import { TIER_PRICING, verifyPaymentAmount, isRecurringTier } from '../_shared/pricing.ts'
 import { assessVerifiedPayment } from '../_shared/yookassa-verify.ts'
+import { checkRateLimit, clientIp as trustedClientIp, tooManyRequests } from '../_shared/rate-limit.ts'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -166,6 +167,26 @@ class AdminClient {
     return { ok: false, status: resp.status, error: { message: errJson.message ?? `HTTP ${resp.status}` } }
   }
 
+  // N13: RPC-вызов для rate_limit_hit. Реализует RpcClient (см. _shared/rate-limit.ts)
+  // поверх raw-fetch к PostgREST. Возвращает { data, error } — как supabase-js.
+  async rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }> {
+    const url = `${this.baseUrl}/rest/v1/rpc/${fn}`
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(args),
+      })
+      if (!resp.ok) {
+        const errJson = await resp.json().catch(() => ({}))
+        return { data: null, error: { message: errJson.message ?? `HTTP ${resp.status}` } }
+      }
+      return { data: await resp.json().catch(() => null), error: null }
+    } catch (e) {
+      return { data: null, error: { message: (e as Error).message } }
+    }
+  }
+
   async selectOne<T = Record<string, unknown>>(table: string, columns: string, filters: Record<string, string>): Promise<{ ok: boolean; data?: T | null; error?: { message: string } }> {
     const qs = new URLSearchParams({ select: columns })
     for (const [k, v] of Object.entries(filters)) {
@@ -253,6 +274,16 @@ export const handler = async (req: Request): Promise<Response> => {
       return json({ error: 'Server not configured: SUPABASE env missing' }, 500)
     }
     const admin = new AdminClient(supabaseUrl, supabaseSecretKey)
+
+    // ─── N13: rate limiting — 60/мин на IP ──────────────────────────────────
+    // Вебхук анонимный (verify_jwt=false) — лимитируем только по доверенному IP
+    // (cf-connecting-ip / x-real-ip; НЕ x-forwarded-for — см. N8). Fail-open:
+    // при ошибке RPC не блокируем (dual-verify всё равно отсечёт фальшивку).
+    const rlIp = trustedClientIp(req)
+    if (rlIp) {
+      const rl = await checkRateLimit(admin, `payment-webhook:ip:${rlIp}`, { max: 60, windowSeconds: 60 })
+      if (!rl.allowed) return tooManyRequests(rl.retryAfter ?? 60, CORS_HEADERS)
+    }
 
     // ─── 4. Dual-verify через ЮKassa API ───────────────────────────────────
     const shopId = Deno.env.get('YOOKASSA_SHOP_ID')

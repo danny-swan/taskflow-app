@@ -18,6 +18,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 import { corsHeaders } from '../_shared/cors.ts'
+import { checkRateLimits, clientIp, tooManyRequests } from '../_shared/rate-limit.ts'
 
 const TRIAL_DAYS = 14
 
@@ -64,6 +65,14 @@ Deno.serve(async (req) => {
     const admin = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     })
+
+    // ─── N13: rate limiting — 3/час на юзера + 5/час на IP ────────────────
+    const ip = clientIp(req)
+    const rl = await checkRateLimits(admin, [
+      { key: `start-trial:user:${userId}`, rule: { max: 3, windowSeconds: 3600 } },
+      { key: ip ? `start-trial:ip:${ip}` : null, rule: { max: 5, windowSeconds: 3600 } },
+    ])
+    if (!rl.allowed) return tooManyRequests(rl.retryAfter ?? 3600, CORS_HEADERS)
 
     // Читаем существующий row, чтобы проверить trial_used и уже активный plan.
     const { data: existingRow, error: fetchErr } = await admin

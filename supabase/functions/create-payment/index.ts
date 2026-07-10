@@ -54,6 +54,7 @@
 //   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY — стандартные.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
+import { checkRateLimits, clientIp, tooManyRequests } from '../_shared/rate-limit.ts'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -124,6 +125,20 @@ export const handler = async (req: Request): Promise<Response> => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
 
+    // service_role key для rate-limit RPC (N13): новый ключ в SUPABASE_SECRET_KEYS,
+    // легаси-fallback — SUPABASE_SERVICE_ROLE_KEY.
+    let serviceKey: string | undefined
+    try {
+      const raw = Deno.env.get('SUPABASE_SECRET_KEYS')
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, string>
+        if (parsed && typeof parsed.default === 'string' && parsed.default.length > 0) {
+          serviceKey = parsed.default
+        }
+      }
+    } catch (_e) { /* ignore */ }
+    if (!serviceKey) serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || undefined
+
     if (!shopId || !secretKey) {
       return json({ error: 'Server not configured: YOOKASSA credentials missing' }, 500)
     }
@@ -152,6 +167,21 @@ export const handler = async (req: Request): Promise<Response> => {
     const email = user.email
     if (!email) {
       return json({ error: 'User has no email — cannot issue receipt' }, 400)
+    }
+
+    // ─── N13: rate limiting — 10/мин на юзера + 30/мин на IP ──────────────────
+    // Требует service_role (RPC rate_limit_hit доступен только ему). Если ключа
+    // нет — пропускаем (fail-open), чтобы не ломать платёж.
+    if (serviceKey) {
+      const admin = createClient(supabaseUrl, serviceKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      })
+      const ip = clientIp(req)
+      const rl = await checkRateLimits(admin, [
+        { key: `create-payment:user:${user.id}`, rule: { max: 10, windowSeconds: 60 } },
+        { key: ip ? `create-payment:ip:${ip}` : null, rule: { max: 30, windowSeconds: 60 } },
+      ])
+      if (!rl.allowed) return tooManyRequests(rl.retryAfter ?? 60, CORS_HEADERS)
     }
 
     // ─── 3. Валидация payload ────────────────────────────────────────────────
