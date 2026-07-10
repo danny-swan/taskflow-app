@@ -21,25 +21,21 @@
 //   500: серверная ошибка
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-}
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-  })
-}
+import { corsHeaders } from '../_shared/cors.ts'
 
 // Цена апгрейда — полная сумма за год (без зачёта остатка; см. комментарий в описании)
 const ANNUAL_AMOUNT = '2990.00'
 const ANNUAL_DAYS   = 365
 
 export const handler = async (req: Request): Promise<Response> => {
+  const CORS_HEADERS = corsHeaders(req.headers.get('origin'))
+  function json(data: unknown, status = 200): Response {
+    return new Response(JSON.stringify(data), {
+      status,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    })
+  }
+
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS })
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
 

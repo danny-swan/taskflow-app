@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, configDefaults } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
@@ -19,6 +19,12 @@ export default defineConfig({
     // Deno-тесты edge-функций живут в файлах `test.ts` (не *.test.ts) и сюда
     // не попадают — их гоняет `deno test` отдельно.
     include: ['src/**/*.{test,spec}.{ts,tsx}', 'supabase/functions/**/*.{test,spec}.ts'],
+    // Wave 4 PR-A (N11): cors.test.ts — Deno-нативный тест (Deno.env + std-импорт
+    // по https), его гоняет `deno test` в CI (job Edge Functions), а не vitest.
+    // Остальные _shared/*.test.ts — чистые модули без Deno-рантайма, их vitest
+    // берёт штатно. Без этого исключения vitest падает на https-импорте
+    // (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+    exclude: [...configDefaults.exclude, 'supabase/functions/_shared/cors.test.ts'],
     // Tauri APIs и другие браузерные штуки, которых нет в jsdom
     // мокаются в setup.ts / отдельных тестах.
     coverage: {

@@ -18,14 +18,17 @@
 // автоматически (secrets управляются в Dashboard → Edge Functions → Secrets).
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-}
+import { corsHeaders } from '../_shared/cors.ts'
 
 Deno.serve(async (req) => {
+  const CORS_HEADERS = corsHeaders(req.headers.get('origin'))
+  function json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    })
+  }
+
   // Preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS })
@@ -73,10 +76,3 @@ Deno.serve(async (req) => {
     return json({ error: (e as Error).message ?? 'Unknown error' }, 500)
   }
 })
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-  })
-}

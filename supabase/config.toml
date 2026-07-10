@@ -19,15 +19,74 @@ project_id = "sejpmzrmtgcvevukggkx"
 # больше не принимается gateway'ем (UNAUTHORIZED_LEGACY_JWT). Новые secret-ключи
 # (sb_secret_...) — НЕ JWT, поэтому их нельзя слать в Authorization: Bearer.
 #
-# renew-subscription дёргается pg_cron'ом без пользовательского JWT, поэтому
-# verify_jwt = false: платформа НЕ проверяет вызывающего. Авторизацию делает
-# сам код функции — сверяет заголовок x-cron-secret с Edge-secret
-# CRON_SHARED_SECRET (тот же паттерн, что x-internal-token у send-user-email).
+# Wave 4 PR-A — N14: раньше здесь был перечислен только renew-subscription, а
+# verify_jwt остальных функций жил неявно в Dashboard. Теперь фиксируем
+# намерение явно для КАЖДОЙ функции — это самодокументируемый источник истины и
+# защита от «тихого» дрейфа настроек. `supabase functions deploy <name>` читает
+# только секцию [functions.<name>], поэтому деплой одной функции НЕ трогает
+# настройки других.
 #
-# Прочие функции здесь НЕ перечислены намеренно: их настройки уже заданы на
-# сервере (payment-webhook, send-user-email — verify_jwt=false; клиентские
-# функции — verify_jwt=true). Деплой по имени (`supabase functions deploy
-# renew-subscription`) не трогает настройки других функций.
+# Правило выбора:
+#   verify_jwt = true  — функция вызывается клиентом под пользовательским JWT
+#                        (supabase.functions.invoke из десктопа/веба);
+#   verify_jwt = false — вызов извне без JWT (webhook), из pg_cron/pg_net, или
+#                        внутренний вызов с аутентификацией собственным секретом
+#                        (x-webhook-secret / x-internal-token). Авторизацию в
+#                        этом случае делает сам код функции.
+#
+# TODO (main-агент): сверить значения ниже с фактическим состоянием в проде
+# (Dashboard → Edge Functions) перед массовым передеплоем. В рамках этого PR
+# передеплоиваются только функции с CORS-фиксом (N11) — их verify_jwt здесь
+# совпадает с прод-состоянием, так что деплой ничего не меняет в поведении.
 
+# ── Вызываются извне / из БД / внутренними секретами → verify_jwt = false ──
+
+# Webhook от ЮKassa: браузерного JWT нет, подпись проверяется в коде.
+[functions.payment-webhook]
+verify_jwt = false
+
+# Дёргается pg_cron через pg_net без пользовательского JWT; авторизация —
+# заголовок x-cron-secret == CRON_SHARED_SECRET (проверяется в коде).
 [functions.renew-subscription]
 verify_jwt = false
+
+# Внутренний вызов: аутентификация заголовком x-internal-token / service-role.
+[functions.send-user-email]
+verify_jwt = false
+
+# Внутренний вызов: аутентификация заголовком x-webhook-secret == WEBHOOK_SECRET.
+[functions.activation-notify]
+verify_jwt = false
+
+# ── Клиентские функции (JWT пользователя) → verify_jwt = true ──
+
+[functions.start-trial]
+verify_jwt = true
+
+[functions.cancel-subscription]
+verify_jwt = true
+
+[functions.detach-payment-method]
+verify_jwt = true
+
+[functions.reactivate-subscription]
+verify_jwt = true
+
+[functions.create-payment]
+verify_jwt = true
+
+[functions.change-plan]
+verify_jwt = true
+
+# ВНИМАНИЕ (сверено с прод 2026-07-10 через list_edge_functions): на проде эта
+# функция задеплоена с verify_jwt = FALSE (исторический артефакт). Код при этом
+# ТРЕБУЕТ Authorization и валидирует JWT сам (userClient.auth.getUser() →
+# 401 без валидного токена), поэтому фактической дыры нет. Фиксируем намерение
+# = true (gateway-проверка усилит защиту и совместима с кодом). ⚠️ Значение
+# применится только при следующем деплое delete_account — в PR-A эта функция НЕ
+# передеплоивается, прод-поведение не меняется.
+[functions.delete_account]
+verify_jwt = true
+
+[functions.admin-actions]
+verify_jwt = true
