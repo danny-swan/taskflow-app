@@ -56,7 +56,7 @@
 // external_id (=payment.id ЮKassa) уникален в payment_events через
 // UNIQUE (provider, external_id) (миграция 0007). Дубль → 200 OK + skipped.
 
-import { TIER_PRICING, verifyPaymentAmount } from '../_shared/pricing.ts'
+import { TIER_PRICING, verifyPaymentAmount, isRecurringTier } from '../_shared/pricing.ts'
 import { assessVerifiedPayment } from '../_shared/yookassa-verify.ts'
 
 const CORS_HEADERS = {
@@ -82,11 +82,6 @@ const TIER_TO_DAYS: Record<string, number | null> = {
   annual: TIER_PRICING.annual.days,
   lifetime: TIER_PRICING.lifetime.days,
 }
-
-// Tier'ы, которые обновляются автоматически.
-const RECURRING_TIERS = new Set(
-  (Object.keys(TIER_PRICING) as Array<keyof typeof TIER_PRICING>).filter((t) => TIER_PRICING[t].recurring),
-)
 
 // Параметры автопродления — должны совпадать с renew-subscription (index.ts).
 // Нужны, чтобы при payment.canceled прямо в вебхуке отправить пользователю
@@ -601,7 +596,7 @@ async function handlePaymentSucceeded(
   }
 
   // Собираем патч для user_entitlements
-  const isRecurringTier = RECURRING_TIERS.has(tier)
+  const recurringTier = isRecurringTier(tier)
   const patch: Record<string, unknown> = {
     user_id: userId,
     plan,
@@ -614,7 +609,7 @@ async function handlePaymentSucceeded(
     last_payment_at: (payment.captured_at ?? payment.created_at ?? now.toISOString()),
   }
 
-  if (isRecurringTier && validUntil) {
+  if (recurringTier && validUntil) {
     // При первичной покупке monthly/annual — включаем auto_renew.
     // При renewal — auto_renew уже true, но перезапишем для идемпотентности.
     // Если пользователь ранее отменил (cancel_at_period_end=true) и платит
@@ -627,7 +622,7 @@ async function handlePaymentSucceeded(
     }
     patch.next_renewal_at = validUntil // продлеваем на дату окончания
     patch.renewal_attempts_count = 0 // сбрасываем счётчик провалов
-  } else if (!isRecurringTier) {
+  } else if (!recurringTier) {
     // lifetime — auto_renew=false, next_renewal_at=NULL
     patch.auto_renew = false
     patch.cancel_at_period_end = false

@@ -40,6 +40,12 @@ export function isTier(v: unknown): v is Tier {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(TIER_PRICING, v)
 }
 
+// Типобезопасно (принимает произвольную строку): recurring ли данный tier.
+// Неизвестный tier → false. Единая точка проверки авто-продлеваемости.
+export function isRecurringTier(v: string): boolean {
+  return isTier(v) && TIER_PRICING[v].recurring
+}
+
 // Сравнение денежных сумм в копейках — устойчиво к '299' vs '299.00' vs '299.0'.
 export function amountToKopecks(value: string): number | null {
   const n = Number(value)
