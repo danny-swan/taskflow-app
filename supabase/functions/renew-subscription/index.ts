@@ -403,23 +403,30 @@ export const handler = async (req: Request): Promise<Response> => {
           last_renewal_attempt_at: nowIso,
         })
       } else {
-        // status=canceled сразу — редкий кейс, но обрабатываем
+        // F5: платёж СОЗДАН в ЮKassa и синхронно вернулся canceled (редкий кейс).
+        // По модели ЮKassa тот же провал доедет асинхронным webhook'ом
+        // payment.canceled по этому же payment.id. Принцип «единственный владелец»
+        // для СОЗДАННЫХ платежей: письмо renewal_failed, инкремент
+        // renewal_attempts_count и запись в renewal_attempts_log делает ТОЛЬКО
+        // payment-webhook/handlePaymentCanceled. Здесь cron сознательно НЕ делает
+        // ничего из этого — иначе получаем дубль письма, двойной инкремент счётчика
+        // и дубль лога по одному провалу (см. F5, docs/audit/roadmap.md,
+        // dup_email_analysis.md). Ветка симметрична pending-ветке выше: итог
+        // автопродления доводит webhook, а не cron.
         const errCode = (yooJson as { cancellation_details?: { reason?: string } }).cancellation_details?.reason ?? 'canceled'
-        await logAttempt(admin, uid, 'canceled', yooJson.id ?? null, errCode, `status=${status}`, attemptNo)
-        const dg = await incrementAttempts(admin, uid, cand.renewal_attempts_count, MAX_ATTEMPTS)
-        if (dg) downgraded++
-        // v0.9.35-dev.6.5.1: renewal_failed email
-        await notifyRenewalFailed(supabaseUrl, supabaseSecretKey, admin, uid, {
-          email,
-          tier,
-          amountRub: Number(spec.amount),
-          attemptNo,
-          maxAttempts: MAX_ATTEMPTS,
-          validUntil: cand.valid_until,
-          isLastAttempt: dg,
+        // last_renewal_attempt_at выставляем сразу, чтобы cron не дёрнул того же
+        // юзера повторно (лишний POST в ЮKassa) до прихода webhook.
+        await admin.update('user_entitlements', { user_id: uid }, {
+          last_renewal_attempt_at: nowIso,
         })
         failed++
-        details.push({ user_id: uid, payment_id: yooJson.id, status, error_code: errCode })
+        details.push({
+          user_id: uid,
+          payment_id: yooJson.id,
+          status,
+          error_code: errCode,
+          note: 'canceled sync — письмо/счётчик/лог сделает webhook payment.canceled (F5)',
+        })
       }
     }
 
