@@ -58,16 +58,20 @@
 //   INTERNAL_SHARED_SECRET (для вызова send-user-email)
 //   CRON_SHARED_SECRET (авторизация входящего cron-вызова через x-cron-secret)
 
+import { TIER_PRICING } from '../_shared/pricing.ts'
+import { selectActiveRenewalPayment, type YooPaymentListItem } from '../_shared/renewal-idempotency.ts'
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-cron-secret',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-// tier → days для расчёта суммы (совпадает с create-payment TIERS)
+// tier → сумма/дни берём из общего прайса (_shared/pricing.ts) — единый
+// источник, без дубля чисел (см. аудит п.12). Локальны только description.
 const TIER_AMOUNTS: Record<string, { amount: string; description: string; days: number }> = {
-  monthly: { amount: '299.00', description: 'Продление подписки TaskFlow Pro — 1 месяц', days: 30 },
-  annual: { amount: '2990.00', description: 'Продление подписки TaskFlow Pro — 1 год', days: 365 },
+  monthly: { amount: TIER_PRICING.monthly.amount, description: 'Продление подписки TaskFlow Pro — 1 месяц', days: TIER_PRICING.monthly.days as number },
+  annual: { amount: TIER_PRICING.annual.amount, description: 'Продление подписки TaskFlow Pro — 1 год', days: TIER_PRICING.annual.days as number },
 }
 
 const MAX_ATTEMPTS = 3
@@ -318,7 +322,29 @@ export const handler = async (req: Request): Promise<Response> => {
         continue
       }
 
-      // 2d) Готовим Idempotence-Key: детерминированный хеш(uid + valid_until + attempts_count)
+      // 2c-bis) N10: перед созданием платежа сверяемся с ЮKassa — нет ли уже
+      // активного платежа автопродления этого юзера в текущем окне попыток.
+      // Защита от дубля списания при таймауте предыдущего POST /v3/payments
+      // (ответ не дошёл → last_renewal_attempt_at не выставился → cron мог бы
+      // дёрнуть повторно). Best-effort: при ошибке GET полагаемся на
+      // детерминированный Idempotence-Key ниже.
+      const inflight = await findActiveRenewalPayment(shopId, yooSecretKey, uid, cutoffIso)
+      if (inflight) {
+        await admin.update('user_entitlements', { user_id: uid }, { last_renewal_attempt_at: nowIso })
+        succeeded++
+        details.push({
+          user_id: uid,
+          payment_id: inflight.id,
+          status: inflight.status,
+          note: 'existing in-flight renewal payment found via GET /v3/payments (N10 dedup) — skipped create',
+        })
+        continue
+      }
+
+      // 2d) Готовим Idempotence-Key: детерминированный хеш(uid + valid_until + attempts_count).
+      // N10: ключ стабилен в рамках одной попытки (attempt_no не «плывёт» между
+      // ретраями внутри неё) → повтор с теми же аргументами возвращает тот же
+      // платёж у ЮKassa, а не создаёт дубль.
       const attemptNo = (cand.renewal_attempts_count ?? 0) + 1
       const idempotenceKey = await deterministicIdempotenceKey(uid, cand.valid_until ?? '', attemptNo)
 
@@ -609,6 +635,35 @@ async function deterministicIdempotenceKey(
   const hash = await crypto.subtle.digest('SHA-256', bytes)
   const arr = Array.from(new Uint8Array(hash))
   return arr.map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * N10: ищет у ЮKassa активный (pending/waiting_for_capture/succeeded) платёж
+ * автопродления данного юзера, созданный не раньше sinceIso. Страховочная
+ * проверка перед созданием нового платежа, чтобы не задвоить списание при
+ * оборванном таймаутом предыдущем запросе. Best-effort: при любой ошибке
+ * возвращает null — тогда полагаемся на детерминированный Idempotence-Key.
+ */
+async function findActiveRenewalPayment(
+  shopId: string,
+  yooSecretKey: string,
+  userId: string,
+  sinceIso: string,
+): Promise<YooPaymentListItem | null> {
+  try {
+    const yooApiBase = Deno.env.get('YOOKASSA_API_BASE') || 'https://api.yookassa.ru'
+    const qs = new URLSearchParams({ 'created_at.gte': sinceIso, limit: '100' })
+    const resp = await fetch(`${yooApiBase}/v3/payments?${qs.toString()}`, {
+      method: 'GET',
+      headers: { Authorization: `Basic ${btoa(`${shopId}:${yooSecretKey}`)}` },
+    })
+    if (!resp.ok) return null
+    const body = await resp.json().catch(() => null) as { items?: YooPaymentListItem[] } | null
+    if (!body?.items || !Array.isArray(body.items)) return null
+    return selectActiveRenewalPayment(body.items, userId)
+  } catch (_e) {
+    return null
+  }
 }
 
 function json(body: unknown, status = 200): Response {

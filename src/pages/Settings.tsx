@@ -3256,7 +3256,10 @@ function SubscriptionSection() {
                   default: return t('Электронный кошелёк', 'E-wallet');
                 }
               })();
-              const brandStr = pm.card_brand ? pm.card_brand.toUpperCase() : t('Карта', 'Card');
+              // F3: бренд карты живёт в card_type (Visa/MasterCard/Mir) — именно его
+              // пишет payment-webhook (миграция 0016). Legacy-колонка card_brand
+              // больше не заполняется, поэтому читаем card_type.
+              const brandStr = pm.card_type ? pm.card_type.toUpperCase() : t('Карта', 'Card');
               return (
                 <div key={pm.id} className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">

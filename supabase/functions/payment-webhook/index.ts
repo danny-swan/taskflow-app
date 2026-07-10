@@ -56,6 +56,9 @@
 // external_id (=payment.id ЮKassa) уникален в payment_events через
 // UNIQUE (provider, external_id) (миграция 0007). Дубль → 200 OK + skipped.
 
+import { TIER_PRICING, verifyPaymentAmount, isRecurringTier } from '../_shared/pricing.ts'
+import { assessVerifiedPayment } from '../_shared/yookassa-verify.ts'
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -72,14 +75,13 @@ const YOOKASSA_IP_RANGES = [
 ]
 const YOOKASSA_IPV6_PREFIX = '2a02:5180:'
 
+// Дни/recurring берём из общего прайса (_shared/pricing.ts) — единый источник
+// истины, без дублирования чисел (см. аудит п.12).
 const TIER_TO_DAYS: Record<string, number | null> = {
-  monthly: 30,
-  annual: 365,
-  lifetime: null,
+  monthly: TIER_PRICING.monthly.days,
+  annual: TIER_PRICING.annual.days,
+  lifetime: TIER_PRICING.lifetime.days,
 }
-
-// Tier'ы, которые обновляются автоматически (совпадает с create-payment TIERS.recurring)
-const RECURRING_TIERS = new Set(['monthly', 'annual'])
 
 // Параметры автопродления — должны совпадать с renew-subscription (index.ts).
 // Нужны, чтобы при payment.canceled прямо в вебхуке отправить пользователю
@@ -193,11 +195,21 @@ export const handler = async (req: Request): Promise<Response> => {
   }
 
   try {
+    // ─── N8. IP-whitelist — только best-effort сигнал, НЕ источник истины ──────
+    // Клиентский X-Forwarded-For тривиально подделывается, поэтому на его основе
+    // нельзя принимать критичные решения (грант entitlement). Аутентичность
+    // платежа гарантирует dual-verify (GET /v3/payments/{id} с нашими Basic-
+    // credentials) + сверка суммы (N9) ниже. Поэтому здесь мы больше НЕ
+    // блокируем по IP — лишь логируем подозрительный источник для наблюдаемости.
+    // YOOKASSA_SKIP_IP_CHECK оставлен как переключатель логирования (в проде
+    // безопасный дефолт — не выставлен: логируем, но НЕ блокируем).
     const skipIpCheck = Deno.env.get('YOOKASSA_SKIP_IP_CHECK') === 'true'
     if (!skipIpCheck) {
       const clientIp = getClientIp(req)
       if (!clientIp || !isIpAllowed(clientIp)) {
-        return json({ error: 'Forbidden: source IP not in ЮKassa whitelist', ip: clientIp }, 403)
+        console.warn(
+          `[payment-webhook] source IP not in ЮKassa whitelist (best-effort only, not blocking): ${clientIp ?? 'unknown'}`,
+        )
       }
     }
 
@@ -270,6 +282,15 @@ export const handler = async (req: Request): Promise<Response> => {
 
     if (verified.id !== paymentId) {
       return json({ error: 'Payment ID mismatch after verify' }, 400)
+    }
+
+    // ─── N8. Статус реального платежа (из dual-verify) должен соответствовать
+    // событию уведомления. Это отсекает поддельные/несогласованные уведомления
+    // (напр. подделанное payment.succeeded по реально pending/canceled платежу)
+    // независимо от того, что клиент прислал в X-Forwarded-For.
+    const verifyAssessment = assessVerifiedPayment(event, verified)
+    if (!verifyAssessment.ok) {
+      return json({ error: `Dual-verify rejected: ${verifyAssessment.reason}`, event, payment_id: paymentId }, 400)
     }
 
     const userIdFromMeta = verified.metadata?.user_id ?? payload.object.metadata?.user_id ?? null
@@ -384,6 +405,13 @@ async function handlePaymentSucceeded(
   // а не токен ЮKassa. Отключение — отдельным действием
   // (detach-payment-method), что закрывает требование ЮKassa «отвязать самостоятельно».
   if (isUpdateCard) {
+    // N9: update-card — ожидаем ровно верификационный 1 ₽. Несовпадение →
+    // не привязываем метод, логируем, entitlement не трогаем.
+    const amtCheck = verifyPaymentAmount({ mode: 'update-card', amount: payment.amount })
+    if (!amtCheck.ok) {
+      console.error(`[payment-webhook] update-card amount check failed for user ${userId}, payment ${payment.id}: ${amtCheck.reason}`)
+      return { ok: false, msg: 'amount verification failed (update-card)', error: amtCheck.reason }
+    }
     if (savedMethodRowId) {
       // Продление: valid_until не трогаем (это не покупка), но next_renewal_at
       // должен указывать на конец текущего периода, чтобы cron забрал.
@@ -440,6 +468,12 @@ async function handlePaymentSucceeded(
 
   // 3) Режим trial — refund 1₽ + активируем trial на 14 дней
   if (isTrialMode) {
+    // N9: trial активируется тоже через верификационный 1 ₽ — сверяем сумму.
+    const amtCheck = verifyPaymentAmount({ mode: 'trial', amount: payment.amount })
+    if (!amtCheck.ok) {
+      console.error(`[payment-webhook] trial amount check failed for user ${userId}, payment ${payment.id}: ${amtCheck.reason}`)
+      return { ok: false, msg: 'amount verification failed (trial)', error: amtCheck.reason }
+    }
     // Проверяем что метод привязан
     if (!savedMethodId) {
       console.warn(`trial without saved method for user ${userId}, payment ${payment.id}`)
@@ -519,6 +553,15 @@ async function handlePaymentSucceeded(
     return { ok: false, msg: 'invalid tier', error: `Unknown tier: ${tier}` }
   }
 
+  // N9: сверяем сумму+валюту против серверной цены tier ДО выдачи entitlement.
+  // Платёж на неверную сумму НЕ активирует подписку — логируем и выходим
+  // (handler вернёт 200, ошибка попадёт в payment_events.error).
+  const amtCheck = verifyPaymentAmount({ mode: 'purchase', tier, amount: payment.amount })
+  if (!amtCheck.ok) {
+    console.error(`[payment-webhook] purchase amount check failed for user ${userId}, tier ${tier}, payment ${payment.id}: ${amtCheck.reason}`)
+    return { ok: false, msg: 'amount verification failed', error: amtCheck.reason }
+  }
+
   const days = TIER_TO_DAYS[tier]
   const now = new Date()
   let validUntil: string | null = null
@@ -553,7 +596,7 @@ async function handlePaymentSucceeded(
   }
 
   // Собираем патч для user_entitlements
-  const isRecurringTier = RECURRING_TIERS.has(tier)
+  const recurringTier = isRecurringTier(tier)
   const patch: Record<string, unknown> = {
     user_id: userId,
     plan,
@@ -566,7 +609,7 @@ async function handlePaymentSucceeded(
     last_payment_at: (payment.captured_at ?? payment.created_at ?? now.toISOString()),
   }
 
-  if (isRecurringTier && validUntil) {
+  if (recurringTier && validUntil) {
     // При первичной покупке monthly/annual — включаем auto_renew.
     // При renewal — auto_renew уже true, но перезапишем для идемпотентности.
     // Если пользователь ранее отменил (cancel_at_period_end=true) и платит
@@ -579,7 +622,7 @@ async function handlePaymentSucceeded(
     }
     patch.next_renewal_at = validUntil // продлеваем на дату окончания
     patch.renewal_attempts_count = 0 // сбрасываем счётчик провалов
-  } else if (!isRecurringTier) {
+  } else if (!recurringTier) {
     // lifetime — auto_renew=false, next_renewal_at=NULL
     patch.auto_renew = false
     patch.cancel_at_period_end = false

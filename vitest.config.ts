@@ -14,7 +14,11 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // src/** — фронт; supabase/functions/**/*.test.ts — чистые серверные
+    // helper-модули (_shared/*), которые тестируются без Deno-рантайма.
+    // Deno-тесты edge-функций живут в файлах `test.ts` (не *.test.ts) и сюда
+    // не попадают — их гоняет `deno test` отдельно.
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'supabase/functions/**/*.{test,spec}.ts'],
     // Tauri APIs и другие браузерные штуки, которых нет в jsdom
     // мокаются в setup.ts / отдельных тестах.
     coverage: {

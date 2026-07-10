@@ -8,7 +8,8 @@ BEGIN;
 
 -- Ожидаемое количество тестов: (14 таблиц × 4 CRUD × 2 роли)
 -- минус то, что не выдаётся — считаем вручную ниже.
-SELECT plan(74);
+-- +5 (N6): default privileges НЕ выдают лишнего на будущие таблицы.
+SELECT plan(79);
 
 -- ─── profiles (SELECT, UPDATE для authenticated; ALL для service_role) ─────
 SELECT ok(has_table_privilege('authenticated', 'public.profiles', 'SELECT'),
@@ -127,6 +128,24 @@ SELECT ok(NOT has_table_privilege('anon', 'public.user_entitlements',     'SELEC
 SELECT ok(NOT has_table_privilege('anon', 'public.payment_events',        'SELECT'), 'anon НЕ SELECT payment_events');
 SELECT ok(NOT has_table_privilege('anon', 'public.payment_methods',       'SELECT'), 'anon НЕ SELECT payment_methods');
 SELECT ok(NOT has_table_privilege('anon', 'public.renewal_attempts_log',  'SELECT'), 'anon НЕ SELECT renewal_attempts_log');
+
+-- ─── N6: default privileges НЕ выдают права на будущие таблицы ──────────────
+-- Регрессия против footgun из 0010/0011 (общий ALTER DEFAULT PRIVILEGES).
+-- Создаём новую таблицу и убеждаемся, что ни одна роль не получила
+-- прав автоматически (миграция 0021 откатила default-выдачу). Всё внутри
+-- транзакции → ROLLBACK уберёт таблицу.
+CREATE TABLE public._grants_future_probe (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+
+SELECT ok(NOT has_table_privilege('authenticated', 'public._grants_future_probe', 'SELECT'),
+          'N6: authenticated НЕ получает авто-SELECT на новую таблицу');
+SELECT ok(NOT has_table_privilege('anon', 'public._grants_future_probe', 'SELECT'),
+          'N6: anon НЕ получает авто-SELECT на новую таблицу');
+SELECT ok(NOT has_table_privilege('service_role', 'public._grants_future_probe', 'SELECT'),
+          'N6: service_role НЕ получает авто-SELECT на новую таблицу');
+SELECT ok(NOT has_table_privilege('service_role', 'public._grants_future_probe', 'INSERT'),
+          'N6: service_role НЕ получает авто-INSERT на новую таблицу');
+SELECT ok(NOT has_table_privilege('service_role', 'public._grants_future_probe', 'DELETE'),
+          'N6: service_role НЕ получает авто-DELETE на новую таблицу');
 
 SELECT * FROM finish();
 ROLLBACK;
