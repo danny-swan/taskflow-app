@@ -132,6 +132,7 @@ jobs:
       - name: Deno unit tests (edge functions, no network)
         run: |
           deno test --allow-all --node-modules-dir=auto \
+            supabase/functions/_shared/cors.test.ts \
             supabase/functions/admin-actions/test.ts \
             supabase/functions/cancel-subscription/test.ts \
             supabase/functions/create-payment/test.ts \
