@@ -133,4 +133,5 @@ jobs:
             supabase/tests/02_rls_test.sql \
             supabase/tests/03_functions_test.sql \
             supabase/tests/04_wave2_test.sql \
-            supabase/tests/05_wave4_test.sql
+            supabase/tests/05_wave4_test.sql \
+            supabase/tests/06_wave4_rate_limit_test.sql

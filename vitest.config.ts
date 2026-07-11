@@ -24,7 +24,14 @@ export default defineConfig({
     // Остальные _shared/*.test.ts — чистые модули без Deno-рантайма, их vitest
     // берёт штатно. Без этого исключения vitest падает на https-импорте
     // (ERR_UNSUPPORTED_ESM_URL_SCHEME).
-    exclude: [...configDefaults.exclude, 'supabase/functions/_shared/cors.test.ts'],
+    exclude: [
+      ...configDefaults.exclude,
+      'supabase/functions/_shared/cors.test.ts',
+      // Wave 4 PR-B (N13): rate-limit.test.ts — Deno-нативный тест (импортирует
+      // rate-limit.ts, который тянет supabase-js по https). Гоняется в Deno CI
+      // job, а не vitest — иначе ERR_UNSUPPORTED_ESM_URL_SCHEME.
+      'supabase/functions/_shared/rate-limit.test.ts',
+    ],
     // Tauri APIs и другие браузерные штуки, которых нет в jsdom
     // мокаются в setup.ts / отдельных тестах.
     coverage: {

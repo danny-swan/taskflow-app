@@ -122,6 +122,7 @@ jobs:
             supabase/functions/_shared/pricing.ts \
             supabase/functions/_shared/yookassa-verify.ts \
             supabase/functions/_shared/renewal-idempotency.ts \
+            supabase/functions/_shared/rate-limit.ts \
             supabase/functions/_shared/test_mock_server.ts
 
       # Unit-тесты edge-функций на MockServer (без сети/секретов). ЯВНЫЙ список
@@ -133,6 +134,7 @@ jobs:
         run: |
           deno test --allow-all --node-modules-dir=auto \
             supabase/functions/_shared/cors.test.ts \
+            supabase/functions/_shared/rate-limit.test.ts \
             supabase/functions/admin-actions/test.ts \
             supabase/functions/cancel-subscription/test.ts \
             supabase/functions/create-payment/test.ts \
