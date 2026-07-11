@@ -73,14 +73,31 @@ export async function checkRateLimit(
 }
 
 /**
- * Настоящий IP клиента. Доверяем ТОЛЬКО заголовкам, которые ставит edge-runtime
- * / Cloudflare перед функцией. НЕ x-forwarded-for — он подделываем клиентом
- * (см. находку N8). Приоритет: cf-connecting-ip → x-real-ip → 'unknown'.
+ * IP клиента для построения per-IP ключа. Порядок согласован с
+ * `payment-webhook` (там та же логика для сверки IP ЮKassa): первый адрес из
+ * `x-forwarded-for` (именно его ставит edge-runtime Supabase/Deno Deploy) →
+ * `x-real-ip` → `cf-connecting-ip`. Возвращает `null`, если достоверный IP
+ * определить нельзя.
+ *
+ * ВАЖНО (замена прежнего 'unknown'): при отсутствии IP НЕ схлопываем всех в
+ * один общий бакет — вызывающий код пропускает per-IP лимит целиком (per-user
+ * лимит остаётся). Иначе общий ключ `ip:unknown` превратил бы per-IP лимит в
+ * глобальный, и один аноним мог бы заблокировать эндпоинт всем.
+ *
+ * Про подделку (N8): `x-forwarded-for` теоретически подделываем, но подмена
+ * лишь перемещает атакующего в ДРУГОЙ per-IP бакет — она не снижает лимит
+ * чужого IP и не обходит per-user лимит. Сверка источника платежей (allowlist
+ * IP ЮKassa) — это отдельная, более строгая проверка в самом вебхуке.
  */
-export function getClientIp(req: Request): string {
-  return req.headers.get('cf-connecting-ip')
-    ?? req.headers.get('x-real-ip')
-    ?? 'unknown'
+export function getClientIp(req: Request): string | null {
+  const xff = req.headers.get('x-forwarded-for')
+  if (xff) {
+    const first = xff.split(',')[0].trim()
+    if (first) return first
+  }
+  return req.headers.get('x-real-ip')
+    ?? req.headers.get('cf-connecting-ip')
+    ?? null
 }
 
 /**

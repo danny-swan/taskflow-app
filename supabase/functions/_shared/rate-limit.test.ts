@@ -63,21 +63,40 @@ Deno.test('checkRateLimit: fail-open on empty/undefined row → allowed=true', a
   assertEquals(res, { allowed: true, retryAfter: 0 })
 })
 
-Deno.test('getClientIp: prefers cf-connecting-ip over x-real-ip', () => {
+Deno.test('getClientIp: prefers x-forwarded-for over x-real-ip / cf-connecting-ip', () => {
   const req = new Request('https://x.test', {
-    headers: { 'cf-connecting-ip': '1.1.1.1', 'x-real-ip': '2.2.2.2' },
+    headers: {
+      'x-forwarded-for': '1.1.1.1',
+      'x-real-ip': '2.2.2.2',
+      'cf-connecting-ip': '3.3.3.3',
+    },
   })
   assertEquals(getClientIp(req), '1.1.1.1')
 })
 
-Deno.test('getClientIp: falls back to x-real-ip when cf header absent', () => {
+Deno.test('getClientIp: takes the FIRST ip from a multi-hop x-forwarded-for', () => {
+  const req = new Request('https://x.test', {
+    headers: { 'x-forwarded-for': '9.9.9.9, 10.0.0.1, 172.16.0.2' },
+  })
+  assertEquals(getClientIp(req), '9.9.9.9')
+})
+
+Deno.test('getClientIp: falls back to x-real-ip when x-forwarded-for absent', () => {
   const req = new Request('https://x.test', { headers: { 'x-real-ip': '2.2.2.2' } })
   assertEquals(getClientIp(req), '2.2.2.2')
 })
 
-Deno.test('getClientIp: ignores spoofable x-forwarded-for → unknown', () => {
-  const req = new Request('https://x.test', { headers: { 'x-forwarded-for': '9.9.9.9' } })
-  assertEquals(getClientIp(req), 'unknown')
+Deno.test('getClientIp: falls back to cf-connecting-ip when only that is present', () => {
+  const req = new Request('https://x.test', { headers: { 'cf-connecting-ip': '3.3.3.3' } })
+  assertEquals(getClientIp(req), '3.3.3.3')
+})
+
+Deno.test('getClientIp: returns null when no ip header is present (per-IP skipped, NOT a shared bucket)', () => {
+  // Контракт: null → вызывающий код пропускает per-IP лимит целиком. Так мы НЕ
+  // схлопываем всех анонимов в общий бакет 'ip:unknown' (иначе per-IP лимит
+  // стал бы глобальным и один аноним заблокировал бы эндпоинт всем).
+  const req = new Request('https://x.test')
+  assertEquals(getClientIp(req), null)
 })
 
 Deno.test('rateLimitResponse: 429 + Retry-After + merged CORS headers', async () => {

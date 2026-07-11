@@ -239,12 +239,16 @@ export const handler = async (req: Request): Promise<Response> => {
     // (dual-verify GET /v3/payments + запись в БД). 60 req/min на IP —
     // достаточно для легитимных пачек уведомлений ЮKassa (у которой один IP),
     // но отсекает флуд. fail-open встроен в checkRateLimit: если лимитер упал,
-    // легитимный webhook НЕ теряется. Доверяем cf-connecting-ip / x-real-ip
-    // (не x-forwarded-for — подделываем, см. N8).
+    // легитимный webhook НЕ теряется. IP берём из x-forwarded-for → x-real-ip
+    // (getTrustedClientIp, порядок согласован со сверкой IP ЮKassa ниже).
+    // Если IP определить нельзя (null) — per-IP лимит пропускаем (per-IP —
+    // единственный лимит здесь; общий бакет 'unknown' был бы вреднее).
     const rlIp = getTrustedClientIp(req)
-    const webhookLimit = await checkRateLimit(`payment-webhook:ip:${rlIp}`, 60, 60)
-    if (!webhookLimit.allowed) {
-      return rateLimitResponse(webhookLimit.retryAfter, CORS_HEADERS)
+    if (rlIp !== null) {
+      const webhookLimit = await checkRateLimit(`payment-webhook:ip:${rlIp}`, 60, 60)
+      if (!webhookLimit.allowed) {
+        return rateLimitResponse(webhookLimit.retryAfter, CORS_HEADERS)
+      }
     }
 
     const paymentId = payload.object.id

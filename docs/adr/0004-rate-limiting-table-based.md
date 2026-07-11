@@ -62,20 +62,39 @@ N18); EXECUTE выдан только `service_role`.
 на время потерять ограничение частоты. Симметрично fail-open в
 [ADR 0003](0003-renewal-idempotency-guard.md).
 
-### Доверенные IP-заголовки (связь с N8)
+### IP-заголовки и отсутствие IP (связь с N8)
 
-Ключ per-IP строится из `getClientIp`, который читает **только**
-`cf-connecting-ip` → `x-real-ip` (заголовки ставит edge-runtime/Cloudflare перед
-функцией). `x-forwarded-for` НЕ используется — он тривиально подделывается
-клиентом, и лимит по нему обходился бы сменой заголовка (та же логика, что в N8
-для `payment-webhook`).
+Ключ per-IP строится из `getClientIp`: приоритет `x-forwarded-for` (первый адрес
+списка) → `x-real-ip` → `cf-connecting-ip`. Порядок **согласован с
+`payment-webhook`**, где та же логика уже используется для сверки IP ЮKassa —
+на Supabase Edge (Deno Deploy) реальный клиентский IP несёт именно
+`x-forwarded-for`. Разнобой (лимитер читал бы `cf-connecting-ip`, а вебхук —
+`x-forwarded-for`) давал бы на одном и том же запросе разные ключи.
+
+Про подделку (N8): `x-forwarded-for` теоретически подделываем, но в контексте
+rate-limit это **не** уязвимость — подмена лишь перемещает атакующего в ДРУГОЙ
+per-IP бакет, не снижая лимит чужого IP и не обходя per-user лимит. Сверка
+источника платежей по allowlist IP ЮKassa (N8) — отдельная, более строгая
+проверка в самом вебхуке, и она здесь не при чём.
+
+**Если достоверный IP определить нельзя** (`getClientIp` → `null`), per-IP
+проверка **пропускается целиком**, а НЕ схлопывается в общий ключ `ip:unknown`.
+Общий бакет превратил бы per-IP лимит в глобальный: один аноним, исчерпав
+`ip:unknown`, заблокировал бы эндпоинт всем (напр. регистрацию через
+`start-trial`). Для `create-payment`/`start-trial` контроль сохраняет per-user
+лимит; на `payment-webhook` (только per-IP) это означает отсутствие ограничения
+для запросов без IP-заголовков — приемлемо, т.к. заголовки ставит платформа.
 
 ### Cleanup через pg_cron
 
 Истёкшие строки удаляет job `rate-limits-cleanup` (`*/5 * * * *`,
 `DELETE ... WHERE expires_at < now()`). Создаётся идемпотентно (unschedule +
-schedule) и обёрнут в guard по `pg_available_extensions` — на vanilla Postgres в
-CI (где pg_cron нет) блок становится no-op, миграция проходит db-tests.
+schedule). Guard в два шага, как в миграции 0015: сперва `pg_available_extensions`
+(на vanilla Postgres в CI, где pg_cron нет, блок — чистый no-op), затем
+`CREATE EXTENSION IF NOT EXISTS pg_cron` и **перепроверка фактической установки**
+через `pg_extension` перед любым обращением к `cron.*`. Без второго шага
+инстанс, где pg_cron доступен, но не установлен (нет схемы `cron`), уронил бы
+миграцию на `cron.schedule`.
 
 ### Выбранные лимиты
 

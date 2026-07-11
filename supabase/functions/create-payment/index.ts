@@ -162,10 +162,14 @@ export const handler = async (req: Request): Promise<Response> => {
     // Проверяем ПОСЛЕ резолва userId (нужен per-user ключ). Два независимых
     // лимита: 10 req/min на пользователя и 30 req/min на IP. Любое превышение
     // → 429. fail-open встроен в checkRateLimit (ошибка лимитера не блокирует).
+    // Если IP определить нельзя (getClientIp → null) — per-IP лимит пропускаем,
+    // per-user остаётся (см. getClientIp: не схлопываем анонимов в общий бакет).
     const clientIp = getClientIp(req)
     const [userLimit, ipLimit] = await Promise.all([
       checkRateLimit(`create-payment:user:${user.id}`, 10, 60),
-      checkRateLimit(`create-payment:ip:${clientIp}`, 30, 60),
+      clientIp !== null
+        ? checkRateLimit(`create-payment:ip:${clientIp}`, 30, 60)
+        : Promise.resolve({ allowed: true, retryAfter: 0 }),
     ])
     if (!userLimit.allowed) {
       return rateLimitResponse(userLimit.retryAfter, CORS_HEADERS)

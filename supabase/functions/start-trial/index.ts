@@ -64,11 +64,14 @@ Deno.serve(async (req) => {
     // ─── N13. Rate limiting ──────────────────────────────────────────────────
     // Trial активируется один раз на аккаунт, поэтому лимиты жёсткие: 3 req/hour
     // на пользователя и 5 req/hour на IP. Проверяем ПОСЛЕ резолва userId.
-    // fail-open встроен в checkRateLimit.
+    // fail-open встроен в checkRateLimit. Если IP определить нельзя
+    // (getClientIp → null) — per-IP лимит пропускаем, per-user остаётся.
     const clientIp = getClientIp(req)
     const [userLimit, ipLimit] = await Promise.all([
       checkRateLimit(`start-trial:user:${userId}`, 3, 3600),
-      checkRateLimit(`start-trial:ip:${clientIp}`, 5, 3600),
+      clientIp !== null
+        ? checkRateLimit(`start-trial:ip:${clientIp}`, 5, 3600)
+        : Promise.resolve({ allowed: true, retryAfter: 0 }),
     ])
     if (!userLimit.allowed) {
       return rateLimitResponse(userLimit.retryAfter, CORS_HEADERS)
