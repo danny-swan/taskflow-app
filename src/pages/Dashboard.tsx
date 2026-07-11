@@ -3,6 +3,7 @@ import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { formatDate, formatMonthDay } from '../lib/format';
 import { overdueEventsByDate } from '../lib/overdue';
+import { currentSnapshotTasks } from '../lib/dashboard';
 import { DatePicker } from '../components/DatePicker';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
@@ -80,10 +81,18 @@ export function DashboardPage() {
     [allStatuses],
   );
 
-  // Без «Удалено» — общий набор для всех расчётов
+  // Без «Удалено» — общий набор для ИСТОРИЧЕСКИХ расчётов «За период»
+  // (Активность, тепловая карта, недавно выполненные) — им нужны все задачи.
   const dashTasks = useMemo(
     () => allTasks.filter(t => !deletedStatusIds.has(t.status_id)),
     [allTasks, deletedStatusIds],
+  );
+
+  // v0.9.35-dev.6.10.5: «Текущий срез» считаем по живому набору задач —
+  // тому же, что показан на вкладке «Задачи» (не архивные, не скрытые/технические).
+  const currentTasks = useMemo(
+    () => currentSnapshotTasks(allTasks, allStatuses),
+    [allTasks, allStatuses],
   );
 
   // ─── Период (для Активности) ─────────────────────────────────────────────
@@ -143,50 +152,50 @@ export function DashboardPage() {
 
   // ─── Текущий срез (не зависит от периода) ────────────────────────────────
   const snapshot = useMemo(() => {
-    const total = dashTasks.length;
-    const inProgress = dashTasks.filter(t =>
+    const total = currentTasks.length;
+    const inProgress = currentTasks.filter(t =>
       !t.archived && !techIds.has(t.status_id) && !archiveStatusIds.has(t.status_id) && !pausedStatusIds.has(t.status_id)
     ).length;
-    const paused = dashTasks.filter(t => pausedStatusIds.has(t.status_id) && !t.archived).length;
-    const completed = dashTasks.filter(t => archiveStatusIds.has(t.status_id)).length;
+    const paused = currentTasks.filter(t => pausedStatusIds.has(t.status_id) && !t.archived).length;
+    const completed = currentTasks.filter(t => archiveStatusIds.has(t.status_id)).length;
     const today = localDayKey(new Date());
-    const overdue = dashTasks.filter(t =>
+    const overdue = currentTasks.filter(t =>
       t.deadline && t.deadline < today &&
       !archiveStatusIds.has(t.status_id) && !techIds.has(t.status_id) && !t.archived
     ).length;
 
-    // Самый частый тэг (по количеству задач, исключая Удалено)
+    // Самый частый тэг (по количеству живых задач)
     let topTag: { name: string; count: number; color: string } | null = null;
     for (const tag of tags) {
-      const count = dashTasks.filter(t => t.tag_id === tag.id).length;
+      const count = currentTasks.filter(t => t.tag_id === tag.id).length;
       if (count > 0 && (!topTag || count > topTag.count)) {
         topTag = { name: tag.name, count, color: tag.color };
       }
     }
 
     return { total, inProgress, paused, completed, overdue, topTag };
-  }, [dashTasks, techIds, archiveStatusIds, pausedStatusIds, tags]);
+  }, [currentTasks, techIds, archiveStatusIds, pausedStatusIds, tags]);
 
   const byStatus = useMemo(() =>
     allStatuses
       .filter(s => !deletedStatusIds.has(s.id))
       .map(s => ({
         name: s.name,
-        value: dashTasks.filter(t => t.status_id === s.id).length,
+        value: currentTasks.filter(t => t.status_id === s.id).length,
         color: s.color,
         isTechnical: s.is_technical === 1,
       }))
       .filter(x => x.value > 0),
-    [dashTasks, allStatuses, deletedStatusIds]);
+    [currentTasks, allStatuses, deletedStatusIds]);
 
   const byTag = useMemo(() => {
     const all = tags.map(t => ({
       name: t.name,
-      value: dashTasks.filter(ts => ts.tag_id === t.id).length,
+      value: currentTasks.filter(ts => ts.tag_id === t.id).length,
       color: t.color,
     }));
     return all.filter(x => x.value > 0);
-  }, [dashTasks, tags]);
+  }, [currentTasks, tags]);
 
   const heatmap = useMemo(() => {
     const weeks: { date: string; count: number }[][] = [];

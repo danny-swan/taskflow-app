@@ -1,11 +1,14 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
+import { usePendingSyncCount } from '../lib/pendingSync';
 import {
   ListChecks, Plus, LayoutDashboard, BarChart3, Settings, HelpCircle,
-  Sun, Moon, Sparkles, Leaf, Palette, ChevronDown, CalendarDays,
+  Sun, Moon, Sparkles, Leaf, Palette, ChevronDown, CalendarDays, Cloud, X, Clock,
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
+import { useAuth } from '../lib/auth';
+import { useEntitlement, daysLeftInTrial } from '../lib/entitlements';
 
 export function Sidebar() {
   const lang = useStore(s => s.language);
@@ -56,6 +59,14 @@ export function Sidebar() {
         <div className="text-[11px] text-muted mt-0.5 ml-[2px] tracking-wide">{tr(lang, 'brand_sub')}</div>
         <div className="text-[10px] text-faint mt-0.5 ml-[2px] tracking-wider tabular mono">v{__APP_VERSION__}</div>
       </div>
+
+      {/* v0.9.35-dev.3: pending sync indicator.
+          Виден в dev-сборке всегда (для отладки sync-слоя), в prod — только если count > 0.
+          В dev.4 к этому чипу будет привязан realtime-статус push'а. */}
+      <PendingSyncChip />
+
+      {/* v0.9.35-dev.6: баннер статуса подписки (trial / free-CTA / expired). */}
+      <SubscriptionBanner />
 
       {/* Nav */}
       <nav className="flex-1 px-2.5 overflow-y-auto">
@@ -146,6 +157,204 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+  );
+}
+
+/**
+ * v0.9.35-dev.3: dev-only чип с количеством записей в sync_outbox.
+ * В prod-сборке показывается только если что-то реально ждёт push'а —
+ * в dev.4 тут будет realtime-индикатор (идёт отправка / ошибка / всё синк).
+ */
+function PendingSyncChip() {
+  const lang = useStore(s => s.language);
+  const count = usePendingSyncCount();
+  const isDev = import.meta.env.DEV;
+
+  // v0.9.35-dev.4: подписываемся на sync-состояние через lazy import (чтобы
+  // чанк sync/index не вошёл в initial bundle Sidebar'а).
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'pulling' | 'pushing' | 'synced' | 'error' | 'skipped' | 'paywalled'>('idle');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    let mounted = true;
+    void import('../lib/sync').then(m => {
+      if (!mounted) return;
+      const initial = m.getSyncState();
+      setSyncStatus(initial.status);
+      setSyncError(initial.lastError);
+      unsubscribe = m.subscribeSyncState(s => {
+        setSyncStatus(s.status);
+        setSyncError(s.lastError);
+      });
+    }).catch(() => {});
+    return () => {
+      mounted = false;
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  // Скрываем chip в prod, когда всё тихо (в dev всегда показываем).
+  const isBusy = syncStatus === 'pulling' || syncStatus === 'pushing';
+  const isError = syncStatus === 'error';
+  if (!isDev && count === 0 && !isBusy && !isError) return null;
+
+  // Формируем label + цвет.
+  let label: string;
+  let iconColor = 'text-faint';
+  let valueColor = 'text-faint tabular';
+  if (isBusy) {
+    label = lang === 'ru'
+      ? (syncStatus === 'pulling' ? 'скачивание' : 'отправка')
+      : syncStatus;
+    iconColor = 'text-accent animate-pulse';
+    valueColor = 'text-accent font-semibold tabular';
+  } else if (isError) {
+    label = lang === 'ru' ? 'ошибка sync' : 'sync error';
+    iconColor = 'text-[var(--error,#c33)]';
+    valueColor = 'text-[var(--error,#c33)] font-semibold tabular';
+  } else if (syncStatus === 'synced' && count === 0) {
+    label = lang === 'ru' ? 'синхронизировано' : 'synced';
+    iconColor = 'text-[var(--success,#7a3)]';
+    valueColor = 'text-faint tabular';
+  } else {
+    label = lang === 'ru' ? 'pending sync' : 'pending sync';
+    iconColor = count > 0 ? 'text-accent' : 'text-faint';
+    valueColor = count > 0 ? 'text-accent font-semibold tabular' : 'text-faint tabular';
+  }
+
+  const title = lang === 'ru'
+    ? (isError ? `Ошибка: ${syncError ?? 'неизвестно'}` : `В очереди: ${count}, статус: ${syncStatus}`)
+    : (isError ? `Error: ${syncError ?? 'unknown'}` : `Queued: ${count}, status: ${syncStatus}`);
+
+  return (
+    <div
+      className="mx-3 mb-2 mt-1 px-2 py-1 rounded-md border border-border-soft bg-[var(--surface-alt)]/40 flex items-center gap-1.5 text-[10px] text-muted mono tracking-wide"
+      title={title}
+    >
+      <Cloud size={11} className={iconColor} />
+      <span>{label}:</span>
+      <span className={valueColor}>{isBusy ? '…' : count}</span>
+    </div>
+  );
+}
+
+/**
+ * v0.9.35-dev.6 — баннер о статусе подписки.
+ *
+ * Показывает:
+ *   - Trial активен: «Trial · осталось N дн.» (кликабельно).
+ *   - Trial истёк: «Trial закончился · оформить».
+ *   - Free + не брал trial: софткая CTA «Активировать 14 дней Pro» (dismissable).
+ *   - Pro / Lifetime: ничего (чистый sidebar).
+ *
+ * Dismiss хранится в localStorage. Сбрасывается при смене plan (если даже
+ * был dismissed, после trial истечения показать опять — пользователь
+ * должен увидеть). Делаем через stamp по effectivePlan.
+ */
+function SubscriptionBanner() {
+  const lang = useStore(s => s.language);
+  const navigate = useNavigate();
+  const auth = useAuth();
+  const { entitlement } = useEntitlement(
+    auth.user?.id ?? null,
+    auth.user?.email ?? null,
+  );
+
+  // Dismiss stamp: какой effectivePlan+state юзер уже «погасил».
+  const dismissKey = 'tf.subscription_banner_dismissed_v1';
+  const [dismissedStamp, setDismissedStamp] = useState<string | null>(() => {
+    try { return localStorage.getItem(dismissKey); } catch { return null; }
+  });
+
+  // Pro/Lifetime — ничего не показываем.
+  if (entitlement.effectivePlan === 'pro' || entitlement.effectivePlan === 'lifetime') {
+    return null;
+  }
+  // Нет сессии — не засоряем UI (AuthScreen всё равно показывается).
+  if (!auth.user) return null;
+
+  const trialExpired =
+    entitlement.rawPlan === 'trial' && entitlement.effectivePlan === 'free';
+
+  // Стамп для dismiss.
+  const stamp = entitlement.isTrialActive
+    ? `trial-active-${daysLeftInTrial(entitlement)}`
+    : trialExpired
+      ? 'trial-expired'
+      : 'free-cta';
+
+  // Trial-коунтдаун и trial-expired — НЕ dismissable (важно показывать).
+  // Только free-CTA можно погасить.
+  const canDismiss = !entitlement.isTrialActive && !trialExpired;
+  if (canDismiss && dismissedStamp === stamp) return null;
+
+  let label: string;
+  let cta: string;
+  let variant: 'trial' | 'expired' | 'cta' = 'cta';
+
+  if (entitlement.isTrialActive) {
+    const n = daysLeftInTrial(entitlement);
+    label = lang === 'ru' ? `Trial · осталось ${n} дн.` : `Trial · ${n} days left`;
+    cta = lang === 'ru' ? 'Управление' : 'Manage';
+    variant = 'trial';
+  } else if (trialExpired) {
+    label = lang === 'ru' ? 'Trial закончился' : 'Trial ended';
+    cta = lang === 'ru' ? 'Оформить' : 'Subscribe';
+    variant = 'expired';
+  } else {
+    // Free + trial_used=false: предлагаем 14 дней.
+    // Если trial уже был (trial_used=true) — показываем мягкую CTA на Pro.
+    if (entitlement.trialUsed) {
+      label = lang === 'ru' ? 'Открыть Pro' : 'Unlock Pro';
+    } else {
+      label = lang === 'ru' ? '14 дней Pro бесплатно' : '14 days Pro free';
+    }
+    cta = lang === 'ru' ? 'Подробнее' : 'Learn more';
+  }
+
+  const bg =
+    variant === 'expired'
+      ? 'color-mix(in oklab, var(--error, #c33) 12%, transparent)'
+      : 'color-mix(in oklab, var(--accent, #01696F) 12%, transparent)';
+  const borderColor =
+    variant === 'expired'
+      ? 'color-mix(in oklab, var(--error, #c33) 35%, transparent)'
+      : 'color-mix(in oklab, var(--accent, #01696F) 35%, transparent)';
+
+  return (
+    <div
+      className="mx-3 mb-2 mt-1 px-2.5 py-2 rounded-md flex items-start gap-2 text-[11px]"
+      style={{ background: bg, borderColor, borderWidth: 1, borderStyle: 'solid' }}
+      data-testid="subscription-banner"
+      data-variant={variant}
+    >
+      {variant === 'expired' ? (
+        <Clock size={12} className="text-[var(--error,#c33)] mt-[2px] flex-shrink-0" />
+      ) : (
+        <Sparkles size={12} className="text-accent mt-[2px] flex-shrink-0" />
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="text-text font-medium leading-tight">{label}</div>
+        <button
+          onClick={() => navigate('/settings#subscription')}
+          className="mt-1 text-[10px] text-accent hover:underline"
+        >
+          {cta} →
+        </button>
+      </div>
+      {canDismiss && (
+        <button
+          onClick={() => {
+            try { localStorage.setItem(dismissKey, stamp); } catch { /* silent */ }
+            setDismissedStamp(stamp);
+          }}
+          className="text-muted hover:text-text p-0.5 rounded flex-shrink-0"
+          aria-label={lang === 'ru' ? 'Скрыть' : 'Dismiss'}
+        >
+          <X size={10} />
+        </button>
+      )}
+    </div>
   );
 }
 

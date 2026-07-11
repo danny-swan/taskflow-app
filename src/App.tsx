@@ -16,6 +16,8 @@ import { OnboardingErrorBoundary } from './components/OnboardingErrorBoundary';
 import { AuthScreen } from './components/AuthScreen';
 import { PasswordResetModal } from './components/PasswordResetModal';
 import { CommandPalette } from './components/CommandPalette';
+import { PaywallGate } from './components/PaywallModal';
+import { AccountSwitchGate } from './components/AccountSwitchGate';
 import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { pingSupabaseKeepAlive } from './lib/supabase';
@@ -29,6 +31,9 @@ const CalendarPage = lazy(() => import('./pages/Calendar').then(m => ({ default:
 const StatsPage = lazy(() => import('./pages/Stats').then(m => ({ default: m.StatsPage })));
 const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })));
 const HelpPage = lazy(() => import('./pages/Help').then(m => ({ default: m.HelpPage })));
+// v0.9.35-dev.6.4: страница подписки для оплаты через ЮKassa.
+const CheckoutPage = lazy(() => import('./pages/Checkout').then(m => ({ default: m.CheckoutPage })));
+const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
 
 function App() {
   const ready = useStore(s => s.ready);
@@ -79,6 +84,33 @@ function App() {
         unlisten = await listen<string[]>('deep-link://auth-callback', async (event) => {
           const urls = event.payload ?? [];
           for (const u of urls) {
+            // v0.9.35-dev.6.4: ветка для возврата с оплаты (taskflow://pay/success и taskflow://pay/fail).
+            // Самая активация подписки идёт через webhook + Supabase realtime,
+            // здесь только UX: показать toast и перевести на /settings.
+            // v0.9.35-dev.6.4 (fix): добавлена ветка taskflow://checkout?tier=X —
+            // кнопки с лендинга (yourtaskflow.app/#pricing) открывают /checkout в
+            // приложении с предвыбранным тарифом (monthly/annual/lifetime).
+            try {
+              const parsed = new URL(u);
+              if (parsed.protocol === 'taskflow:' && parsed.host === 'pay') {
+                if (parsed.pathname === '/success') {
+                  pushToast(lang === 'ru' ? 'Оплата прошла. Подписка активируется в течение минуты.' : 'Payment successful. Subscription will activate within a minute.');
+                  navigate('/settings');
+                } else if (parsed.pathname === '/fail') {
+                  pushToast(lang === 'ru' ? 'Оплата отменена.' : 'Payment cancelled.');
+                  navigate('/checkout');
+                }
+                continue;
+              }
+              if (parsed.protocol === 'taskflow:' && parsed.host === 'checkout') {
+                // Нормализуем tier из query или pathname (на всякий).
+                const tierRaw = parsed.searchParams.get('tier') ?? parsed.pathname.replace(/^\//, '');
+                const tier = ['monthly', 'annual', 'lifetime'].includes(tierRaw) ? tierRaw : '';
+                navigate(tier ? `/checkout?tier=${tier}` : '/checkout');
+                continue;
+              }
+            } catch { /* не URL — падаем в авторизационную ветку */ }
+
             const result = await handleAuthCallback(u);
             if (result.ok) {
               if (result.type === 'recovery') {
@@ -97,7 +129,7 @@ function App() {
       }
     })();
     return () => { if (unlisten) unlisten(); };
-  }, [lang, pushToast]);
+  }, [lang, pushToast, navigate]);
 
   useEffect(() => {
     init().catch(err => console.error('DB init failed', err));
@@ -147,6 +179,17 @@ function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
+
+  // v0.9.35-dev.4: инициализация авто-sync триггеров (on-init + on-focus + on-online).
+  // В dev-сборке это no-op (см. sync/index → AUTO_SYNC_ENABLED).
+  // Запускаем один раз после того, как БД инициализирована и есть сессия.
+  useEffect(() => {
+    if (!ready) return;
+    if (!auth.session?.user) return;
+    void import('./lib/sync').then(m => m.initAutoSync()).catch(err => {
+      console.warn('[sync] initAutoSync failed:', err);
+    });
+  }, [ready, auth.session?.user]);
 
   // v0.9.9: телеметрия старта приложения (один раз на логин)
   useEffect(() => {
@@ -229,11 +272,16 @@ function App() {
               <Route path="/tasks" element={<TasksPage />} />
               {/* v0.8.6: старый путь /add редиректит на /tasks — бывшие bookmark не приводят к 404 */}
               <Route path="/add" element={<Navigate to="/tasks" replace />} />
-              <Route path="/calendar" element={<CalendarPage />} />
+              {/* v0.9.35-dev.6: Calendar — платный раздел, обёрнут в PaywallGate. */}
+              <Route path="/calendar" element={<PaywallGate><CalendarPage /></PaywallGate>} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/stats" element={statsEnabled ? <StatsPage /> : <Navigate to="/tasks" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/help" element={<HelpPage />} />
+              {/* v0.9.35-dev.6.4: Checkout — открытая страница оплаты подписки. */}
+              <Route path="/checkout" element={<CheckoutPage />} />
+              {/* v0.9.35-dev.6.6: Admin panel — guard проверяется внутри AdminPage */}
+              <Route path="/admin" element={<AdminPage />} />
               <Route path="*" element={<Navigate to={`/${defaultTab}`} replace />} />
             </Routes>
           </Suspense>
@@ -249,6 +297,9 @@ function App() {
         {showPasswordReset && (
           <PasswordResetModal onClose={() => setShowPasswordReset(false)} />
         )}
+        {/* v0.9.35-dev.6.9.0: гейт смены аккаунта на одном устройстве.
+            Сам решает, показываться ли (bound_user_id != session). Не в e2e. */}
+        {!e2eBypass && <AccountSwitchGate />}
         {/* v0.9.29: Command Palette */}
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       </div>

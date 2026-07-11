@@ -45,3 +45,8 @@ test-results/
 playwright-report/
 playwright/.cache/
 diag.mjs
+
+# Local screenshot scripts (session artifacts)
+*-shot.mjs
+scr.mjs
+shot*.mjs

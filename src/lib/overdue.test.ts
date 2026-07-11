@@ -104,9 +104,20 @@ describe('detectOverdueEventForTask', () => {
     vi.mocked(db.get).mockReturnValueOnce(undefined);
     const task = makeTask({ deadline: '2026-06-01' });
     expect(detectOverdueEventForTask(task, statuses, today)).toBe(true);
-    expect(db.run).toHaveBeenCalledOnce();
-    const args = vi.mocked(db.run).mock.calls[0];
-    expect(args[1]).toEqual([1, '2026-06-01', today]);
+    // v0.9.35-dev.2: 2 db.run — сам INSERT + enqueue в sync_outbox.
+    expect(db.run).toHaveBeenCalledTimes(2);
+    const eventCall = vi.mocked(db.run).mock.calls[0];
+    expect(eventCall[0]).toContain('INSERT INTO overdue_events');
+    // Параметры: [task_id, deadline_snapshot, event_date, uuid, client_id, updated_at]
+    const params = eventCall[1] as any[];
+    expect(params[0]).toBe(1);
+    expect(params[1]).toBe('2026-06-01');
+    expect(params[2]).toBe(today);
+    expect(typeof params[3]).toBe('string'); // uuid
+    // Второй вызов — enqueue в sync_outbox.
+    const outboxCall = vi.mocked(db.run).mock.calls[1];
+    expect(outboxCall[0]).toContain('INSERT INTO sync_outbox');
+    expect((outboxCall[1] as any[])[0]).toBe('overdue_events');
   });
 
   it('дубликат: тот же deadline_snapshot → пропускаем', () => {
@@ -120,7 +131,8 @@ describe('detectOverdueEventForTask', () => {
     vi.mocked(db.get).mockReturnValueOnce({ deadline_snapshot: '2026-05-01' });
     const task = makeTask({ deadline: '2026-06-01' });
     expect(detectOverdueEventForTask(task, statuses, today)).toBe(true);
-    expect(db.run).toHaveBeenCalledOnce();
+    // v0.9.35-dev.2: INSERT + enqueue = 2 вызова.
+    expect(db.run).toHaveBeenCalledTimes(2);
   });
 
   it('ошибка в db.get → безопасно возвращает false', () => {
@@ -143,7 +155,8 @@ describe('detectOverdueEvents', () => {
       makeTask({ id: 4, deadline: '2026-05-01' }), // просрочена
     ];
     expect(detectOverdueEvents(tasks, statuses, '2026-07-04')).toBe(2);
-    expect(db.run).toHaveBeenCalledTimes(2);
+    // v0.9.35-dev.2: 2 события × (INSERT + enqueue) = 4 db.run.
+    expect(db.run).toHaveBeenCalledTimes(4);
   });
 
   it('ошибка в одной задаче не ломает всё', () => {

@@ -27,19 +27,23 @@ jobs:
     steps:
       - name: SELECT 1 from tasks
         env:
-          SUPABASE_URL: https://sejpmzrmtgcvevukggkx.supabase.co
-          # anon key публичен (обёрнут RLS) — тот же, что в src/lib/supabase.ts
+          # URL и anon key — из GitHub Secrets (публичные по дизайну, но держим
+          # вне кода, чтобы репо не раскрывало project-ref).
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           set -e
-          KEY="${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNlanBtenJtdGdjdmV2dWtnZ2t4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ4Mzk3MzYsImV4cCI6MjA2MDQxNTczNn0.k46LNfKjkzhWJRQx2p2X3zk4rrN0DRDlkfKvGihmnwc}"
+          if [ -z "${SUPABASE_URL}" ] || [ -z "${SUPABASE_ANON_KEY}" ]; then
+            echo "::error::SUPABASE_URL / SUPABASE_ANON_KEY не заданы в GitHub Secrets"
+            exit 1
+          fi
           echo "Pinging ${SUPABASE_URL}/rest/v1/tasks..."
           # -f: fail on HTTP >= 400; -s: silent; -S: show errors; --max-time 30
           # RLS без auth вернёт 200 с пустым массивом — этого достаточно, чтобы Supabase считал проект «активным».
           HTTP_CODE=$(curl -s -o /tmp/body.txt -w "%{http_code}" \
             --max-time 30 \
-            -H "apikey: ${KEY}" \
-            -H "Authorization: Bearer ${KEY}" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
             "${SUPABASE_URL}/rest/v1/tasks?select=id&limit=1")
           echo "HTTP ${HTTP_CODE}"
           cat /tmp/body.txt || true

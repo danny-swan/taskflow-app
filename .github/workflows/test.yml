@@ -10,11 +10,13 @@ on:
   push:
     branches:
       - main
+      - develop
     tags:
       - 'v*'
   pull_request:
     branches:
       - main
+      - develop
   workflow_dispatch:
 
 jobs:
@@ -39,6 +41,11 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Run Vitest
+        env:
+          # v0.9.35-dev.6.2: vitest.config.ts уже подставляет dummy через `define`,
+          # но дублируем в env — на случай если будет код, читающий process.env.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npm test -- --reporter=verbose
 
   e2e:
@@ -63,6 +70,11 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
+        env:
+          # v0.9.35-dev.6.2: E2E гонит Vite dev-server, который читает VITE_* из env.
+          # Без этого supabase.ts throw'нет на старте и sidebar не отрисуется.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npx playwright test
 
       - name: Upload Playwright report
@@ -74,3 +86,59 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+
+  # v0.9.35-dev.6.10: Deno type-check + unit-тесты edge-функций.
+  # Раньше edge-функции (supabase/functions/**) не type-check'ились и не
+  # тестировались в CI вообще — ошибка типизации (Set<Tier>.has(string))
+  # проскочила мимо CI и её ловили вручную. Supabase type-check'ит функции
+  # при деплое, поэтому битый тип = сломанный деплой. Этот job ловит такое до мержа.
+  # vitest сюда не относится: он гоняет только чистые _shared/*.test.ts модули.
+  edge-functions:
+    name: Edge Functions (Deno)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.2
+
+      # Type-check всех точек входа (транзитивно покрывает _shared/*) + отдельно
+      # standalone-модули _shared, которые импортятся в рантайме edge-функций.
+      #
+      # --node-modules-dir=auto ОБЯЗАТЕЛЕН: в корне репо есть package.json (фронт),
+      # из-за чего Deno уходит в byonm-режим и ищет транзитивный npm:@types/node
+      # (тянется type-defs'ами @supabase/*) в node_modules. В чистом CI-раннере
+      # (этот job не делает npm ci) node_modules нет → «Could not find a matching
+      # package for npm:@types/node». Флаг включает авто-установку npm-типов в
+      # собственный node_modules Deno. Type-check при этом НЕ отключается.
+      - name: Deno type-check edge functions
+        run: |
+          deno check --node-modules-dir=auto supabase/functions/*/index.ts
+          deno check --node-modules-dir=auto \
+            supabase/functions/_shared/pricing.ts \
+            supabase/functions/_shared/yookassa-verify.ts \
+            supabase/functions/_shared/renewal-idempotency.ts \
+            supabase/functions/_shared/rate-limit.ts \
+            supabase/functions/_shared/test_mock_server.ts
+
+      # Unit-тесты edge-функций на MockServer (без сети/секретов). ЯВНЫЙ список
+      # файлов — НЕ каталог/glob: change-plan/test.ts исключён намеренно, т.к. он
+      # бьёт по реальному api.yookassa.ru (не подменяет YOOKASSA_API_BASE на мок)
+      # и без секретов падает invalid_credentials. Флаг — по той же причине, что
+      # и выше (byonm + @types/node в чистом раннере).
+      - name: Deno unit tests (edge functions, no network)
+        run: |
+          deno test --allow-all --node-modules-dir=auto \
+            supabase/functions/_shared/cors.test.ts \
+            supabase/functions/_shared/rate-limit.test.ts \
+            supabase/functions/admin-actions/test.ts \
+            supabase/functions/cancel-subscription/test.ts \
+            supabase/functions/create-payment/test.ts \
+            supabase/functions/detach-payment-method/test.ts \
+            supabase/functions/payment-webhook/test.ts \
+            supabase/functions/reactivate-subscription/test.ts \
+            supabase/functions/renew-subscription/test.ts

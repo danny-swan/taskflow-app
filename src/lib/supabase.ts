@@ -4,26 +4,32 @@
  * Copyright (c) 2026 Daniil Lebedev (danny-swan)
  *
  * v0.9.9 — Supabase client (email/password + Google OAuth + телеметрия).
+ * v0.9.35-dev.6.1 — URL/anon key вынесены в env (VITE_SUPABASE_URL,
+ *   VITE_SUPABASE_ANON_KEY). Оба значения публичные по дизайну Supabase
+ *   (anon key ограничен Row Level Security на стороне Postgres), поэтому
+ *   их безопасно передавать в клиентский бандл. Секретный service_role
+ *   ключ остаётся только на бэкенде/CI и никогда не попадает в клиент.
  *
- * ВАЖНО: anon key публичный по дизайну (доступ ограничен Row Level Security
- * на стороне Postgres). Его можно безопасно вшивать в клиентский код и
- * коммитить в открытый репозиторий. Секретный ключ (service_role) остаётся
- * только на бэкенде/CI и никогда не попадает в клиент.
- *
- * Fallback-значения ниже нужны, чтобы бинарник работал без .env файла у
- * конечного пользователя. Приоритет — переменные окружения (для локальной
- * разработки и подмены в CI), потом hard-coded fallback.
+ *   Env-переменные задаются в `.env.local` (dev) или в CI secrets (build).
+ *   См. `.env.example` и `docs/DEPLOY.md`.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-// Fallback-значения (публичные, безопасно коммитить)
-const FALLBACK_URL = 'https://sejpmzrmtgcvevukggkx.supabase.co';
-const FALLBACK_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNlanBtenJtdGdjdmV2dWtnZ2t4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwNjYzNDAsImV4cCI6MjA5ODY0MjM0MH0.TXGc-JS5TyaR_egzRt71cWUB8YDaWwnMrn-zrTW-aMM';
+const rawUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const rawAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-const url = (import.meta.env.VITE_SUPABASE_URL as string) || FALLBACK_URL;
-const anonKey =
-  (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || FALLBACK_ANON_KEY;
+if (!rawUrl || !rawAnonKey) {
+  // Явная ошибка сборки лучше, чем немой сбой авторизации в рантайме.
+  throw new Error(
+    '[supabase] VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY не заданы. ' +
+      'Задайте их в .env.local (dev) или в CI secrets (build).',
+  );
+}
+
+// После throw выше — гарантированно string. Фиксируем тип, чтобы TS
+// не проваливался при использовании в асинхронных функциях ниже.
+const url: string = rawUrl;
+const anonKey: string = rawAnonKey;
 
 /**
  * Supabase-клиент.

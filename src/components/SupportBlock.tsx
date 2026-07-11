@@ -17,20 +17,20 @@ type Method = {
   network?: string; // короткая подпись сети (для крипты)
 };
 
-// v0.9.31: публичные адреса для приёма поддержки.
-// Публиковать безопасно — с адреса нельзя снять средства без приватного ключа.
+// v0.9.31: публичные адреса — публиковать безопасно (без приватного ключа нельзя снять).
+// v0.9.35-dev.6.7.1: возвращены хардкодом — env-подход (dev.6.1) не был прокинут в build.yml.
 const METHODS: Method[] = [
   {
     key: 'cloudtips',
     labelKey: 'support_method_cloudtips',
-    icon: '💳',
+    icon: '\u{1F4B3}',
     kind: 'link',
     value: 'https://pay.cloudtips.ru/p/83f4d553',
   },
   {
     key: 'usdt_trc',
     labelKey: 'support_method_usdt_trc',
-    icon: '🪙',
+    icon: '\u{1FA99}',
     kind: 'address',
     value: 'TJv97nWcARwvNTR6N62SW3TM2goo6gTpUZ',
     network: 'Tron / TRC-20',
@@ -38,7 +38,7 @@ const METHODS: Method[] = [
   {
     key: 'ton',
     labelKey: 'support_method_ton',
-    icon: '🪙',
+    icon: '\u{1FA99}',
     kind: 'address',
     value: 'UQDphkFo74Ff8yG92mYZk7wpclgdpjs666Qn9m1HvJ51becx',
     network: 'The Open Network',
@@ -46,7 +46,7 @@ const METHODS: Method[] = [
   {
     key: 'usdt_erc',
     labelKey: 'support_method_usdt_erc',
-    icon: '🪙',
+    icon: '\u{1FA99}',
     kind: 'address',
     value: '0x316Da7F3930Cc8c45Ff689181f8053e5d45C9300',
     network: 'Ethereum / ERC-20',

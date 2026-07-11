@@ -28,6 +28,11 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Run Vitest
+        env:
+          # v0.9.35-dev.6.2: dummy через vitest.config.ts в define, но дублируем
+          # в env на случай кода, читающего process.env.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npm test -- --reporter=verbose
 
   # v0.9.21: E2E-гейт. Тег не соберётся, если сломаны UI-flowы
@@ -53,6 +58,11 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
+        env:
+          # v0.9.35-dev.6.2: Vite dev-server читает VITE_* из env при старте.
+          # Без них supabase.ts throw'нет → sidebar не рисуется → все E2E падают.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: npx playwright test
 
       - name: Upload Playwright report
@@ -105,6 +115,30 @@ jobs:
       # Typecheck + unit-тесты уже пройдены в job `test` (выше, needs: test),
       # поэтому здесь их не повторяем — экономим время Windows-раннера.
 
+      # Определяем канал релиза заранее — влияет на набор bundle'ов.
+      # MSI/WiX не умеет non-numeric pre-release (dev.N), поэтому для
+      # pre-release тегов собираем только NSIS + portable.
+      - name: Determine release channel
+        id: channel
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          # workflow_dispatch без тега (ветка) → всегда pre-release (только NSIS, без MSI).
+          # MSI требует numeric-only pre-release; версии вида 0.9.35-dev.N.M несовместимы.
+          if [[ "${{ startsWith(github.ref, 'refs/tags/v') }}" != "true" ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "bundles=nsis" >> $GITHUB_OUTPUT
+            echo "Ref $TAG is not a tag → pre-release channel (NSIS only, MSI skipped)"
+          elif [[ "$TAG" =~ ^v.*-(dev|beta|rc|alpha)(\.[0-9]+)+$ ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "bundles=nsis" >> $GITHUB_OUTPUT
+            echo "Tag $TAG → pre-release channel (NSIS + portable only, MSI skipped)"
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "bundles=all" >> $GITHUB_OUTPUT
+            echo "Tag $TAG → stable channel (NSIS + MSI + portable)"
+          fi
+
       - name: Sync version from tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -122,7 +156,9 @@ jobs:
           # Cargo.toml — patch version field
           (Get-Content src-tauri/Cargo.toml) -replace '^version = ".*"', "version = `"$tag`"" | Set-Content src-tauri/Cargo.toml
 
-      - name: Build Tauri app (NSIS + MSI, signed for updater)
+      # Stable: NSIS + MSI + portable (default таури).
+      - name: Build Tauri app (stable — NSIS + MSI, signed for updater)
+        if: steps.channel.outputs.is_prerelease == 'false'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -138,7 +174,32 @@ jobs:
           # v0.9.23: Turnstile site key — публичный, вшивается в bundle.
           # Секретный Secret Key лежит только в Supabase Attack Protection.
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+          # v0.9.35-dev.6.2: Supabase URL/anon key (публичные, защищены RLS).
+          # С dev.6.1 supabase.ts throw'нет при отсутствии — без этих env бандл не стартует.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          VITE_ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc
+
+      # Pre-release: только NSIS + portable.
+      # WiX/MSI требует numeric-only pre-release identifier (наш тег v0.9.35-dev.1 вызывает
+      # "optional pre-release identifier ... must be numeric-only ... for msi target").
+      # От такой схемы отказались осознанно в пользу семантики -dev.N/-beta.N/-rc.N.
+      - name: Build Tauri app (pre-release — NSIS + portable only)
+        if: steps.channel.outputs.is_prerelease == 'true'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+          # v0.9.35-dev.6.2: Supabase URL/anon key (публичные, защищены RLS).
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          VITE_ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
+        run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: List build artifacts
         shell: pwsh
@@ -175,8 +236,9 @@ jobs:
           path: src-tauri/target/x86_64-pc-windows-msvc/release/taskflow.exe
           if-no-files-found: warn
 
+      # Не генерируем latest.json для pre-release — всё равно не публикуется (см. release-джобу).
       - name: Generate updater manifest (latest.json)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && steps.channel.outputs.is_prerelease == 'false'
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
@@ -205,7 +267,7 @@ jobs:
           Get-Content latest.json
 
       - name: Upload latest.json (Windows part)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && steps.channel.outputs.is_prerelease == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: latest-windows
@@ -274,6 +336,10 @@ jobs:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+          # v0.9.35-dev.6.2: Supabase URL/anon key (публичные, защищены RLS).
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          VITE_ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
           # Вариант A: без Apple Developer ID — подпись не ставится,
           # пользователь обойдёт Gatekeeper вручную.
           APPLE_SIGNING_IDENTITY: '-'
@@ -300,6 +366,12 @@ jobs:
 
   # v0.9.32: объединённый release-job — скачивает артефакты
   # обоих платформ и публикует GitHub Release одним списком.
+  #
+  # v0.9.35: разделение на stable / pre-release каналы.
+  # Теги вида v1.2.3           → stable release, latest.json обновляется (auto-updater подтянет).
+  # Теги вида v1.2.3-dev.N     → pre-release, latest.json НЕ публикуется (юзеры остаются на stable).
+  # Теги вида v1.2.3-beta.N    → pre-release, latest.json НЕ публикуется.
+  # Теги вида v1.2.3-rc.N      → pre-release, latest.json НЕ публикуется.
   release:
     needs: [build, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
@@ -308,6 +380,22 @@ jobs:
       contents: write
 
     steps:
+      - name: Determine release channel
+        id: channel
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          # Разрешаем составные pre-release суффиксы: -dev.N, -dev.N.M и т.д.
+          if [[ "$TAG" =~ -(dev|beta|rc|alpha)(\.[0-9]+)+$ ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "publish_latest_json=false" >> $GITHUB_OUTPUT
+            echo "Tag $TAG → pre-release channel (latest.json will NOT be updated)"
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "publish_latest_json=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG → stable channel (latest.json WILL be updated)"
+          fi
+
       - name: Download Windows release files
         uses: actions/download-artifact@v4
         with:
@@ -315,6 +403,7 @@ jobs:
           path: release-files/windows
 
       - name: Download latest.json
+        if: steps.channel.outputs.publish_latest_json == 'true'
         uses: actions/download-artifact@v4
         with:
           name: latest-windows
@@ -329,7 +418,8 @@ jobs:
       - name: List release files
         run: find release-files -type f
 
-      - name: Create Release
+      - name: Create Stable Release
+        if: steps.channel.outputs.is_prerelease == 'false'
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -341,5 +431,20 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Pre-Release (no latest.json)
+        if: steps.channel.outputs.is_prerelease == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-files/windows/**/*.exe
+            release-files/windows/**/*.msi
+            release-files/windows/taskflow.exe
+            release-files/macos/**/*.dmg
+          generate_release_notes: true
+          draft: false
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

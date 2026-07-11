@@ -7,6 +7,9 @@ import { detectOverdueEvents, detectOverdueEventForTask } from '../lib/overdue';
 import { todayISO } from '../lib/utils';
 import { pickQuote, quoteSetFor } from '../lib/quotes';
 import { logger } from '../lib/logger';
+import { uuidv7 } from '../lib/uuid';
+import { getClientId } from '../lib/clientId';
+import { enqueueOutbox } from '../lib/outbox';
 
 export type ThemeName = 'light' | 'dark' | 'akatsuki' | 'konoha' | 'custom';
 
@@ -22,12 +25,24 @@ export interface Status {
   hidden: number;
   /** v0.8.2: defaultCollapsed=true means the status section is collapsed by default on the board */
   default_collapsed: number;
+  // v0.9.35-dev.1+: sync-колонки (optional).
+  uuid?: string | null;
+  deleted_at?: string | null;
+  version?: number;
+  client_id?: string | null;
+  updated_at?: string | null;
 }
 export interface Tag {
   id: number;
   name: string;
   color: string;
   sort_order: number;
+  // v0.9.35-dev.1+: sync-колонки (optional).
+  uuid?: string | null;
+  deleted_at?: string | null;
+  version?: number;
+  client_id?: string | null;
+  updated_at?: string | null;
 }
 export interface Task {
   id: number;
@@ -42,6 +57,12 @@ export interface Task {
   updated_at: string;
   sort_order: number;
   archived: number;
+  // v0.9.35-dev.1+: sync-колонки. Optional в типе, т.к. миграция
+  // проставляет их backfill'ом, а refresh() не всегда выбирает SELECT *.
+  uuid?: string | null;
+  deleted_at?: string | null;
+  version?: number;
+  client_id?: string | null;
 }
 
 // v0.8.13: шаблон задачи — образец, из которого одним кликом создаётся новая задача.
@@ -56,6 +77,11 @@ export interface TaskTemplate {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  // v0.9.35-dev.1+: sync-колонки (optional).
+  uuid?: string | null;
+  deleted_at?: string | null;
+  version?: number;
+  client_id?: string | null;
 }
 
 interface State {
@@ -78,6 +104,7 @@ interface State {
   overdueMode: 'calendar' | 'business'; // v0.9.2 (№1): как считать просрочку и остаток дней
   overdueTick: number;             // v0.9.2 (№3): счётчик обновлений таблицы overdue_events (для перерисовки графика)
   autoUpdateEnabled: boolean;      // v0.9.8: автопроверка обновлений при старте (Tauri updater)
+  pendingSyncCount: number;        // v0.9.35-dev.3: кол-во записей в sync_outbox, ждущих push'а в облако
 
   // v0.9.28: автоочистка выполненных задач
   autocleanupEnabled: boolean;           // вкл/выкл автозапуска при старте
@@ -129,6 +156,12 @@ interface State {
   updateTask(id: number, p: Partial<Task>): void;
   softDeleteTask(id: number): void;
   permanentlyDeleteTask(id: number): void;
+  // v0.9.35-dev.6.10.5: удаление из Статистики с окном отмены (~10 c).
+  // Не удаляет сразу — планирует permanentlyDeleteTask через delayMs и показывает
+  // тост с кнопкой Undo. Undo в пределах окна отменяет отложенное удаление
+  // (задача остаётся нетронутой). По истечении окна выполняется реальное
+  // permanentlyDeleteTask (soft-delete + op=delete в outbox).
+  deleteTaskWithUndo(id: number, opts: { toastText: string; undoLabel: string; delayMs?: number }): void;
   reorderTasks(statusId: number, ids: number[]): void;
 
   addTag(name: string, color: string): number;
@@ -162,6 +195,12 @@ interface State {
 
 let toastId = 0;
 
+// v0.9.35-dev.6.10.5: отложенные (в пределах окна Undo) permanent-delete'ы.
+// Ключ — id задачи, значение — таймер. Модульный уровень: переживает
+// перемонтирование страницы Статистики, чтобы окно отмены не срывалось при
+// навигации.
+const pendingDeletions = new Map<number, ReturnType<typeof setTimeout>>();
+
 export const useStore = create<State>((set, get) => ({
   ready: false,
   statuses: [],
@@ -181,6 +220,7 @@ export const useStore = create<State>((set, get) => ({
   tasksView: 'list',
   overdueMode: 'calendar',
   overdueTick: 0,
+  pendingSyncCount: 0,
   autoUpdateEnabled: true,
   // v0.9.28: автоочистка выполненных — дефолты state (до чтения из БД).
   // v0.9.34: для новых установок autocleanup_enabled='1' пишется в seed таблицы settings.
@@ -314,17 +354,38 @@ export const useStore = create<State>((set, get) => ({
     // v0.8.13: task_templates выбираем в try/catch — таблица появляется после миграции v2.
     // Если миграция ещё не прошла (экзотический крайний случай — сбой в процессе init),
     // приложение всё равно работает — просто без шаблонов.
+    //
+    // v0.9.35-dev.1: soft delete — везде фильтруем deleted_at IS NULL.
+    // После миграции v5 колонка есть везде; на экзотических старых базах без v5
+    // запрос упадёт — это ОК, мигратор к этому моменту должен был отработать.
     let taskTemplates: TaskTemplate[] = [];
     try {
-      taskTemplates = db.all<TaskTemplate>('SELECT * FROM task_templates ORDER BY sort_order, id');
+      taskTemplates = db.all<TaskTemplate>(
+        'SELECT * FROM task_templates WHERE deleted_at IS NULL ORDER BY sort_order, id'
+      );
     } catch (e) {
       console.warn('[refresh] task_templates not available yet:', e);
     }
     set({
-      statuses: db.all<Status>('SELECT * FROM statuses ORDER BY sort_order'),
-      tags: db.all<Tag>('SELECT * FROM tags ORDER BY sort_order'),
-      tasks: db.all<Task>('SELECT * FROM tasks ORDER BY sort_order'),
+      statuses: db.all<Status>(
+        'SELECT * FROM statuses WHERE deleted_at IS NULL ORDER BY sort_order'
+      ),
+      tags: db.all<Tag>(
+        'SELECT * FROM tags WHERE deleted_at IS NULL ORDER BY sort_order'
+      ),
+      tasks: db.all<Task>(
+        'SELECT * FROM tasks WHERE deleted_at IS NULL ORDER BY sort_order'
+      ),
       taskTemplates,
+      pendingSyncCount: (() => {
+        try {
+          const row = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sync_outbox');
+          return row?.n ?? 0;
+        } catch {
+          // sync_outbox ещё не существует (база старше v6) — вернём 0.
+          return 0;
+        }
+      })(),
     });
   },
 
@@ -524,12 +585,16 @@ export const useStore = create<State>((set, get) => ({
     const status = get().statuses.find(s => s.id === p.status_id);
     let finishDate = p.finish_date ?? null;
     if (status?.behavior === 'archive' && !finishDate) finishDate = today;
+    // v0.9.35-dev.2: sync-колонки на INSERT'е.
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
     const r = db.run(
-      `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
-       VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
+      `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, client_id, version)
+       VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,1)`,
       [p.title || '', p.comment || '', p.tag_id ?? null, p.status_id ?? 1,
-       startDate, p.deadline ?? null, finishDate, now, now, order]
+       startDate, p.deadline ?? null, finishDate, now, now, order, rowUuid, clientId]
     );
+    enqueueOutbox('tasks', rowUuid, 'upsert');
     get().refresh();
 
     // v0.9.2 (№3): если создали задачу с уже прошедшим дедлайном — тоже фиксируем как пересечение.
@@ -569,8 +634,15 @@ export const useStore = create<State>((set, get) => ({
       vals.push(v);
     });
     fields.push('updated_at=?');
-    vals.push(now, id);
+    vals.push(now);
+    // v0.9.35-dev.2: version++, чтобы sync-слой видел, что строка изменилась.
+    fields.push('version=version+1');
+    vals.push(id);
     db.run(`UPDATE tasks SET ${fields.join(',')} WHERE id=?`, vals);
+    // Outbox enqueue за uuid’ом — берём текущий из строки (мог быть NULL
+    // для старых строк — enqueueOutbox тихо пропустит).
+    const row = db.get<{ uuid: string | null }>('SELECT uuid FROM tasks WHERE id=?', [id]);
+    enqueueOutbox('tasks', row?.uuid, 'upsert');
     get().refresh();
 
     // v0.9.2 (№3): если изменился дедлайн или статус — перепроверяем пересечение
@@ -585,8 +657,40 @@ export const useStore = create<State>((set, get) => ({
     }
   },
   permanentlyDeleteTask(id) {
-    db.run('DELETE FROM tasks WHERE id=?', [id]);
+    // v0.9.35-dev.1: soft delete. Физически строка остаётся — это нужно для
+    // корректного sync (другие устройства должны увидеть deleted_at
+    // и скрыть у себя, а не считать «нету — стало быть не было и вовсе»).
+    // Полное hard-delete делает сервисный воркер через N дней (не в этой версии).
+    const now = new Date().toISOString();
+    // v0.9.35-dev.2: enqueue до UPDATE — чтобы взять uuid пока строка ещё видима.
+    const row = db.get<{ uuid: string | null }>('SELECT uuid FROM tasks WHERE id=?', [id]);
+    db.run(
+      'UPDATE tasks SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
+      [now, now, id]
+    );
+    enqueueOutbox('tasks', row?.uuid, 'delete');
     get().refresh();
+  },
+  deleteTaskWithUndo(id, opts) {
+    const delay = opts.delayMs ?? 10000;
+    // Если для этой задачи уже запланировано удаление — сбрасываем прежний таймер.
+    const existing = pendingDeletions.get(id);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      pendingDeletions.delete(id);
+      get().permanentlyDeleteTask(id);
+    }, delay);
+    pendingDeletions.set(id, timer);
+    get().pushToast(opts.toastText, {
+      label: opts.undoLabel,
+      onClick: () => {
+        const t = pendingDeletions.get(id);
+        if (t) {
+          clearTimeout(t);
+          pendingDeletions.delete(id);
+        }
+      },
+    });
   },
   softDeleteTask(id) {
     const now = new Date().toISOString();
@@ -595,22 +699,50 @@ export const useStore = create<State>((set, get) => ({
     const curStatus = get().statuses.find(s => s.id === cur.status_id);
     const deletedId = get().getDeletedStatusId();
     const isArchiveBehavior = curStatus?.behavior === 'archive' && curStatus?.is_technical !== 1;
+    // v0.9.35-dev.2: version++ + enqueue в sync-варианте (это не удаление,
+    // а обычное изменение archived/status_id — op = 'upsert').
     if (isArchiveBehavior) {
-      db.run(`UPDATE tasks SET archived=1, updated_at=? WHERE id=?`, [now, id]);
+      db.run(
+        `UPDATE tasks SET archived=1, updated_at=?, version=version+1 WHERE id=?`,
+        [now, id],
+      );
     } else {
       const targetId = deletedId ?? cur.status_id;
-      db.run(`UPDATE tasks SET status_id=?, archived=1, updated_at=? WHERE id=?`, [targetId, now, id]);
+      db.run(
+        `UPDATE tasks SET status_id=?, archived=1, updated_at=?, version=version+1 WHERE id=?`,
+        [targetId, now, id],
+      );
     }
+    enqueueOutbox('tasks', cur.uuid ?? null, 'upsert');
     get().refresh();
   },
   reorderTasks(_statusId, ids) {
-    ids.forEach((id, i) => db.run('UPDATE tasks SET sort_order=? WHERE id=?', [i, id]));
+    // v0.9.35-dev.2: reorder — тоже мутация. Бампаем version + updated_at,
+    // enqueue каждую изменённую строку. Случай массовый (drag'n'drop всей
+    // колонки) — outbox dedup по uuid гарантирует одну запись на задачу.
+    const now = new Date().toISOString();
+    ids.forEach((id, i) => {
+      db.run(
+        'UPDATE tasks SET sort_order=?, updated_at=?, version=version+1 WHERE id=?',
+        [i, now, id],
+      );
+      const row = db.get<{ uuid: string | null }>('SELECT uuid FROM tasks WHERE id=?', [id]);
+      enqueueOutbox('tasks', row?.uuid, 'upsert');
+    });
     get().refresh();
   },
 
   addTag(name, color) {
     const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM tags')?.m) ?? 0;
-    const r = db.run('INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)', [name, color, order]);
+    // v0.9.35-dev.2: sync-колонки.
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
+    const now = new Date().toISOString();
+    const r = db.run(
+      'INSERT INTO tags (name, color, sort_order, uuid, client_id, version, updated_at) VALUES (?,?,?,?,?,1,?)',
+      [name, color, order, rowUuid, clientId, now],
+    );
+    enqueueOutbox('tags', rowUuid, 'upsert');
     get().refresh();
     return r.lastInsertRowid;
   },
@@ -618,20 +750,54 @@ export const useStore = create<State>((set, get) => ({
     const fields: string[] = [];
     const vals: any[] = [];
     Object.entries(p).forEach(([k, v]) => { if (k === 'id') return; fields.push(`${k}=?`); vals.push(v); });
+    // v0.9.35-dev.2: version++ + updated_at.
+    const now = new Date().toISOString();
+    fields.push('updated_at=?');
+    vals.push(now);
+    fields.push('version=version+1');
     vals.push(id);
     db.run(`UPDATE tags SET ${fields.join(',')} WHERE id=?`, vals);
+    const row = db.get<{ uuid: string | null }>('SELECT uuid FROM tags WHERE id=?', [id]);
+    enqueueOutbox('tags', row?.uuid, 'upsert');
     get().refresh();
   },
   deleteTag(id) {
-    db.run('UPDATE tasks SET tag_id=NULL WHERE tag_id=?', [id]);
-    db.run('DELETE FROM tags WHERE id=?', [id]);
+    // v0.9.35-dev.1: soft delete. Сначала отвязываем тег от всех задач
+    // (бампая version, чтобы sync подхватил это изменение), затем тег помечаем
+    // как удалённый.
+    const now = new Date().toISOString();
+    // v0.9.35-dev.2: взять uuid тега до удаления + аффектед задачи.
+    const tagRow = db.get<{ uuid: string | null }>('SELECT uuid FROM tags WHERE id=?', [id]);
+    const affectedTasks = db.all<{ uuid: string | null }>(
+      'SELECT uuid FROM tasks WHERE tag_id=? AND deleted_at IS NULL',
+      [id],
+    );
+    db.run(
+      'UPDATE tasks SET tag_id=NULL, updated_at=?, version=version+1 WHERE tag_id=?',
+      [now, id]
+    );
+    db.run(
+      'UPDATE tags SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
+      [now, now, id]
+    );
+    enqueueOutbox('tags', tagRow?.uuid, 'delete');
+    for (const t of affectedTasks) enqueueOutbox('tasks', t.uuid, 'upsert');
     get().refresh();
   },
 
   addStatus(name, color, behavior) {
+    // v0.9.35-dev.2: uuid/client_id/version=1 + enqueue в sync_outbox.
     const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM statuses')?.m) ?? 0;
-    const r = db.run('INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,0,0,0,0)',
-      [name, color, behavior, order]);
+    const now = new Date().toISOString();
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
+    const r = db.run(
+      `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed,
+                             uuid, client_id, version, updated_at)
+       VALUES (?,?,?,?,0,0,0,0,?,?,1,?)`,
+      [name, color, behavior, order, rowUuid, clientId, now]
+    );
+    enqueueOutbox('statuses', rowUuid, 'upsert');
     get().refresh();
     return r.lastInsertRowid;
   },
@@ -639,8 +805,13 @@ export const useStore = create<State>((set, get) => ({
     const fields: string[] = [];
     const vals: any[] = [];
     Object.entries(p).forEach(([k, v]) => { if (k === 'id') return; fields.push(`${k}=?`); vals.push(v); });
-    vals.push(id);
+    // v0.9.35-dev.2: автобамп version + updated_at + enqueue.
+    const now = new Date().toISOString();
+    fields.push('updated_at=?', 'version=COALESCE(version,0)+1');
+    vals.push(now, id);
     db.run(`UPDATE statuses SET ${fields.join(',')} WHERE id=?`, vals);
+    const fresh = db.get<{ uuid: string | null }>('SELECT uuid FROM statuses WHERE id=?', [id]);
+    enqueueOutbox('statuses', fresh?.uuid ?? null, 'upsert');
     get().refresh();
   },
   deleteStatus(id) {
@@ -649,13 +820,45 @@ export const useStore = create<State>((set, get) => ({
     // v0.8.11: «Выполнено» (единственный не-technical статус с behavior='archive') системный и неудаляемый:
     // без него сломается кнопка-галочка «Выполнить» на карточке (не найдёт куда переместить).
     if (status?.behavior === 'archive') return;
-    const first = db.get<{ id: number }>('SELECT id FROM statuses WHERE id != ? AND is_technical=0 ORDER BY sort_order LIMIT 1', [id]);
-    if (first) db.run('UPDATE tasks SET status_id=? WHERE status_id=?', [first.id, id]);
-    db.run('DELETE FROM statuses WHERE id=?', [id]);
+    // v0.9.35-dev.1: soft delete. Переливаем задачи на первый видимый статус
+    // (также с бампом version), сам статус помечаем удалённым.
+    // v0.9.35-dev.2: enqueue статуса + всех аффектед задач ДО UPDATE (собираем uuid'ы).
+    const now = new Date().toISOString();
+    const statusRow = db.get<{ uuid: string | null }>('SELECT uuid FROM statuses WHERE id=?', [id]);
+    const first = db.get<{ id: number }>(
+      'SELECT id FROM statuses WHERE id != ? AND is_technical=0 AND deleted_at IS NULL ORDER BY sort_order LIMIT 1',
+      [id]
+    );
+    let affectedTaskUuids: string[] = [];
+    if (first) {
+      affectedTaskUuids = db.all<{ uuid: string | null }>(
+        'SELECT uuid FROM tasks WHERE status_id=? AND deleted_at IS NULL',
+        [id]
+      ).map(r => r.uuid).filter((u): u is string => !!u);
+      db.run(
+        'UPDATE tasks SET status_id=?, updated_at=?, version=version+1 WHERE status_id=?',
+        [first.id, now, id]
+      );
+    }
+    db.run(
+      'UPDATE statuses SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
+      [now, now, id]
+    );
+    enqueueOutbox('statuses', statusRow?.uuid ?? null, 'delete');
+    affectedTaskUuids.forEach(u => enqueueOutbox('tasks', u, 'upsert'));
     get().refresh();
   },
   reorderStatuses(ids) {
-    ids.forEach((id, i) => db.run('UPDATE statuses SET sort_order=? WHERE id=?', [i, id]));
+    // v0.9.35-dev.2: reorder меняет sort_order → бампим version + enqueue.
+    const now = new Date().toISOString();
+    ids.forEach((id, i) => {
+      db.run(
+        'UPDATE statuses SET sort_order=?, updated_at=?, version=COALESCE(version,0)+1 WHERE id=?',
+        [i, now, id]
+      );
+      const row = db.get<{ uuid: string | null }>('SELECT uuid FROM statuses WHERE id=?', [id]);
+      enqueueOutbox('statuses', row?.uuid ?? null, 'upsert');
+    });
     get().refresh();
   },
 
@@ -694,13 +897,18 @@ export const useStore = create<State>((set, get) => ({
   // ── v0.8.13 templates API ──
 
   addTemplate(p) {
+    // v0.9.35-dev.2: uuid/client_id/version=1 + enqueue.
     const now = new Date().toISOString();
     const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM task_templates')?.m) ?? 0;
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
     const r = db.run(
-      `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [p.name, p.title ?? '', p.comment ?? '', p.status_id ?? null, p.tag_id ?? null, order, now, now]
+      `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, created_at, updated_at,
+                                   uuid, client_id, version)
+       VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
+      [p.name, p.title ?? '', p.comment ?? '', p.status_id ?? null, p.tag_id ?? null, order, now, now, rowUuid, clientId]
     );
+    enqueueOutbox('task_templates', rowUuid, 'upsert');
     get().refresh();
     return r.lastInsertRowid;
   },
@@ -715,14 +923,25 @@ export const useStore = create<State>((set, get) => ({
       vals.push(v as any);
     });
     if (!fields.length) return;
-    fields.push('updated_at=?');
+    // v0.9.35-dev.2: автобамп version + updated_at + enqueue.
+    fields.push('updated_at=?', 'version=COALESCE(version,0)+1');
     vals.push(now, id);
     db.run(`UPDATE task_templates SET ${fields.join(',')} WHERE id=?`, vals);
+    const fresh = db.get<{ uuid: string | null }>('SELECT uuid FROM task_templates WHERE id=?', [id]);
+    enqueueOutbox('task_templates', fresh?.uuid ?? null, 'upsert');
     get().refresh();
   },
 
   deleteTemplate(id) {
-    db.run('DELETE FROM task_templates WHERE id=?', [id]);
+    // v0.9.35-dev.1: soft delete.
+    // v0.9.35-dev.2: enqueue ДО UPDATE (собираем uuid пока строка видима).
+    const now = new Date().toISOString();
+    const row = db.get<{ uuid: string | null }>('SELECT uuid FROM task_templates WHERE id=?', [id]);
+    db.run(
+      'UPDATE task_templates SET deleted_at=?, updated_at=?, version=version+1 WHERE id=?',
+      [now, now, id]
+    );
+    enqueueOutbox('task_templates', row?.uuid ?? null, 'delete');
     get().refresh();
   },
 

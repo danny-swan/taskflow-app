@@ -15,6 +15,8 @@
  * stamp existing DBs as v1 and start applying any future migrations from v2.
  */
 
+import { uuidv7 } from './uuid';
+
 // Public type — exported so callers can register/inspect migrations.
 export type Migration = {
   version: number;
@@ -183,6 +185,326 @@ export const MIGRATIONS: Migration[] = [
       // Запись создаём только если её ещё нет, чтобы не перетирать
       // пользовательское значение при ретри-миграции.
       await exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('overdue_mode', 'calendar')`);
+    },
+  },
+  {
+    version: 5,
+    description: 'Sync foundation: uuid/updated_at/deleted_at/version/client_id + backfill (v0.9.35-dev.1)',
+    up: async ({ exec, execIgnoreDuplicate, select }) => {
+      // v0.9.35-dev.1: готовим локальную схему к sync через Supabase.
+      //
+      // Ключевые принципы:
+      //   * INTEGER id ОСТАЁТСЯ — локальный PK, быстрые JOIN, меньше
+      //     рефакторинга. uuid — «внешний» идентификатор для sync-слоя
+      //     (тот же UUIDv7, что и sync_*.id на сервере).
+      //   * Soft delete везде: DELETE FROM в пользовательском UI больше
+      //     НЕ выполняем — вместо этого UPDATE deleted_at = datetime('now').
+      //   * version бампается на каждый UPDATE (клиент-сайд триггер не ставим,
+      //     но сеттеры в store.ts будут обновлять явно).
+      //   * client_id — UUIDv7 этого устанавления, генерится один раз
+      //     и хранится в settings('client_id'). На каждой строке тот, кто
+      //     последним её трогал.
+      //
+      // UNIQUE(uuid) нельзя добавить через ALTER TABLE ADD COLUMN в SQLite,
+      // поэтому делаем CREATE UNIQUE INDEX после backfill — как partial index
+      // WHERE uuid IS NOT NULL, чтобы NULL-значения (между ADD COLUMN
+      // и backfill внутри этой же миграции) не ломали ограничение.
+
+      // ==============================================================
+      // 1. Добавляем колонки во все пять таблиц (идемпотентно).
+      // ==============================================================
+      const tables = ['tasks', 'tags', 'statuses', 'task_templates', 'overdue_events'];
+
+      for (const t of tables) {
+        // uuid TEXT — пока не NOT NULL. Backfill в шаге 2, UNIQUE индекс в шаге 3.
+        await execIgnoreDuplicate(`ALTER TABLE ${t} ADD COLUMN uuid TEXT`);
+        // deleted_at TEXT (наличие → строка удалена).
+        await execIgnoreDuplicate(`ALTER TABLE ${t} ADD COLUMN deleted_at TEXT`);
+        // version INTEGER, по-умолчанию 1. Бампаем в setter'ах store.
+        await execIgnoreDuplicate(`ALTER TABLE ${t} ADD COLUMN version INTEGER NOT NULL DEFAULT 1`);
+        // client_id TEXT — кто сделал последнее изменение. NULLable
+        // на время backfill'а текущих данных; при первом запуске store
+        // накатит client_id на все строки (как отметку «это моё устройство»).
+        await execIgnoreDuplicate(`ALTER TABLE ${t} ADD COLUMN client_id TEXT`);
+      }
+
+      // updated_at — только там где её ещё нет.
+      // tasks: есть (в baseline). task_templates: есть (с v2).
+      // Нужно добавить в: tags, statuses, overdue_events.
+      //
+      // ❗ SQLite не допускает non-константный DEFAULT (`datetime('now')`)
+      //   в ALTER TABLE ADD COLUMN. Поэтому добавляем NULLable без DEFAULT,
+      //   бэкфиллим текущим временем, а NOT NULL-инвариант держим на
+      //   уровне приложения (INSERT'ы в store.ts всегда указывают updated_at).
+      await execIgnoreDuplicate(`ALTER TABLE tags ADD COLUMN updated_at TEXT`);
+      await execIgnoreDuplicate(`ALTER TABLE statuses ADD COLUMN updated_at TEXT`);
+      await execIgnoreDuplicate(`ALTER TABLE overdue_events ADD COLUMN updated_at TEXT`);
+
+      // Бэкфиллим updated_at для существующих строк (новые INSERT'ы
+      // всегда ставят datetime('now') явно). Оборачиваем в try/catch
+      // — overdue_events могут отсутствовать в крайне старых базах.
+      for (const t of ['tags', 'statuses', 'overdue_events']) {
+        try {
+          await exec(
+            `UPDATE ${t} SET updated_at = datetime('now') WHERE updated_at IS NULL`,
+          );
+        } catch (e) {
+          console.warn(`[migrate v5] updated_at backfill skipped for ${t}:`, e);
+        }
+      }
+
+      // ==============================================================
+      // 2. Backfill uuid для всех существующих строк.
+      // ==============================================================
+      // Генерить UUIDv7 в SQL нельзя — SQLite не умеет.
+      // Читаем id'шки, генерируем на клиенте, UPDATE per row.
+      // На 100+ строках это быстро (миграция единовременно, не hot path).
+      for (const t of tables) {
+        try {
+          const rows = await select<{ id: number }>(`SELECT id FROM ${t} WHERE uuid IS NULL`);
+          for (const r of rows) {
+            await exec(`UPDATE ${t} SET uuid = ? WHERE id = ?`, [uuidv7(), r.id]);
+          }
+        } catch (e) {
+          // overdue_events или task_templates могут отсутствовать
+          // в крайне старых базах — не валим миграцию.
+          console.warn(`[migrate v5] uuid backfill skipped for ${t}:`, e);
+        }
+      }
+
+      // ==============================================================
+      // 3. UNIQUE-индексы на uuid (partial — чтобы NULL не блокировали).
+      // ==============================================================
+      for (const t of tables) {
+        try {
+          await exec(
+            `CREATE UNIQUE INDEX IF NOT EXISTS idx_${t}_uuid ` +
+            `ON ${t}(uuid) WHERE uuid IS NOT NULL`
+          );
+        } catch (e) {
+          console.warn(`[migrate v5] index idx_${t}_uuid skipped:`, e);
+        }
+      }
+
+      // ==============================================================
+      // 4. Клиентский client_id для этого установления.
+      // ==============================================================
+      // Генерится только если его ещё нет. Не перегенерируем при
+      // повторных запусках (INSERT OR IGNORE).
+      try {
+        const existing = await select<{ value: string }>(
+          `SELECT value FROM settings WHERE key = 'client_id'`
+        );
+        if (!existing[0]?.value) {
+          const clientId = uuidv7();
+          await exec(
+            `INSERT OR REPLACE INTO settings (key, value) VALUES ('client_id', ?)`,
+            [clientId]
+          );
+          // Заодно — протагиваем этот client_id во все существующие строки
+          // (чтобы история тоже была «моя»).
+          for (const t of tables) {
+            try {
+              await exec(`UPDATE ${t} SET client_id = ? WHERE client_id IS NULL`, [clientId]);
+            } catch (e) {
+              console.warn(`[migrate v5] client_id backfill skipped for ${t}:`, e);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[migrate v5] client_id setup skipped:', e);
+      }
+    },
+  },
+
+  // ================================================================
+  // v6 — Sync outbox (v0.9.35-dev.2)
+  //
+  // Локальная очередь pending-изменений для push'а в облако.
+  // Сейчас только заполняется (enqueue при каждом изменении
+  // сущностей), флюш в Supabase — в dev.4.
+  //
+  // Grain: row-level. На каждую (entity_table, entity_uuid) — максимум
+  // одна запись. Повторный enqueue просто обновляет op/queued_at.
+  // Пейлоад не храним — push берёт свежее состояние из entity_table
+  // по uuid в момент пуша.
+  // ================================================================
+  {
+    version: 6,
+    description:
+      'Sync outbox: pending changes queue for cloud push (v0.9.35-dev.2)',
+    up: async ({ exec, execIgnoreDuplicate }) => {
+      await exec(`
+        CREATE TABLE IF NOT EXISTS sync_outbox (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          entity_table TEXT NOT NULL,
+          entity_uuid TEXT NOT NULL,
+          op TEXT NOT NULL,           -- 'upsert' | 'delete'
+          queued_at TEXT NOT NULL DEFAULT (datetime('now')),
+          last_attempt_at TEXT,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT
+        )
+      `);
+
+      // Dedup: одна pending-запись на сущность. INSERT OR REPLACE по
+      // (entity_table, entity_uuid) будет UPSERT'ить без гонок.
+      await execIgnoreDuplicate(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_entity ON sync_outbox(entity_table, entity_uuid)`
+      );
+
+      // Для push-цикла: берём пачку старейших записей (FIFO).
+      await execIgnoreDuplicate(
+        `CREATE INDEX IF NOT EXISTS idx_sync_outbox_queued_at ON sync_outbox(queued_at)`
+      );
+    },
+  },
+
+  // ================================================================
+  // v7 (v0.9.35-dev.3): Backfill sync_outbox для всех существующих строк.
+  //
+  // Проблема: в dev.2 мы включили enqueueOutbox в сеттерах стора, но все
+  // уже существующие задачи/теги/статусы/шаблоны (у любого пользователя
+  // с dev.1 бэкфиллом uuid) в outbox’е НЕ оказались. При включении реального
+  // push’а (dev.4) они не улетят в облако — потеря данных при смене устройства.
+  //
+  // Решение: одноразовый backfill — INSERT OR IGNORE в sync_outbox всех живых
+  // строк (deleted_at IS NULL) с op='upsert'. IGNORE — на случай, если в dev.2 между
+  // миграцией v6 и v7 пользователь успел что-то изменить — такая запись уже есть
+  // в outbox’е с актуальным op, запись backfill’а не должна её перезаписать.
+  //
+  // Удалённые строки (deleted_at IS NOT NULL) НЕ backfill’им — облако о них
+  // никогда не знало, так что delete-событие отправлять нечему. Они так и
+  // завершат свою жизнь только локально (в dev.4 вычистим через retention).
+  // ================================================================
+  {
+    version: 7,
+    description:
+      'Backfill sync_outbox for existing rows (v0.9.35-dev.3)',
+    up: async ({ exec }) => {
+      const backfillTables = ['tasks', 'tags', 'statuses', 'task_templates', 'overdue_events'];
+      for (const t of backfillTables) {
+        try {
+          await exec(
+            `INSERT OR IGNORE INTO sync_outbox
+               (entity_table, entity_uuid, op, queued_at, attempt_count)
+             SELECT ?, uuid, 'upsert', datetime('now'), 0
+             FROM ${t}
+             WHERE uuid IS NOT NULL AND deleted_at IS NULL`,
+            [t],
+          );
+        } catch (e) {
+          // task_templates / overdue_events могут отсутствовать в крайне старых базах
+          // (или в fresh install без seed'а) — не валим миграцию.
+          console.warn(`[migrate v7] backfill skipped for ${t}:`, e);
+        }
+      }
+    },
+  },
+  // ================================================================
+  // v8 (v0.9.35-dev.6.9.0): привязка локальной базы к аккаунту + реестр снимков.
+  //
+  // Проблема: локальная база не изолирована по аккаунту. При смене
+  // аккаунта на одном устройстве чужие задачи «прилипали» к новому аккаунту
+  // при push (user_id проставлялся из текущей сессии).
+  //
+  // Решение: храним в settings
+  //   - bound_user_id — какому аккаунту принадлежит текущая база (nullable);
+  //   - snapshot_registry_v1 — JSON-массив метаданных снимков.
+  //
+  // Новых таблиц не создаём — оба ключа живут в settings (кросс-платформенно:
+  // так же работает и в web-бэкенде). Инициализируем реестр пустым массивом.
+  // bound_user_id НЕ ставим здесь — его выставит первый успешный sync
+  // (или выбор пользователя в гейте). Отсутствие ключа = «база ещё не привязана».
+  // ================================================================
+  {
+    version: 8,
+    description:
+      'Account-bound DB: bound_user_id + snapshot_registry_v1 (v0.9.35-dev.6.9.0)',
+    up: async ({ exec }) => {
+      // Реестр снимков — пустой JSON-массив, если ещё нет.
+      await exec(
+        `INSERT OR IGNORE INTO settings (key, value) VALUES ('snapshot_registry_v1', '[]')`,
+      );
+      // bound_user_id не создаём — отсутствие строки трактуется как «not bound».
+    },
+  },
+
+  // ================================================================
+  // v9 (v0.9.35-dev.6.10.0): Починить seed-строки, которые были созданы
+  // без uuid/updated_at/client_id и поэтому НИКОГДА не попадали в облако.
+  //
+  // Проблема: tauriSeed()/seed() вызываются ПОСЛЕ runMigrations(), поэтому
+  // v5 (backfill uuid) и v7 (backfill sync_outbox) отрабатывают на пустой
+  // базе и не обрабатывают seed-строки. В итоге:
+  //   - статусы, теги и welcome-задача создаются без uuid → uuid = NULL;
+  //   - enqueueOutbox молча пропускает их (guard на !uuid);
+  //   - push никогда их не отправляет.
+  //
+  // Решение: при обновлении существующей базы (v8→v9) обнаруживаем все
+  // строки с uuid = NULL во всех sync-таблицах, проставляем им uuid,
+  // updated_at (если NULL), client_id (если NULL), и добавляем в outbox.
+  //
+  // Для новых установок (seed после этой миграции): seed исправлен и теперь
+  // сам генерирует uuid/updated_at/client_id и вызывает enqueueOutbox.
+  // Тогда эта миграция просто найдёт 0 строк без uuid и завершится мгновенно.
+  // ================================================================
+  {
+    version: 9,
+    description:
+      'Fix seed rows missing uuid/updated_at/client_id + backfill sync_outbox (v0.9.35-dev.6.10.0)',
+    up: async ({ exec, select }) => {
+      const tables = ['tasks', 'tags', 'statuses', 'task_templates', 'overdue_events'];
+      const now = new Date().toISOString();
+
+      // Читаем client_id этого устройства (может быть NULL для очень старых баз).
+      const cidRows = await select<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'client_id'`,
+      );
+      const clientId: string = cidRows[0]?.value ?? uuidv7();
+      // Сохраняем, если не было.
+      await exec(
+        `INSERT OR IGNORE INTO settings (key, value) VALUES ('client_id', ?)`,
+        [clientId],
+      );
+
+      for (const t of tables) {
+        try {
+          // 1. Проставляем uuid там, где NULL.
+          const rows = await select<{ id: number }>(
+            `SELECT id FROM ${t} WHERE uuid IS NULL`,
+          );
+          for (const r of rows) {
+            await exec(`UPDATE ${t} SET uuid = ? WHERE id = ?`, [uuidv7(), r.id]);
+          }
+
+          // 2. Проставляем updated_at там, где NULL (только у tags/statuses/overdue_events).
+          await exec(
+            `UPDATE ${t} SET updated_at = ? WHERE updated_at IS NULL`,
+            [now],
+          );
+
+          // 3. Проставляем client_id там, где NULL.
+          await exec(
+            `UPDATE ${t} SET client_id = ? WHERE client_id IS NULL`,
+            [clientId],
+          );
+
+          // 4. Добавляем все живые строки в outbox (INSERT OR IGNORE — не трогаем
+          //    уже стоящие в очереди строки, чтобы не сбивать attempt_count).
+          await exec(
+            `INSERT OR IGNORE INTO sync_outbox
+               (entity_table, entity_uuid, op, queued_at, attempt_count)
+             SELECT ?, uuid, 'upsert', datetime('now'), 0
+             FROM ${t}
+             WHERE uuid IS NOT NULL AND deleted_at IS NULL`,
+            [t],
+          );
+        } catch (e) {
+          // task_templates / overdue_events могут отсутствовать в крайне старых базах.
+          console.warn(`[migrate v9] skipped for ${t}:`, e);
+        }
+      }
     },
   },
 ];

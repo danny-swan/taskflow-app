@@ -19,6 +19,9 @@
  */
 import * as db from './db';
 import type { Task, Status } from '../store/useStore';
+import { uuidv7 } from './uuid';
+import { getClientId } from './clientId';
+import { enqueueOutbox } from './outbox';
 
 /**
  * Проверить одну задачу и, если нужно, создать запись в overdue_events.
@@ -45,9 +48,11 @@ export function detectOverdueEventForTask(
 
   // Проверяем последнее событие по этой задаче.
   try {
+    // v0.9.35-dev.1: игнорируем удалённые события (deleted_at IS NULL).
     const last = db.get<{ deadline_snapshot: string }>(
       `SELECT deadline_snapshot FROM overdue_events
-       WHERE task_id = ? ORDER BY id DESC LIMIT 1`,
+       WHERE task_id = ? AND deleted_at IS NULL
+       ORDER BY id DESC LIMIT 1`,
       [task.id],
     );
     if (last && last.deadline_snapshot === task.deadline) {
@@ -57,11 +62,17 @@ export function detectOverdueEventForTask(
 
     // Создаём новое событие. event_date = сегодня (день, когда мы поняли,
     // что задача просрочена). deadline_snapshot = дедлайн на момент события.
+    // v0.9.35-dev.2: uuid/client_id/version=1 + enqueue в sync_outbox.
+    const rowUuid = uuidv7();
+    const clientId = getClientId();
+    const now = new Date().toISOString();
     db.run(
-      `INSERT INTO overdue_events (task_id, deadline_snapshot, event_date)
-       VALUES (?, ?, ?)`,
-      [task.id, task.deadline, today],
+      `INSERT INTO overdue_events (task_id, deadline_snapshot, event_date,
+                                   uuid, client_id, version, updated_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      [task.id, task.deadline, today, rowUuid, clientId, now],
     );
+    enqueueOutbox('overdue_events', rowUuid, 'upsert');
     return true;
   } catch (e) {
     // v0.9.3 hotfix: если таблица overdue_events недоступна — не валим детектор.
@@ -102,9 +113,11 @@ export function detectOverdueEvents(
 export function overdueEventsByDate(fromDate: string, toDate: string): Map<string, number> {
   const map = new Map<string, number>();
   try {
+    // v0.9.35-dev.1: только актуальные события (deleted_at IS NULL).
     const rows = db.all<{ event_date: string; c: number }>(
       `SELECT event_date, COUNT(*) AS c FROM overdue_events
        WHERE event_date >= ? AND event_date <= ?
+         AND deleted_at IS NULL
        GROUP BY event_date`,
       [fromDate, toDate],
     );

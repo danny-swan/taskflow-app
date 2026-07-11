@@ -14,9 +14,38 @@ import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 // @ts-ignore
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { runMigrations, tauriMigrationApi, webMigrationApi } from './migrations';
+import { uuidv7 } from './uuid';
 
 const STORAGE_KEY = 'taskflow.sqlite.v1';
 const STORAGE_KEY_TS = 'taskflow.sqlite.v1.ts';
+
+// ─── v0.9.35-dev.6.10.3: единый источник правды для сид-справочников ──────────
+// Раньше список статусов/тегов дублировался в seed() (web) и tauriSeed() (Tauri).
+// Любое расхождение приводило к разным справочникам на разных платформах, что
+// критично для sync (uuid у одинаковых по смыслу статусов должны совпадать в
+// пределах устройства, а набор — быть идентичным). Выносим в константы, чтобы
+// seed(), tauriSeed() и ensureSeededIfEmpty() сеяли ОДНО И ТО ЖЕ.
+interface SeedStatus {
+  name: string; color: string; behavior: string;
+  hidden: 0 | 1; default_collapsed: 0 | 1; is_technical: 0 | 1;
+}
+const SEED_STATUSES: SeedStatus[] = [
+  { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom',  hidden: 0, default_collapsed: 0, is_technical: 0 },
+  { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
+  // Технический статус «Удалено» — скрыт в списке задач и в топбаре (hidden=1).
+  { name: 'Удалено',        color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
+];
+const SEED_TAGS: { name: string; color: string }[] = [
+  { name: 'OPS', color: '#5B7FB8' },
+  { name: 'DEV', color: '#437A22' },
+  { name: 'MTG', color: '#C44A8E' },
+  { name: 'LRN', color: '#D98F2B' },
+  { name: 'PRS', color: '#7A7974' },
+];
 
 let SQL: SqlJsStatic | null = null;
 let webDb: Database | null = null;
@@ -173,42 +202,49 @@ async function tauriIsEmpty(): Promise<boolean> {
 async function tauriSeed(): Promise<void> {
   const d = await getTauriDb();
   const now = new Date().toISOString();
+
+  // v0.9.35-dev.6.10.0: читаем client_id (проставлен миграцией v5/v9).
+  // Если по какой-то причине его нет — продолжаем без него (второстепенный атрибут).
+  const cidRows: any[] = await d.select(`SELECT value FROM settings WHERE key='client_id'`);
+  const clientId: string | null = cidRows[0]?.value ?? null;
+
   // v0.9.0: «В процессе» теперь идёт ПЕРЕД «Взять в работу» — это активный статус,
   // ему логично быть выше в списке.
-  const statuses = [
-    { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
-    // Технический статус «Удалено» — создаём сразу, чтобы работало удаление.
-    { name: 'Удалено',         color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
-  ];
+  // v0.9.35-dev.6.10.3: список вынесен в SEED_STATUSES (единый источник правды).
+  const statuses = SEED_STATUSES;
+  const statusUuids: string[] = [];
   for (let i = 0; i < statuses.length; i++) {
     const s = statuses[i];
+    const uuid = uuidv7();
+    statusUuids.push(uuid);
     await d.execute(
-      'INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,?,?,?)',
-      [s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed]
+      `INSERT INTO statuses
+         (uuid, name, color, behavior, sort_order, is_seed, is_technical,
+          hidden, default_collapsed, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?,?,?,?,1,?)`,
+      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId]
     );
   }
 
-  const tags = [
-    { name: 'OPS', color: '#5B7FB8' },
-    { name: 'DEV', color: '#437A22' },
-    { name: 'MTG', color: '#C44A8E' },
-    { name: 'LRN', color: '#D98F2B' },
-    { name: 'PRS', color: '#7A7974' },
-  ];
+  const tags = SEED_TAGS;
+  const tagUuids: string[] = [];
   for (let i = 0; i < tags.length; i++) {
-    await d.execute('INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)', [tags[i].name, tags[i].color, i]);
+    const uuid = uuidv7();
+    tagUuids.push(uuid);
+    await d.execute(
+      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?)`,
+      [uuid, tags[i].name, tags[i].color, i, now, clientId]
+    );
   }
 
   // Find "Сегодня" status and "PRS" tag IDs
-  const statusRows: any[] = await d.select(`SELECT id FROM statuses WHERE name='Сегодня' LIMIT 1`);
-  const tagRows: any[] = await d.select(`SELECT id FROM tags WHERE name='PRS' LIMIT 1`);
+  const statusRows: any[] = await d.select(`SELECT id, uuid FROM statuses WHERE name='Сегодня' LIMIT 1`);
+  const tagRows: any[] = await d.select(`SELECT id, uuid FROM tags WHERE name='PRS' LIMIT 1`);
   const statusId = statusRows[0]?.id ?? 1;
+  const statusUuid: string | null = statusRows[0]?.uuid ?? null;
   const tagId = tagRows[0]?.id ?? null;
+  const tagUuid: string | null = tagRows[0]?.uuid ?? null;
 
   // v0.9.31: используем локальную дату вместо UTC.
   const today = new Date();
@@ -223,15 +259,47 @@ async function tauriSeed(): Promise<void> {
   const dd = String(deadline.getDate()).padStart(2, '0');
   const deadlineStr = `${dy}-${dm}-${dd}`;
 
+  const taskUuid = uuidv7();
   await d.execute(
-    `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
-     VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
+    `INSERT INTO tasks
+       (uuid, title, comment, tag_id, status_id, start_date, deadline, finish_date,
+        created_at, updated_at, sort_order, archived, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?)`,
     [
+      taskUuid,
       'Добро пожаловать в TaskFlow',
       'Нажмите ✓ справа, чтобы выполнить задачу, или иконка корзины 🗑 в правом верхнем углу — чтобы удалить.',
-      tagId, statusId, todayStr, deadlineStr, null, now, now, 0,
+      tagId, statusId, todayStr, deadlineStr, null, now, now, 0, clientId,
     ]
   );
+
+  // v0.9.35-dev.6.10.0: добавляем seed-строки в sync_outbox, чтобы они
+  // отправились в облако при первой синхронизации.
+  // Статусы: все 7.
+  for (const uuid of statusUuids) {
+    await d.execute(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  }
+  // Теги: все 5.
+  for (const uuid of tagUuids) {
+    await d.execute(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('tags', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  }
+  // Welcome-задача.
+  await d.execute(
+    `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+     VALUES ('tasks', ?, 'upsert', datetime('now'), 0)`,
+    [taskUuid]
+  );
+
+  // Подавляем TS-предупреждения об unused (используются для outbox выше).
+  void statusUuid; void tagUuid;
 
   const defaults = [
     ['language', 'ru'],
@@ -371,32 +439,40 @@ function migrate(d: Database) {
 
 function seed(d: Database) {
   const now = new Date().toISOString();
+
+  // v0.9.35-dev.6.10.0: читаем client_id (проставлен миграцией v5/v9).
+  const cidStmt = d.prepare(`SELECT value FROM settings WHERE key='client_id' LIMIT 1`);
+  let clientId: string | null = null;
+  if (cidStmt.step()) { clientId = (cidStmt.getAsObject() as any).value as string ?? null; }
+  cidStmt.free();
+
   // v0.8.2: hidden and default_collapsed per status
   // v0.9.0: «В процессе» теперь идёт ПЕРЕД «Взять в работу»
-  const statuses = [
-    { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom', hidden: 0, default_collapsed: 0, is_technical: 0 },
-    { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
-    // Технический статус «Удалено» — скрыт в списке задач и в топбаре (hidden=1).
-    { name: 'Удалено',         color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
-  ];
+  // v0.9.35-dev.6.10.3: список вынесен в SEED_STATUSES (единый источник правды).
+  const statuses = SEED_STATUSES;
+  const statusUuids: string[] = [];
   statuses.forEach((s, i) => {
-    d.run('INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,1,?,?,?)',
-      [s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed]);
+    const uuid = uuidv7();
+    statusUuids.push(uuid);
+    d.run(
+      `INSERT INTO statuses
+         (uuid, name, color, behavior, sort_order, is_seed, is_technical,
+          hidden, default_collapsed, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?,?,?,?,1,?)`,
+      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId]
+    );
   });
 
-  const tags = [
-    { name: 'OPS', color: '#5B7FB8' },
-    { name: 'DEV', color: '#437A22' },
-    { name: 'MTG', color: '#C44A8E' },
-    { name: 'LRN', color: '#D98F2B' },
-    { name: 'PRS', color: '#7A7974' },
-  ];
+  const tags = SEED_TAGS;
+  const tagUuids: string[] = [];
   tags.forEach((t, i) => {
-    d.run('INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)', [t.name, t.color, i]);
+    const uuid = uuidv7();
+    tagUuids.push(uuid);
+    d.run(
+      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?)`,
+      [uuid, t.name, t.color, i, now, clientId]
+    );
   });
 
   // Welcome seed task (single task)
@@ -413,7 +489,7 @@ function seed(d: Database) {
   const dd = String(deadlineDate.getDate()).padStart(2, '0');
   const deadlineStr = `${dy}-${dm}-${dd}`;
 
-  // Get the "Сегодня" status (index 1 → id 2) and "PRS" tag (index 4 → id 5)
+  // Get the "Сегодня" status and "PRS" tag
   const statusStmt = d.prepare(`SELECT id FROM statuses WHERE name='Сегодня' LIMIT 1`);
   let statusId = 2;
   if (statusStmt.step()) { statusId = (statusStmt.getAsObject() as any).id as number; }
@@ -424,14 +500,39 @@ function seed(d: Database) {
   if (tagStmt.step()) { tagId = (tagStmt.getAsObject() as any).id as number; }
   tagStmt.free();
 
+  const taskUuid = uuidv7();
   d.run(
-    `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived)
-     VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
+    `INSERT INTO tasks
+       (uuid, title, comment, tag_id, status_id, start_date, deadline, finish_date,
+        created_at, updated_at, sort_order, archived, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?)`,
     [
+      taskUuid,
       'Добро пожаловать в TaskFlow',
       'Нажмите ✓ справа, чтобы выполнить задачу, или иконка корзины 🗑 в правом верхнем углу — чтобы удалить.',
-      tagId, statusId, todayStr, deadlineStr, null, now, now, 0,
+      tagId, statusId, todayStr, deadlineStr, null, now, now, 0, clientId,
     ]
+  );
+
+  // v0.9.35-dev.6.10.0: добавляем seed-строки в sync_outbox.
+  statusUuids.forEach(uuid => {
+    d.run(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  });
+  tagUuids.forEach(uuid => {
+    d.run(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('tags', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  });
+  d.run(
+    `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+     VALUES ('tasks', ?, 'upsert', datetime('now'), 0)`,
+    [taskUuid]
   );
 
   const defaults = [
@@ -441,8 +542,7 @@ function seed(d: Database) {
     ['default_tab', 'tasks'],
     ['font_size', '14'],
     // v0.9.34: автоочистка выполненных задач — включена по умолчанию для новых
-    // установок. Старые БД не трогаем — INSERT OR IGNORE не перезапишет. Режим по
-    // умолчанию — weekday (день недели), день = 1 (Пн), мин. возраст = 7 дней.
+    // установок. Старые БД не трогаем — INSERT OR IGNORE не перезапишет.
     ['autocleanup_enabled', '1'],
     ['autocleanup_mode', 'weekday'],
     ['autocleanup_day', '1'],
@@ -514,6 +614,182 @@ export async function resetDatabase(): Promise<void> {
   }
 }
 
+// ─── v0.9.35-dev.6.9.0: clearUserData ────────────────────────────────────────
+// Очищает ЛОКАЛЬНЫЕ пользовательские данные без re-seed'а. Используется для
+// варианта «Загрузить облачные» при смене аккаунта: после очистки следующий
+// sync подтянет данные нового аккаунта через pull.
+//
+// Что удаляется:
+//   • tasks, tags, statuses, task_templates, overdue_events — все данные;
+//   • sync_outbox — очередь пуша (иначе старые локальные строки утекут в облако);
+//   • sync_last_pulled_* курсоры в settings — чтобы pull забрал всё заново.
+//
+// Что СОХРАНЯЕТСЯ (намеренно, это не данные аккаунта):
+//   • client_id — идентификатор устройства;
+//   • snapshot_registry_v1 — реестр снимков (снимки не трогаем!);
+//   • bound_user_id — вызывающий сам решает, снять ли привязку (обычно да,
+//     через snapshots.setBoundUserId(null), чтобы sync привязал к новому);
+//   • UI-настройки (theme, lang, font_size, autocleanup_* и т.п.).
+//
+// ВАЖНО: НЕ вызывает seed(). Если облако пустое, база останется без
+// seed-статусов — это ожидаемо для «загрузить облачные» (пользователь получит
+// ровно то, что в облаке). initDb при следующем старте засеет, только если
+// таблицы реально пусты И это не сценарий clearUserData (мы вызываем sync
+// сразу после, до перезапуска).
+export async function clearUserData(): Promise<void> {
+  const execBoth = async (sql: string, params: any[] = []) => {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      try { await d.execute(sql, params); } catch (e) { console.warn('[clearUserData][tauri]', sql, e); }
+    }
+    if (webDb) {
+      try { webDb.run(sql, params); } catch (e) { console.warn('[clearUserData][web]', sql, e); }
+    }
+  };
+
+  // Порядок: сначала зависимые (overdue_events ссылается на tasks), потом
+  // tasks, потом справочники. FK не жёсткие, но порядок делаем логичным.
+  await execBoth('DELETE FROM overdue_events');
+  await execBoth('DELETE FROM tasks');
+  await execBoth('DELETE FROM task_templates');
+  await execBoth('DELETE FROM tags');
+  await execBoth('DELETE FROM statuses');
+  await execBoth('DELETE FROM sync_outbox');
+  // AUTOINCREMENT счётчики — чтобы новые id начинались с 1 (чистая база).
+  try { await execBoth(`DELETE FROM sqlite_sequence WHERE name IN ('tasks','tags','statuses','task_templates','overdue_events')`); } catch { /* may not exist */ }
+  // Сбрасываем курсоры pull, чтобы забрать всё облако заново.
+  await execBoth(`DELETE FROM settings WHERE key LIKE 'sync_last_pulled_%'`);
+
+  // Персистим web-кэш.
+  if (!IS_TAURI) save();
+}
+
+// ─── v0.9.35-dev.6.10.3: ensureSeededIfEmpty ─────────────────────────────────
+//
+// Закрывает две связанные проблемы, всплывшие при «загрузить из облака»
+// (clearUserData) на аккаунтах, чьи сид-статусы были созданы ДО миграции v9
+// (то есть без uuid и потому НЕ попавшие в облако):
+//
+//   1. Пустой список статусов. После clearUserData база пуста, а pull из такого
+//      облака приносит только задачи — статусов там нет. Задачи-сироты
+//      откладываются (deferred, см. pull.ts DeferRowError), и пользователь видит
+//      пустой экран без единой колонки. Раньше при рестарте initDb засеивал
+//      заново и создавал ОДНУ welcome-задачу («одна стартовая задача») — но это
+//      происходило слишком поздно и без нужных статусов.
+//
+//   2. Историческая дыра в облаке. Сид-статусы без uuid никогда не пушились,
+//      поэтому на всех устройствах этого аккаунта их нет в облаке. Пересеивая
+//      их ЗДЕСЬ (с uuid + enqueue в sync_outbox), мы отдаём их в облако при
+//      ближайшем push — и будущие устройства получат нормальный набор статусов.
+//
+// Функция ИДЕМПОТЕНТНА: сеет только если статусов реально нет (COUNT=0).
+// НЕ создаёт welcome-задачу (иначе на «пустом» аккаунте после каждого pull
+// плодилась бы лишняя «стартовая задача» — это и есть баг №3). Работает и в
+// web (webDb.run), и в Tauri (getTauriDb().execute), заполняя оба зеркала.
+//
+// Возвращает true, если сев произошёл (статусов не было), иначе false.
+export async function ensureSeededIfEmpty(): Promise<boolean> {
+  // 1. Проверяем, есть ли уже статусы. Считаем по «главному» хранилищу:
+  //    в Tauri — нативная БД, в web — webDb.
+  let statusCount = 0;
+  try {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      const rows: any[] = await d.select(`SELECT COUNT(*) AS cnt FROM statuses`);
+      statusCount = Number(rows[0]?.cnt ?? 0);
+    } else if (webDb) {
+      const stmt = webDb.prepare(`SELECT COUNT(*) AS cnt FROM statuses`);
+      if (stmt.step()) statusCount = Number((stmt.getAsObject() as any).cnt ?? 0);
+      stmt.free();
+    }
+  } catch (e) {
+    console.warn('[ensureSeededIfEmpty] count failed:', e);
+    // Безопасный дефолт: если посчитать не удалось — НЕ сеем (лучше пустой
+    // экран, чем риск задвоить статусы).
+    return false;
+  }
+  if (statusCount > 0) return false; // Уже есть статусы — ничего не делаем.
+
+  const now = new Date().toISOString();
+
+  // Универсальный executor: пишем в оба зеркала, где они доступны.
+  const execBoth = async (sql: string, params: any[] = []) => {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      try { await d.execute(sql, params); } catch (e) { console.warn('[ensureSeededIfEmpty][tauri]', e); }
+    }
+    if (webDb) {
+      try { webDb.run(sql, params); } catch (e) { console.warn('[ensureSeededIfEmpty][web]', e); }
+    }
+  };
+
+  // client_id (проставлен миграцией v5/v9). Читаем из доступного хранилища.
+  let clientId: string | null = null;
+  try {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      const rows: any[] = await d.select(`SELECT value FROM settings WHERE key='client_id'`);
+      clientId = rows[0]?.value ?? null;
+    } else if (webDb) {
+      const stmt = webDb.prepare(`SELECT value FROM settings WHERE key='client_id' LIMIT 1`);
+      if (stmt.step()) clientId = ((stmt.getAsObject() as any).value as string) ?? null;
+      stmt.free();
+    }
+  } catch (e) { console.warn('[ensureSeededIfEmpty] read client_id:', e); }
+
+  // Статусы. ВАЖНО: генерируем ОДИН uuid на статус и пишем его в оба зеркала,
+  // чтобы web и Tauri ссылались на одинаковые uuid (иначе рассинхрон в sync).
+  const statusUuids: string[] = [];
+  for (let i = 0; i < SEED_STATUSES.length; i++) {
+    const s = SEED_STATUSES[i];
+    const uuid = uuidv7();
+    statusUuids.push(uuid);
+    await execBoth(
+      `INSERT INTO statuses
+         (uuid, name, color, behavior, sort_order, is_seed, is_technical,
+          hidden, default_collapsed, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?,?,?,?,1,?)`,
+      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId]
+    );
+  }
+
+  // Теги.
+  const tagUuids: string[] = [];
+  for (let i = 0; i < SEED_TAGS.length; i++) {
+    const t = SEED_TAGS[i];
+    const uuid = uuidv7();
+    tagUuids.push(uuid);
+    await execBoth(
+      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,1,?)`,
+      [uuid, t.name, t.color, i, now, clientId]
+    );
+  }
+
+  // Enqueue в sync_outbox — чтобы засеянные статусы/теги ушли в облако при
+  // ближайшем push (закрывает историческую дыру: раньше их там не было).
+  for (const uuid of statusUuids) {
+    await execBoth(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  }
+  for (const uuid of tagUuids) {
+    await execBoth(
+      `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('tags', ?, 'upsert', datetime('now'), 0)`,
+      [uuid]
+    );
+  }
+
+  // Персистим web-кэш.
+  if (!IS_TAURI) save();
+
+  console.info(`[ensureSeededIfEmpty] seeded ${statusUuids.length} statuses + ${tagUuids.length} tags (no welcome task)`);
+  return true;
+}
+
 // ─── PUBLIC init ──────────────────────────────────────────────────────────────
 export async function initDb(): Promise<void> {
   // Always initialise the in-memory sql.js database as a synchronous cache layer.
@@ -543,6 +819,9 @@ export async function initDb(): Promise<void> {
 
     // Pull data from Tauri DB into webDb (in-memory) so sync calls work
     const d = await getTauriDb();
+    // v0.9.35-dev.1: SELECT * во всех таблицах возвращает sync-колонки,
+    // которые мы добавили миграцией v5. Копируем всё в webDb — она должна
+    // работать как полное зеркало Tauri-DB.
     const statuses: any[] = await d.select('SELECT * FROM statuses ORDER BY sort_order');
     const tags: any[] = await d.select('SELECT * FROM tags ORDER BY sort_order');
     const tasks: any[] = await d.select('SELECT * FROM tasks ORDER BY sort_order');
@@ -560,21 +839,43 @@ export async function initDb(): Promise<void> {
     webDb = new SQL!.Database();
     ensureSchema(webDb);
     migrate(webDb);
+    // v0.9.35-dev.1: накатываем PRAGMA-миграции (v2–v5) также для webDb
+    // в Tauri-режиме. Схема должна быть готова принять sync-колонки
+    // до hydrate. Сам backfill uuid'ов внутри v5 отработает вхолостую
+    // (webDb пуст, строк в SELECT WHERE uuid IS NULL нет) — hydrate
+    // сам зальёт правильные uuid из Tauri.
+    try {
+      await runMigrations(webMigrationApi(webDb), { onLog: (m) => console.log(m) });
+    } catch (e) {
+      console.error('[migrate][webDb-cache]', e);
+    }
+
+    // v0.9.35-dev.1: helper — берём sync-колонки из строки Tauri;
+    // если в старой базе их нет — подставляем NULL/1 (безопасные дефолты).
+    const syncCols = (r: any) => [
+      r.uuid ?? null,
+      r.deleted_at ?? null,
+      r.version ?? 1,
+      r.client_id ?? null,
+    ];
 
     // Populate webDb from Tauri data
     for (const s of statuses) {
       webDb.run(
-        `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical,hidden,default_collapsed) VALUES (?,?,?,?,?,?,?,?,?)`,
-        [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical, s.hidden ?? 0, s.default_collapsed ?? 0]
+        `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical,hidden,default_collapsed,updated_at,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical, s.hidden ?? 0, s.default_collapsed ?? 0, s.updated_at ?? new Date().toISOString(), ...syncCols(s)]
       );
     }
     for (const t of tags) {
-      webDb.run(`INSERT OR REPLACE INTO tags (id,name,color,sort_order) VALUES (?,?,?,?)`, [t.id, t.name, t.color, t.sort_order]);
+      webDb.run(
+        `INSERT OR REPLACE INTO tags (id,name,color,sort_order,updated_at,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.name, t.color, t.sort_order, t.updated_at ?? new Date().toISOString(), ...syncCols(t)]
+      );
     }
     for (const t of tasks) {
       webDb.run(
-        `INSERT OR REPLACE INTO tasks (id,title,comment,tag_id,status_id,start_date,deadline,finish_date,created_at,updated_at,sort_order,archived) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [t.id, t.title, t.comment, t.tag_id, t.status_id, t.start_date, t.deadline, t.finish_date, t.created_at, t.updated_at, t.sort_order, t.archived]
+        `INSERT OR REPLACE INTO tasks (id,title,comment,tag_id,status_id,start_date,deadline,finish_date,created_at,updated_at,sort_order,archived,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.title, t.comment, t.tag_id, t.status_id, t.start_date, t.deadline, t.finish_date, t.created_at, t.updated_at, t.sort_order, t.archived, ...syncCols(t)]
       );
     }
     for (const s of settings) {
@@ -582,14 +883,14 @@ export async function initDb(): Promise<void> {
     }
     for (const t of templates) {
       webDb.run(
-        `INSERT OR REPLACE INTO task_templates (id,name,title,comment,status_id,tag_id,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-        [t.id, t.name, t.title, t.comment, t.status_id, t.tag_id, t.sort_order, t.created_at, t.updated_at]
+        `INSERT OR REPLACE INTO task_templates (id,name,title,comment,status_id,tag_id,sort_order,created_at,updated_at,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.name, t.title, t.comment, t.status_id, t.tag_id, t.sort_order, t.created_at, t.updated_at, ...syncCols(t)]
       );
     }
     for (const e of overdueEvents) {
       webDb.run(
-        `INSERT OR REPLACE INTO overdue_events (id, task_id, deadline_snapshot, event_date, created_at) VALUES (?,?,?,?,?)`,
-        [e.id, e.task_id, e.deadline_snapshot, e.event_date, e.created_at]
+        `INSERT OR REPLACE INTO overdue_events (id, task_id, deadline_snapshot, event_date, created_at, updated_at, uuid, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [e.id, e.task_id, e.deadline_snapshot, e.event_date, e.created_at, e.updated_at ?? e.created_at, ...syncCols(e)]
       );
     }
   } else {
@@ -782,6 +1083,14 @@ export async function applyBackup(
     templates: Array.isArray(payload.templates),
   };
 
+  // v0.9.35-dev.6.10.4: восстановленные строки обязаны сохранять свою
+  // sync-идентичность (uuid/client_id/deleted_at/version) — иначе они
+  // невидимы для outbox, и первый же pull переигрывает их обратно в
+  // состояние из облака (баг: «снимок восстановлен, а задача не вернулась»).
+  const nowIso = new Date().toISOString();
+  const clientId = get<{ value: string }>(`SELECT value FROM settings WHERE key='client_id'`)?.value ?? null;
+  const restoredUuids: { table: 'statuses' | 'tags' | 'tasks' | 'task_templates'; uuid: string }[] = [];
+
   // Helper to do the run in both Tauri and web modes
   const sync = async (sql: string, params: any[] = []) => {
     if (IS_TAURI) {
@@ -811,11 +1120,15 @@ export async function applyBackup(
       const name = String(s.name ?? '').trim();
       if (!name) continue;
       if (mode === 'merge' && existing.has(name.toLowerCase())) continue;
+      const uuid = typeof s.uuid === 'string' && s.uuid ? s.uuid : uuidv7();
+      const version = typeof s.version === 'number' ? s.version + 1 : 1;
       await sync(
-        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed) VALUES (?,?,?,?,?,?,?,?)`,
-        [name, s.color ?? '#888', s.behavior ?? 'middle', s.sort_order ?? 0, s.is_seed ?? 0, s.is_technical ?? 0, s.hidden ?? 0, s.default_collapsed ?? 0]
+        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed, uuid, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [name, s.color ?? '#888', s.behavior ?? 'middle', s.sort_order ?? 0, s.is_seed ?? 0, s.is_technical ?? 0, s.hidden ?? 0, s.default_collapsed ?? 0,
+         uuid, nowIso, s.deleted_at ?? null, version, s.client_id ?? clientId]
       );
       counts.statuses++;
+      restoredUuids.push({ table: 'statuses', uuid });
     }
   }
 
@@ -827,11 +1140,14 @@ export async function applyBackup(
       const name = String(t.name ?? '').trim();
       if (!name) continue;
       if (mode === 'merge' && existing.has(name.toLowerCase())) continue;
+      const uuid = typeof t.uuid === 'string' && t.uuid ? t.uuid : uuidv7();
+      const version = typeof t.version === 'number' ? t.version + 1 : 1;
       await sync(
-        `INSERT INTO tags (name, color, sort_order) VALUES (?,?,?)`,
-        [name, t.color ?? '#888', t.sort_order ?? 0]
+        `INSERT INTO tags (name, color, sort_order, uuid, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?)`,
+        [name, t.color ?? '#888', t.sort_order ?? 0, uuid, nowIso, t.deleted_at ?? null, version, t.client_id ?? clientId]
       );
       counts.tags++;
+      restoredUuids.push({ table: 'tags', uuid });
     }
   }
 
@@ -881,8 +1197,10 @@ export async function applyBackup(
         }
       }
 
+      const uuid = typeof t.uuid === 'string' && t.uuid ? t.uuid : uuidv7();
+      const version = typeof t.version === 'number' ? t.version + 1 : 1;
       await sync(
-        `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           title,
           t.comment ?? '',
@@ -892,12 +1210,17 @@ export async function applyBackup(
           t.deadline ?? null,
           t.finish_date ?? null,
           t.created_at ?? now,
-          t.updated_at ?? now,
+          nowIso,
           t.sort_order ?? 0,
           t.archived ?? 0,
+          uuid,
+          t.deleted_at ?? null,
+          version,
+          t.client_id ?? clientId,
         ]
       );
       counts.tasks++;
+      restoredUuids.push({ table: 'tasks', uuid });
     }
   }
 
@@ -935,14 +1258,32 @@ export async function applyBackup(
       }
 
       try {
+        const uuid = typeof tpl.uuid === 'string' && tpl.uuid ? tpl.uuid : uuidv7();
+        const version = typeof tpl.version === 'number' ? tpl.version + 1 : 1;
         await sync(
-          `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order) VALUES (?,?,?,?,?,?)`,
-          [name, String(tpl.title ?? ''), String(tpl.comment ?? ''), statusId, tagId, tpl.sort_order ?? 0]
+          `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, uuid, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          [name, String(tpl.title ?? ''), String(tpl.comment ?? ''), statusId, tagId, tpl.sort_order ?? 0, uuid, nowIso, tpl.deleted_at ?? null, version, tpl.client_id ?? clientId]
         );
         counts.templates++;
+        restoredUuids.push({ table: 'task_templates', uuid });
       } catch {
         // task_templates table missing (very old DB without v2 migration) — skip silently
       }
+    }
+  }
+
+  // v0.9.35-dev.6.10.4: ставим все восстановленные строки в очередь на push —
+  // иначе они остаются локальными «призраками», а следующий pull затирает
+  // их обратно состоянием из облака (не пушим сами — не знаем, что менялось).
+  for (const { table, uuid } of restoredUuids) {
+    try {
+      await sync(
+        `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES (?,?,?,datetime('now'),0)
+         ON CONFLICT(entity_table, entity_uuid) DO UPDATE SET op=excluded.op, queued_at=excluded.queued_at, attempt_count=0, last_attempt_at=NULL, last_error=NULL`,
+        [table, uuid, 'upsert']
+      );
+    } catch (e) {
+      console.warn('[applyBackup] enqueue outbox failed for', table, uuid, e);
     }
   }
 

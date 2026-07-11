@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { tr } from '../lib/i18n';
-import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail } from 'lucide-react';
+import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban, History, Save, Loader2 } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
 import { useAuth, signOut, deleteAccount, updateEmail } from '../lib/auth';
 import { logEvent } from '../lib/telemetry';
@@ -15,41 +16,80 @@ import { logger } from '../lib/logger';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
+import { useEntitlement, submitActivationRequest, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, changePlan, type PaymentMethodRow } from '../lib/entitlements';
+import { supabase } from '../lib/supabase';
 
-type Sub = 'general' | 'account' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'updates';
+type Sub = 'general' | 'account' | 'subscription' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
 
 export function SettingsPage() {
   const lang = useStore(s => s.language);
-  const [sub, setSub] = useState<Sub>('general');
+  // v0.9.35-dev.6: если в URL есть #subscription — сразу открываем этот таб.
+  // (Ссылка из Sidebar-баннера / PaywallGate.)
+  const [sub, setSub] = useState<Sub>(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#subscription') {
+      return 'subscription';
+    }
+    return 'general';
+  });
 
-  const subs: { key: Sub; label: string }[] = [
+  // Реагируем на hashchange — если уже на /settings и кто-то навигатит на
+  // /settings#subscription, переключаем вкладку.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onHash = () => {
+      if (window.location.hash === '#subscription') setSub('subscription');
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  // v0.9.35-dev.6.7: сбок сгруппирован визуальными разделителями.
+  // 'divider' — визуальный разделитель.
+  type NavItem = { key: Sub; label: string } | { key: 'divider'; label?: never };
+  const navItems: NavItem[] = [
+    // Группа 1: Основные настройки
     { key: 'general', label: tr(lang, 'settings_general') },
-    { key: 'account', label: lang === 'ru' ? 'Аккаунт' : 'Account' },
-    { key: 'tags', label: tr(lang, 'settings_tags') },
     { key: 'statuses', label: tr(lang, 'settings_statuses') },
-    { key: 'stats', label: tr(lang, 'settings_stats') },
+    { key: 'tags', label: tr(lang, 'settings_tags') },
     { key: 'theme', label: tr(lang, 'settings_theme') },
     { key: 'templates', label: lang === 'ru' ? 'Шаблоны задач' : 'Task templates' },
+    // Разделитель
+    { key: 'divider' },
+    // Группа 2: Аккаунт и подписка
+    { key: 'account', label: lang === 'ru' ? 'Аккаунт' : 'Account' },
+    { key: 'subscription', label: lang === 'ru' ? 'Подписка' : 'Subscription' },
+    // Разделитель
+    { key: 'divider' },
+    // Группа 3: Данные и обслуживание
     { key: 'io', label: tr(lang, 'settings_io') },
     { key: 'storage', label: tr(lang, 'storage_section') },
+    // v0.9.35-dev.6.8.1: вкладка Синхронизация была потеряна при перестановке
+    // порядка вкладок — возвращаем между Хранилище и Обновления.
+    { key: 'sync', label: lang === 'ru' ? 'Синхронизация' : 'Sync' },
     { key: 'updates', label: lang === 'ru' ? 'Обновления' : 'Updates' },
   ];
+
+  // stats всё ещё есть для прямого перехода (например из кода)
+  // без отображения в сбоке.
 
   return (
     <div className="flex-1 flex overflow-hidden">
       <div className="w-[200px] shrink-0 border-r border-border-soft py-4 px-2.5 overflow-y-auto">
-        {subs.map(s => (
-          <button
-            key={s.key}
-            onClick={() => setSub(s.key)}
-            className={'w-full text-left px-3 py-1.5 mb-0.5 rounded-md text-[13px] ' +
-              (sub === s.key ? 'bg-accent-soft text-accent font-medium' : 'hover:bg-surface-alt')}
-          >{s.label}</button>
-        ))}
+        {navItems.map((item, idx) =>
+          item.key === 'divider'
+            ? <div key={`div-${idx}`} className="my-2 border-t border-border-soft/60" />
+            : <button
+                key={item.key}
+                onClick={() => setSub(item.key as Sub)}
+                className={'w-full text-left px-3 py-1.5 mb-0.5 rounded-md text-[13px] ' +
+                  (sub === item.key ? 'bg-accent-soft text-accent font-medium' : 'hover:bg-surface-alt')}
+              >{item.label}</button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto px-6 py-5">
         {sub === 'general' && <GeneralSection />}
         {sub === 'account' && <AccountSection />}
+        {sub === 'subscription' && <SubscriptionSection />}
         {sub === 'tags' && <TagsSection />}
         {sub === 'statuses' && <StatusesSection />}
         {sub === 'stats' && <StatsToggleSection />}
@@ -57,6 +97,7 @@ export function SettingsPage() {
         {sub === 'templates' && <TemplatesSection lang={lang} />}
         {sub === 'io' && <IOSection />}
         {sub === 'storage' && <StorageSection />}
+        {sub === 'sync' && <SyncSection />}
         {sub === 'updates' && <UpdatesSection />}
       </div>
     </div>
@@ -111,8 +152,14 @@ function GeneralSection() {
   };
 
   return (
-    <div className="max-w-xl space-y-6">
+    <div className="max-w-xl space-y-4">
       <h3 className="font-display text-[16px] font-semibold">{tr(lang, 'settings_general')}</h3>
+
+      {/* ─── Блок: Основные параметры ─── */}
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-4">
+        <h4 className="text-[13px] font-semibold text-muted uppercase tracking-wide">
+          {lang === 'ru' ? 'Основные' : 'General'}
+        </h4>
 
       <Row label={tr(lang, 'language')}>
         <div className="flex gap-2">
@@ -192,9 +239,12 @@ function GeneralSection() {
         </div>
       </Row>
 
+      </div>{/* /блок Основные */}
+
+      {/* ─── Блок: Автоочистка ─── */}
       {/* v0.9.30: автоочистка выполненных задач — два режима (weekday/age) */}
-      <div className="pt-4 border-t border-border-soft">
-        <h4 className="font-display text-[14px] font-semibold mb-3">
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+        <h4 className="font-display text-[14px] font-semibold">
           {lang === 'ru' ? 'Автоочистка выполненных задач' : 'Auto-cleanup completed tasks'}
         </h4>
 
@@ -308,6 +358,37 @@ function GeneralSection() {
         onConfirm={() => { handleCleanNow(); setCleanNowConfirm(false); }}
         onCancel={() => setCleanNowConfirm(false)}
       />
+
+      {/* v0.9.35-dev.6.7: Сбор статистики перенесён внутрь вкладки Общее */}
+      <InlineStatsToggle lang={lang} />
+    </div>
+  );
+}
+
+/** Сбор статистики — встроенный в GeneralSection (v0.9.35-dev.6.7) */
+function InlineStatsToggle({ lang }: { lang: string }) {
+  const enabled = useStore(s => s.statsEnabled);
+  const setEnabled = useStore(s => s.setStatsEnabled);
+  return (
+    <div className="bg-surface-alt border border-border-soft rounded-lg p-4">
+      <h4 className="font-display text-[14px] font-semibold mb-3">
+        {lang === 'ru' ? 'Сбор статистики' : 'Usage statistics'}
+      </h4>
+      <Row label={lang === 'ru' ? 'Включить' : 'Enable'}>
+        <label className="inline-flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={e => setEnabled(e.target.checked)}
+            className="w-4 h-4 accent-[var(--color-accent)]"
+          />
+          <span className="text-[13px] text-muted">
+            {lang === 'ru'
+              ? 'Собирать анонимную статистику использования'
+              : 'Collect anonymous usage statistics'}
+          </span>
+        </label>
+      </Row>
     </div>
   );
 }
@@ -2201,5 +2282,1467 @@ function AccountSection() {
         onCancel={() => setConfirmDelete(false)}
       />
     </div>
+  );
+}
+
+// ─── SyncSection (v0.9.35-dev.4) ────────────────────────────────────────────
+/**
+ * Раздел настроек «Синхронизация».
+ *   - Показывает текущий статус (idle/pulling/pushing/synced/error/skipped).
+ *   - Показывает last synced at (человекочитаемо).
+ *   - Кнопка «Синхронизировать сейчас» — вызывает syncNow() вручную. В dev-сборке
+ *     это единственный триггер (авто-sync отключён). В prod — вспомогательный.
+ *   - Ссылка на sync_devices (для отладки, показывает client_id).
+ *
+ * Реализация: lazy import модуля sync/index через useEffect. Это позволяет
+ * держать чанк sync/* вне initial bundle Settings-страницы.
+ */
+function SyncSection() {
+  const lang = useStore(s => s.language);
+  const auth = useAuth();
+  const t = (ru: string, en: string) => (lang === 'ru' ? ru : en);
+  const isDev = import.meta.env.DEV;
+
+  const [status, setStatus] = useState<string>('idle');
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const syncModuleRef = useRef<any>(null);
+  const pushToast = useStore(s => s.pushToast);
+  const refresh = useStore(s => s.refresh);
+
+  // ─── Снимки локальной базы (v0.9.35-dev.6.9.0) ───────────────────────────
+  const [snapshots, setSnapshots] = useState<import('../lib/snapshots').SnapshotMeta[]>([]);
+  const [snapsLoading, setSnapsLoading] = useState(true);
+  const [snapBusy, setSnapBusy] = useState<string | null>(null); // id операции или 'create'
+  const [webLimited, setWebLimited] = useState(false);
+  const [restartAfterRestore, setRestartAfterRestore] = useState(false);
+
+  const refreshSnapshots = async () => {
+    try {
+      const m = await import('../lib/snapshots');
+      setWebLimited(m.isWebSnapshotLimited());
+      const list = await m.listSnapshots();
+      setSnapshots(list);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[snapshots/settings] list failed:', e);
+    } finally {
+      setSnapsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshSnapshots();
+  }, []);
+
+  const snapshotLabel = (label: string): string => {
+    if (label === 'before_account_switch') return t('Перед сменой аккаунта', 'Before account switch');
+    if (label === 'manual') return t('Создан вручную', 'Manual');
+    if (label === 'before_restore') return t('Перед восстановлением', 'Before restore');
+    return label;
+  };
+
+  const formatSnapDate = (iso: string): string => {
+    try {
+      return new Date(iso).toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US', {
+        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+    } catch { return iso; }
+  };
+
+  const formatSize = (bytes: number): string => {
+    if (!bytes || bytes < 0) return '—';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const handleCreateSnapshot = async () => {
+    if (snapBusy) return;
+    setSnapBusy('create');
+    try {
+      const m = await import('../lib/snapshots');
+      await m.createSnapshot('manual');
+      await refreshSnapshots();
+      pushToast(t('Снимок создан', 'Snapshot created'));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[snapshots/settings] create failed:', e);
+      pushToast(t('Не удалось создать снимок', 'Failed to create snapshot'));
+    } finally {
+      setSnapBusy(null);
+    }
+  };
+
+  const handleRestoreSnapshot = async (id: string) => {
+    if (snapBusy) return;
+    const confirmMsg = t(
+      'Восстановить эту версию базы? Текущее состояние будет сохранено в отдельный снимок перед заменой. Это действие затронет все локальные задачи.',
+      'Restore this database version? The current state will be saved as a separate snapshot before replacing. This will affect all local tasks.',
+    );
+    if (!window.confirm(confirmMsg)) return;
+    setSnapBusy(id);
+    try {
+      const m = await import('../lib/snapshots');
+      const { needsRestart } = await m.restoreSnapshot(id);
+      await refreshSnapshots();
+      if (needsRestart) {
+        setRestartAfterRestore(true);
+      } else {
+        // v0.9.35-dev.6.10.4: без этого вызова стор оставался со старыми
+        // данными в памяти — восстановление реально применялось к базе,
+        // но пользователь ничего не видел на экране до перезагрузки страницы.
+        refresh();
+        pushToast(t('Снимок восстановлен', 'Snapshot restored'));
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[snapshots/settings] restore failed:', e);
+      pushToast(t('Не удалось восстановить снимок', 'Failed to restore snapshot'));
+    } finally {
+      setSnapBusy(null);
+    }
+  };
+
+  const handleDeleteSnapshot = async (id: string) => {
+    if (snapBusy) return;
+    if (!window.confirm(t('Удалить этот снимок безвозвратно?', 'Delete this snapshot permanently?'))) return;
+    setSnapBusy(id);
+    try {
+      const m = await import('../lib/snapshots');
+      await m.deleteSnapshot(id);
+      await refreshSnapshots();
+      pushToast(t('Снимок удалён', 'Snapshot deleted'));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[snapshots/settings] delete failed:', e);
+      pushToast(t('Не удалось удалить снимок', 'Failed to delete snapshot'));
+    } finally {
+      setSnapBusy(null);
+    }
+  };
+
+  const handleRestartAfterRestore = async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('restart_app');
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[snapshots/settings] restart_app error:', e);
+      pushToast(t('Не удалось перезапустить. Закройте и запустите приложение вручную.', 'Restart failed. Please close and start the app manually.'));
+    }
+  };
+
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    let mounted = true;
+    void import('../lib/sync').then(m => {
+      if (!mounted) return;
+      syncModuleRef.current = m;
+      const initial = m.getSyncState();
+      setStatus(initial.status);
+      setLastSyncedAt(initial.lastSyncedAt);
+      setLastError(initial.lastError);
+      unsubscribe = m.subscribeSyncState(s => {
+        setStatus(s.status);
+        setLastSyncedAt(s.lastSyncedAt);
+        setLastError(s.lastError);
+      });
+    }).catch(err => {
+      // eslint-disable-next-line no-console
+      console.warn('[sync/settings] module load failed:', err);
+    });
+    return () => {
+      mounted = false;
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  const runNow = async () => {
+    if (!syncModuleRef.current || syncing) return;
+    setSyncing(true);
+    try {
+      await syncModuleRef.current.syncNow();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[sync/settings] syncNow failed:', e);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const clientId = (typeof window !== 'undefined')
+    ? (() => {
+        try {
+          // Не тащим импорт сюда — читаем напрямую через localStorage если хотим,
+          // но проще через lazy-модуль. Пока показываем '—', детали в UI не нужны.
+          return null;
+        } catch { return null; }
+      })()
+    : null;
+
+  const statusLabel = (() => {
+    if (status === 'idle') return t('Ожидание', 'Idle');
+    if (status === 'pulling') return t('Скачивание изменений…', 'Pulling changes…');
+    if (status === 'pushing') return t('Отправка изменений…', 'Pushing changes…');
+    if (status === 'synced') return t('Синхронизировано', 'Synced');
+    if (status === 'error') return t('Ошибка', 'Error');
+    if (status === 'skipped') return t('Не выполнена (нет сессии)', 'Skipped (no session)');
+    return status;
+  })();
+
+  const statusColor = (() => {
+    if (status === 'error') return 'text-[var(--error,#c33)]';
+    if (status === 'synced') return 'text-[var(--success,#7a3)]';
+    if (status === 'pulling' || status === 'pushing') return 'text-accent';
+    return 'text-muted';
+  })();
+
+  const formatLastSynced = (): string => {
+    if (!lastSyncedAt) return t('никогда', 'never');
+    try {
+      const d = new Date(lastSyncedAt);
+      const diffMs = Date.now() - d.getTime();
+      const diffSec = Math.floor(diffMs / 1000);
+      if (diffSec < 5) return t('только что', 'just now');
+      if (diffSec < 60) return t(`${diffSec} сек назад`, `${diffSec}s ago`);
+      const diffMin = Math.floor(diffSec / 60);
+      if (diffMin < 60) return t(`${diffMin} мин назад`, `${diffMin}m ago`);
+      const diffH = Math.floor(diffMin / 60);
+      if (diffH < 24) return t(`${diffH} ч назад`, `${diffH}h ago`);
+      return d.toLocaleString(lang === 'ru' ? 'ru-RU' : 'en-US');
+    } catch { return lastSyncedAt; }
+  };
+
+  const _clientIdUnused = clientId; // подавляем warning про unused (пока не показываем)
+  void _clientIdUnused;
+
+  return (
+    <div className="max-w-2xl">
+      <h2 className="text-[15px] font-semibold mb-1">
+        {t('Синхронизация с облаком', 'Cloud sync')}
+      </h2>
+      <p className="text-[12px] text-muted mb-4">
+        {t(
+          'Ваши задачи автоматически синхронизируются между устройствами, если вы вошли в аккаунт. Полностью локальная работа тоже поддерживается — вы всегда владеете своими данными.',
+          'Your tasks sync automatically across devices when you\'re signed in. Local-only workflow is also supported — you always own your data.',
+        )}
+      </p>
+
+      {!auth.session?.user && (
+        <div className="mb-4 px-3 py-2 rounded-md border border-border-soft bg-[var(--surface-alt)]/40 text-[12px] text-muted">
+          {t(
+            'Вы не вошли в аккаунт. Синхронизация недоступна — все задачи остаются локальными.',
+            'You\'re not signed in. Sync is unavailable — all tasks stay local.',
+          )}
+        </div>
+      )}
+
+      {/* Статус */}
+      <div className="mb-3 px-3 py-2.5 rounded-md border border-border-soft bg-surface">
+        <div className="flex items-center gap-2 mb-1">
+          <Cloud size={14} className={statusColor} />
+          <span className="text-[13px] font-medium">
+            {t('Статус:', 'Status:')} <span className={statusColor}>{statusLabel}</span>
+          </span>
+        </div>
+        <div className="text-[11px] text-muted">
+          {t('Последняя синхронизация:', 'Last synced:')} {formatLastSynced()}
+        </div>
+        {lastError && (
+          <div className="text-[11px] text-[var(--error,#c33)] mt-1 truncate" title={lastError}>
+            {t('Ошибка:', 'Error:')} {lastError}
+          </div>
+        )}
+      </div>
+
+      {/* Кнопка запуска */}
+      <div className="flex items-center gap-3 mb-3">
+        <button
+          onClick={runNow}
+          disabled={syncing || !auth.session?.user || status === 'pulling' || status === 'pushing'}
+          className="px-3.5 py-1.5 rounded-md bg-accent text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {syncing ? t('Синхронизация…', 'Syncing…') : t('Синхронизировать сейчас', 'Sync now')}
+        </button>
+        {isDev && (
+          <span className="text-[11px] text-muted">
+            {t('Dev-сборка: авто-sync отключён.', 'Dev build: auto-sync disabled.')}
+          </span>
+        )}
+      </div>
+
+      {/* Инфо о feature flag */}
+      <details className="text-[11px] text-muted">
+        <summary className="cursor-pointer hover:text-text">
+          {t('Как работает синхронизация?', 'How does sync work?')}
+        </summary>
+        <div className="mt-2 pl-2 space-y-1.5">
+          <p>
+            {t(
+              '• Конфликт-резолюшн: last-write-wins по updated_at (server-side).',
+              '• Conflict resolution: last-write-wins by updated_at (server-side).',
+            )}
+          </p>
+          <p>
+            {t(
+              '• Удаление: soft-delete (deleted_at), запись остаётся в облаке для истории.',
+              '• Deletion: soft-delete (deleted_at), row stays in cloud for history.',
+            )}
+          </p>
+          <p>
+            {t(
+              '• Retry: экспоненциальный backoff (1→2→4→8→16 сек), максимум 5 попыток.',
+              '• Retry: exponential backoff (1→2→4→8→16s), max 5 attempts.',
+            )}
+          </p>
+          <p>
+            {isDev
+              ? t(
+                  '• В prod-сборке синхронизация запускается автоматически: при старте, возврате фокуса и через 2с после любого изменения.',
+                  '• In prod builds sync runs automatically: on startup, focus return, and 2s after any change.',
+                )
+              : t(
+                  '• Автоматическая синхронизация: при старте, возврате фокуса и через 2с после любого изменения.',
+                  '• Automatic sync: on startup, focus return, and 2s after any change.',
+                )}
+          </p>
+        </div>
+      </details>
+
+      {/* ─── Снимки локальной базы (v0.9.35-dev.6.9.0) ─────────────────────── */}
+      <div className="mt-6 pt-5 border-t border-border-soft">
+        <div className="flex items-center gap-2 mb-1">
+          <History size={15} className="text-muted" />
+          <h3 className="text-[14px] font-semibold">
+            {t('Снимки локальной базы', 'Local database snapshots')}
+          </h3>
+        </div>
+        <p className="text-[12px] text-muted mb-3">
+          {t(
+            'Снимок — это полная резервная копия локальной базы. Приложение автоматически создаёт снимок перед сменой аккаунта, чтобы вы всегда могли вернуть прежние данные. Хранятся последние 5 снимков, старые удаляются автоматически.',
+            'A snapshot is a full backup of your local database. The app automatically creates one before switching accounts so you can always roll back. The last 5 snapshots are kept; older ones are removed automatically.',
+          )}
+        </p>
+
+        {webLimited && (
+          <div className="mb-3 px-3 py-2 rounded-md border border-[var(--warning,#c90)]/40 bg-[var(--warning,#c90)]/10 text-[11px] text-muted flex items-start gap-2">
+            <AlertTriangle size={13} className="text-[var(--warning,#c90)] shrink-0 mt-0.5" />
+            <span>
+              {t(
+                'В веб-версии снимки хранятся в localStorage браузера и ограничены по размеру. Для полноценных снимков используйте десктоп-приложение.',
+                'In the web version snapshots are stored in browser localStorage and limited in size. Use the desktop app for full snapshots.',
+              )}
+            </span>
+          </div>
+        )}
+
+        <div className="mb-3">
+          <button
+            onClick={handleCreateSnapshot}
+            disabled={snapBusy !== null}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border-soft text-[13px] font-medium hover:bg-[var(--surface-alt)]/60 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {snapBusy === 'create'
+              ? <Loader2 size={14} className="animate-spin" />
+              : <Save size={14} />}
+            {t('Создать снимок вручную', 'Create snapshot manually')}
+          </button>
+        </div>
+
+        {snapsLoading ? (
+          <div className="text-[12px] text-muted flex items-center gap-2 py-2">
+            <Loader2 size={13} className="animate-spin" />
+            {t('Загрузка снимков…', 'Loading snapshots…')}
+          </div>
+        ) : snapshots.length === 0 ? (
+          <div className="text-[12px] text-muted px-3 py-3 rounded-md border border-dashed border-border-soft text-center">
+            {t('Снимков пока нет.', 'No snapshots yet.')}
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {snapshots.map(snap => {
+              const busy = snapBusy === snap.id;
+              return (
+                <li
+                  key={snap.id}
+                  className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-md border border-border-soft bg-surface"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium truncate">
+                      {snapshotLabel(snap.label)}
+                    </div>
+                    <div className="text-[11px] text-muted flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span>{formatSnapDate(snap.createdAt)}</span>
+                      <span className="opacity-50">•</span>
+                      <span>{formatSize(snap.size)}</span>
+                      {typeof snap.taskCount === 'number' && (
+                        <>
+                          <span className="opacity-50">•</span>
+                          <span>{t(`${snap.taskCount} задач`, `${snap.taskCount} tasks`)}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => handleRestoreSnapshot(snap.id)}
+                      disabled={snapBusy !== null}
+                      title={t('Восстановить', 'Restore')}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border-soft text-[12px] font-medium hover:bg-[var(--surface-alt)]/60 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {busy
+                        ? <Loader2 size={13} className="animate-spin" />
+                        : <RotateCcw size={13} />}
+                      <span className="hidden sm:inline">{t('Восстановить', 'Restore')}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteSnapshot(snap.id)}
+                      disabled={snapBusy !== null}
+                      title={t('Удалить', 'Delete')}
+                      className="inline-flex items-center justify-center p-1.5 rounded-md text-muted hover:text-[var(--error,#c33)] hover:bg-[var(--error,#c33)]/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {/* Диалог перезапуска после восстановления (Tauri) */}
+      <ConfirmDialog
+        open={restartAfterRestore}
+        title={t('Снимок восстановлен', 'Snapshot restored')}
+        message={t(
+          'База данных заменена восстановленным снимком. Чтобы изменения вступили в силу, необходимо перезапустить приложение.',
+          'The database has been replaced with the restored snapshot. The app needs to restart for changes to take effect.',
+        )}
+        confirmLabel={t('Перезапустить сейчас', 'Restart now')}
+        cancelLabel={t('Позже', 'Later')}
+        onConfirm={() => { setRestartAfterRestore(false); void handleRestartAfterRestore(); }}
+        onCancel={() => setRestartAfterRestore(false)}
+      />
+    </div>
+  );
+}
+
+// ============================================================================
+// v0.9.35-dev.6: SubscriptionSection — статус плана, trial, ручная активация,
+// альтернативные способы оплаты, история заявок.
+// ============================================================================
+
+/**
+ * Env-based конфиг альтернативных способов оплаты.
+ * Задаётся в `.env.local` (локально) или в CI (без secrets — blocks просто не показываются).
+ *
+ * VITE_PAY_CLOUDTIPS_URL / VITE_PAY_TON / VITE_PAY_USDT_TRC20 / VITE_PAY_USDT_ERC20
+ * VITE_PAY_PRICE_MONTHLY / VITE_PAY_PRICE_ANNUAL / VITE_PAY_PRICE_LIFETIME
+ */
+type PaymentMethodKey = 'cloudtips' | 'ton' | 'usdt-trc20' | 'usdt-erc20';
+type PaymentMethodDef = {
+  key: PaymentMethodKey;
+  label: string;
+  value: string;
+  displayValue: string;
+  linkUrl?: string;
+};
+
+const _env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+
+const PAYMENT_METHODS: PaymentMethodDef[] = (() => {
+  const list: PaymentMethodDef[] = [];
+  const ct = _env.VITE_PAY_CLOUDTIPS_URL?.trim();
+  if (ct) {
+    const display = ct.replace(/^https?:\/\//, '');
+    list.push({ key: 'cloudtips', label: 'CloudTips (RUB)', value: ct, displayValue: display, linkUrl: ct });
+  }
+  const ton = _env.VITE_PAY_TON?.trim();
+  if (ton) list.push({ key: 'ton', label: 'TON', value: ton, displayValue: ton });
+  const trc = _env.VITE_PAY_USDT_TRC20?.trim();
+  if (trc) list.push({ key: 'usdt-trc20', label: 'USDT (TRC-20)', value: trc, displayValue: trc });
+  const erc = _env.VITE_PAY_USDT_ERC20?.trim();
+  if (erc) list.push({ key: 'usdt-erc20', label: 'USDT (ERC-20)', value: erc, displayValue: erc });
+  return list;
+})();
+
+// v0.9.35-dev.6.4.1: дефолтные цены вшиты (совпадают с i18n subscription_block_price_*).
+// Если CI подаёт VITE_PAY_PRICE_* — они переопределяют. Иначе UI всегда
+// показывает актуальную цену, без заглушки «цена скоро».
+const PRICE_MONTHLY = _env.VITE_PAY_PRICE_MONTHLY?.trim() || '299 ₽';
+const PRICE_ANNUAL = _env.VITE_PAY_PRICE_ANNUAL?.trim() || '2 990 ₽';
+const PRICE_LIFETIME = _env.VITE_PAY_PRICE_LIFETIME?.trim() || '4 990 ₽';
+
+/** Короткая строка цен, если хотя бы одна цена задана. */
+const PRICE_LINE = [PRICE_MONTHLY, PRICE_ANNUAL, PRICE_LIFETIME].filter(Boolean).join(' / ');
+
+function SubscriptionSection() {
+  const lang = useStore(s => s.language);
+  const isRu = lang === 'ru';
+  const pushToast = useStore(s => s.pushToast);
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const t = (ru: string, en: string) => (isRu ? ru : en);
+
+  const user = auth.session?.user;
+  const userId = user?.id ?? null;
+  const userEmail = user?.email ?? null;
+
+  // Используем hook: он даёт realtime-обновляемый entitlement.
+  const { entitlement, loading: entLoading } = useEntitlement(userId, userEmail);
+  // Пока auth или entitlement грузятся — не показываем free-блоки (иначе мелькают для Pro)
+  const subsLoading = auth.loading || entLoading;
+
+  // Локальный state для формы ручной активации.
+  const [txRef, setTxRef] = useState('');
+  const [planRequested, setPlanRequested] = useState<'monthly' | 'annual' | 'lifetime'>('monthly');
+  const [providerHint, setProviderHint] = useState<'cloudtips' | 'ton' | 'usdt-trc20' | 'usdt-erc20' | 'other'>(
+    (PAYMENT_METHODS[0]?.key ?? 'other') as 'cloudtips' | 'ton' | 'usdt-trc20' | 'usdt-erc20' | 'other',
+  );
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  // v0.9.35-dev.6.5.1 — recurring management
+  // v0.9.35-dev.6.9.3: cancel-subscription больше не используется в UI —
+  // отключение автопродления идёт через detach (одно действие).
+  const [reactivateBusy, setReactivateBusy] = useState(false);
+  // v0.9.35-dev.6.5.2 — отвязка карты (требование ЮKassa) = отключение автопродления
+  const [detachBusy, setDetachBusy] = useState(false);
+  const [detachConfirmOpen, setDetachConfirmOpen] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodRow[]>([]);
+  const [pmLoading, setPmLoading] = useState(false);
+  // v0.9.35-dev.6.6 — upgrade monthly → annual
+  const [upgradeBusy, setUpgradeBusy] = useState(false);
+  const [upgradeConfirmOpen, setUpgradeConfirmOpen] = useState(false);
+
+  // История заявок пользователя.
+  const [requests, setRequests] = useState<ActivationRequestRow[]>([]);
+  const [reqLoading, setReqLoading] = useState(false);
+
+  // Загружаем заявки при монтировании и после submit.
+  const reloadRequests = async () => {
+    if (!userId) {
+      setRequests([]);
+      return;
+    }
+    setReqLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('activation_requests')
+        .select('id, created_at, plan_requested, provider_hint, tx_ref, status, admin_notes')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      setRequests((data ?? []) as ActivationRequestRow[]);
+    } catch (e: any) {
+      logger.warn('[SubscriptionSection] loadRequests failed:', e?.message ?? e);
+    } finally {
+      setReqLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void reloadRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // v0.9.35-dev.6.5.1: загружаем payment_methods только для Pro
+  useEffect(() => {
+    if (!userId) { setPaymentMethods([]); return; }
+    if (entitlement.effectivePlan !== 'pro') { setPaymentMethods([]); return; }
+    setPmLoading(true);
+    fetchActivePaymentMethods(userId)
+      .then(pms => setPaymentMethods(pms))
+      .catch(e => logger.warn('[SubscriptionSection] fetchPMs failed:', e?.message ?? e))
+      .finally(() => setPmLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, entitlement.effectivePlan, entitlement.paymentMethodId]);
+
+  // v0.9.35-dev.6.9.3: handleCancelSubscription удалён — отключение
+  // автопродления теперь всегда через handleDetachPaymentMethod.
+
+  const handleReactivateSubscription = async () => {
+    setReactivateBusy(true);
+    try {
+      const res = await reactivateSubscription();
+      if (res.ok) {
+        pushToast(t('Автопродление включено', 'Auto-renewal enabled'));
+      } else {
+        pushToast(t('Не удалось включить: ', 'Failed to enable: ') + res.error);
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка реактивации', 'Reactivate error'));
+    } finally {
+      setReactivateBusy(false);
+    }
+  };
+
+  // v0.9.35-dev.6.5.2 — отвязка карты (требование ЮKassa для автоплатежей)
+  const handleDetachPaymentMethod = async () => {
+    setDetachBusy(true);
+    try {
+      const res = await detachPaymentMethod();
+      if (res.ok) {
+        pushToast(t('Карта отвязана', 'Card detached'));
+        // Обновляем список карт локально (realtime догонит, но отобразим сразу).
+        setPaymentMethods([]);
+      } else {
+        pushToast(t('Не удалось отвязать: ', 'Failed to detach: ') + res.error);
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка отвязки', 'Detach error'));
+    } finally {
+      setDetachBusy(false);
+      setDetachConfirmOpen(false);
+    }
+  };
+
+  // v0.9.35-dev.6.6 — upgrade monthly → annual
+  const handleUpgradePlan = async () => {
+    setUpgradeBusy(true);
+    try {
+      const res = await changePlan();
+      if (res.ok) {
+        if (res.confirmation_url) {
+          // Требуется 3DS — открываем в системном браузере
+          // (Tauri shell open есть в Checkout, тут просто window.open как fallback)
+          try {
+            const { open } = await import('@tauri-apps/plugin-shell');
+            await open(res.confirmation_url);
+          } catch {
+            window.open(res.confirmation_url, '_blank');
+          }
+          pushToast(t('Открыта страница оплаты. После оплаты подписка автоматически продлится.', 'Payment page opened. Subscription will be extended automatically after payment.'));
+        } else {
+          const until = new Date(res.new_valid_until).toLocaleDateString(
+            isRu ? 'ru-RU' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' }
+          );
+          pushToast(t(`Годовой план активирован до ${until}`, `Annual plan activated until ${until}`));
+        }
+      } else {
+        pushToast(t('Ошибка апгрейда: ', 'Upgrade error: ') + (res.error ?? '?'));
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка', 'Error'));
+    } finally {
+      setUpgradeBusy(false);
+      setUpgradeConfirmOpen(false);
+    }
+  };
+
+  // Guard: если не залогинен — показываем плейсхолдер.
+  if (!user) {
+    return (
+      <div className="max-w-xl space-y-4">
+        <h3 className="font-display text-[16px] font-semibold flex items-center gap-2">
+          <CircleDollarSign size={16} />
+          {t('Подписка', 'Subscription')}
+        </h3>
+        <p className="text-[13px] text-muted">
+          {t('Войдите в аккаунт, чтобы управлять подпиской.', 'Sign in to manage your subscription.')}
+        </p>
+      </div>
+    );
+  }
+
+  // Бейдж + русская метка плана.
+  const planLabel = (() => {
+    if (entitlement.isAdmin) return t('Lifetime (админ)', 'Lifetime (admin)');
+    switch (entitlement.effectivePlan) {
+      case 'lifetime': return 'Lifetime';
+      case 'pro': return 'Pro';
+      case 'trial': return t('Trial (14 дней)', 'Trial (14 days)');
+      case 'free': return 'Free';
+    }
+  })();
+
+  const planBadgeColor = (() => {
+    switch (entitlement.effectivePlan) {
+      case 'lifetime': return 'var(--accent, #01696F)';
+      case 'pro': return 'var(--accent, #01696F)';
+      case 'trial': return '#DA7101'; // orange
+      case 'free': return 'var(--text-muted, #7A7974)';
+    }
+  })();
+
+  const validUntilStr = (() => {
+    if (!entitlement.validUntil) return null;
+    return entitlement.validUntil.toLocaleDateString(isRu ? 'ru-RU' : 'en-US', {
+      year: 'numeric', month: 'long', day: 'numeric',
+    });
+  })();
+
+  const daysLeft = (() => {
+    if (entitlement.msLeft == null) return null;
+    return Math.max(0, Math.ceil(entitlement.msLeft / 86_400_000));
+  })();
+
+  // Показывать кнопку «Начать trial» только если free и trial ни разу не был.
+  const canStartTrial = entitlement.effectivePlan === 'free' && !entitlement.trialUsed;
+
+
+  const handleSubmitActivation = async () => {
+    if (!txRef.trim()) {
+      pushToast(t('Укажите ID транзакции / хэш перевода', 'Please provide transaction ID / transfer hash'));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await submitActivationRequest({
+        txRef: txRef.trim(),
+        planRequested,
+        providerHint,
+        notes: notes.trim() || undefined,
+      });
+      if (res.ok) {
+        pushToast(t('Заявка отправлена. Мы проверим в течение 24 часов.', 'Request submitted. We will review within 24 hours.'));
+        setTxRef('');
+        setNotes('');
+        void reloadRequests();
+      } else {
+        pushToast(t('Ошибка: ', 'Error: ') + (res.error ?? '?'));
+      }
+    } catch (e: any) {
+      pushToast(e?.message ?? t('Ошибка отправки', 'Submit error'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      pushToast(t(`${label} скопирован`, `${label} copied`));
+    } catch {
+      pushToast(t('Не удалось скопировать', 'Copy failed'));
+    }
+  };
+
+  return (
+    <div className="max-w-xl space-y-6">
+      <h3 className="font-display text-[16px] font-semibold flex items-center gap-2">
+        <CircleDollarSign size={16} />
+        {t('Подписка', 'Subscription')}
+      </h3>
+
+      {/* ──── Текущий план ──── */}
+      <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] text-muted uppercase tracking-wide">
+            {t('Текущий план', 'Current plan')}
+          </span>
+          {subsLoading ? (
+            <span className="h-5 w-16 rounded bg-border animate-pulse inline-block" />
+          ) : (
+            <span
+              className="text-[11px] font-semibold px-2 py-0.5 rounded"
+              style={{ background: planBadgeColor, color: '#fff' }}
+            >
+              {planLabel}
+            </span>
+          )}
+        </div>
+        {validUntilStr && (
+          <div className="flex justify-between items-center">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {entitlement.effectivePlan === 'trial'
+                ? t('Trial до', 'Trial until')
+                : t('Действует до', 'Valid until')}
+            </span>
+            <span className="text-[13px] font-medium tabular-nums">
+              {validUntilStr}
+              {daysLeft != null && (
+                <span className="text-muted ml-1.5">
+                  ({t(`${daysLeft} дн.`, `${daysLeft} d`)})
+                </span>
+              )}
+            </span>
+          </div>
+        )}
+        {entitlement.effectivePlan === 'lifetime' && (
+          <p className="text-[12px] text-muted">
+            {entitlement.isAdmin
+              ? t('Grandfathered админ-доступ.', 'Grandfathered admin access.')
+              : t('Оплачено единоразово, продлевать не нужно.', 'One-time payment, no renewal needed.')}
+          </p>
+        )}
+        {entitlement.effectivePlan === 'free' && entitlement.trialUsed && (
+          <p className="text-[12px] text-muted">
+            {t('Trial уже был использован. Оформите подписку для облачных функций.', 'Trial already used. Purchase a subscription for cloud features.')}
+          </p>
+        )}
+      </div>
+
+      {/* ──── v0.9.35-dev.6.5.1: Управление подпиской (только Pro) ──── */}
+      {entitlement.effectivePlan === 'pro' && (
+        <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-4">
+          <h4 className="text-[14px] font-semibold flex items-center gap-2">
+            <RefreshCw size={14} />
+            {t('Управление подпиской', 'Subscription management')}
+          </h4>
+
+          {/* Предупреждение о неудачных попытках списания */}
+          {entitlement.renewalAttempts > 0 && (
+            <div
+              className="rounded-md p-3 border text-[12px] flex items-start gap-2"
+              style={{
+                background: 'color-mix(in oklab, #DA7101 12%, transparent)',
+                borderColor: 'color-mix(in oklab, #DA7101 40%, transparent)',
+              }}
+            >
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" style={{ color: '#DA7101' }} />
+              <div className="flex-1">
+                <div className="font-semibold" style={{ color: '#DA7101' }}>
+                  {t(
+                    `Не удалось списать оплату (попытка ${entitlement.renewalAttempts} из 3)`,
+                    `Payment attempt failed (${entitlement.renewalAttempts} of 3)`,
+                  )}
+                </div>
+                <p className="mt-1 text-muted">
+                  {t(
+                    'Проверьте, что срок действия карты не истёк и на ней достаточно средств. После 3-й неудачной попытки автопродление будет отменено автоматически.',
+                    'Please check that your card is not expired and has sufficient funds. After the 3rd failed attempt, auto-renewal will be cancelled automatically.',
+                  )}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => navigate('/checkout?mode=update-card')}
+                  className="mt-2 text-[12px] font-medium underline"
+                  style={{ color: '#DA7101' }}
+                >
+                  {t('Обновить способ оплаты', 'Update payment method')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Статус автопродления */}
+          <div className="flex justify-between items-start gap-3">
+            <div className="flex-1">
+              <div className="text-[12px] text-muted uppercase tracking-wide">
+                {t('Автопродление', 'Auto-renewal')}
+              </div>
+              <div className="text-[13px] font-medium mt-0.5">
+                {entitlement.cancelAtPeriodEnd
+                  ? t('Отменено', 'Cancelled')
+                  : entitlement.autoRenew
+                    ? t('Включено', 'Enabled')
+                    : t('Не настроено', 'Not set up')}
+              </div>
+              {entitlement.cancelAtPeriodEnd && entitlement.validUntil && (
+                <p className="text-[11px] text-muted mt-1">
+                  {t(
+                    `Доступ сохраняется до ${entitlement.validUntil.toLocaleDateString('ru-RU')}, дальше — Free.`,
+                    `Access until ${entitlement.validUntil.toLocaleDateString('en-US')}, then downgrades to Free.`,
+                  )}
+                </p>
+              )}
+              {!entitlement.cancelAtPeriodEnd && entitlement.autoRenew && entitlement.nextRenewalAt && (
+                <p className="text-[11px] text-muted mt-1">
+                  {t(
+                    `Следующее списание: ${entitlement.nextRenewalAt.toLocaleDateString('ru-RU')}`,
+                    `Next charge: ${entitlement.nextRenewalAt.toLocaleDateString('en-US')}`,
+                  )}
+                </p>
+              )}
+            </div>
+            {/* v0.9.35-dev.6.9.3: единая кнопка «Отключить автопродление» (detach).
+                Заменяет прежнюю «Отменить» (cancel-subscription): по решению
+                оставляем одно понятное действие, симметричное «Включить».
+                detach: is_active=false у карт, payment_method_id=null,
+                auto_renew=false, cancel_at_period_end=true. Доступ до valid_until
+                сохраняется. Показываем, когда автопродление активно. */}
+            {entitlement.autoRenew && !entitlement.cancelAtPeriodEnd && (
+              <button
+                type="button"
+                onClick={() => setDetachConfirmOpen(true)}
+                disabled={detachBusy}
+                className="text-[12px] px-3 py-1.5 rounded-md border border-border-soft hover:bg-surface disabled:opacity-60 flex items-center gap-1.5"
+              >
+                <Ban size={12} />
+                {detachBusy ? t('Отключаем…', 'Disabling…') : t('Отключить', 'Disable')}
+              </button>
+            )}
+            {/* v0.9.35-dev.6.10.1: кнопка включения автопродления (fallback).
+                При ОДНОШАГОВОМ флоу webhook сам включает auto_renew сразу
+                после привязки карты — поэтому обычно здесь сразу видна кнопка
+                «Отключить». Эта кнопка остаётся как fallback для двух ситуаций:
+                  • cancelAtPeriodEnd=true (юзер раньше отключал) → «Включить обратно»;
+                  • legacy/рассинхрон (карта привязана, но auto_renew=false) → «Включить».
+                Оба вызывают reactivate-subscription (auto_renew=true,
+                cancel_at_period_end=false). */}
+            {entitlement.paymentMethodId && !entitlement.autoRenew && (
+              <button
+                type="button"
+                onClick={handleReactivateSubscription}
+                disabled={reactivateBusy}
+                style={{ background: 'var(--accent, #01696F)' }}
+                className="text-white text-[12px] px-3 py-1.5 rounded-md disabled:opacity-60 flex items-center gap-1.5"
+              >
+                <RotateCcw size={12} />
+                {reactivateBusy
+                  ? t('Включаем…', 'Enabling…')
+                  : entitlement.cancelAtPeriodEnd
+                    ? t('Включить обратно', 'Re-enable')
+                    : t('Включить автопродление', 'Enable auto-renewal')}
+              </button>
+            )}
+          </div>
+
+          {/* v0.9.35-dev.6.6 — Upgrade monthly → annual */}
+          {entitlement.effectivePlan === 'pro' && (() => {
+            // Показываем только если подписка monthly (daysLeft ≤ 40 = точно monthly)
+            const isMonthly = daysLeft != null && daysLeft <= 40;
+            if (!isMonthly) return null;
+            return (
+              <div className="border-t border-border-soft pt-3">
+                <div className="text-[12px] text-muted uppercase tracking-wide mb-2">
+                  {t('Управление планом', 'Plan management')}
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[13px] font-medium">{t('Перейти на годовый', 'Upgrade to Annual')}</p>
+                    <p className="text-[11px] text-muted mt-0.5">
+                      {t('+365 дней к текущему периоду за 2 990 ₽', '+365 days added to current period — 2,990 ₽')}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUpgradeConfirmOpen(true)}
+                    disabled={upgradeBusy}
+                    style={{ background: 'var(--accent, #01696F)' }}
+                    className="text-white text-[12px] px-3 py-1.5 rounded-md disabled:opacity-60 flex items-center gap-1.5 shrink-0"
+                  >
+                    <Sparkles size={12} />
+                    {t('Перейти', 'Upgrade')}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Способ оплаты (маска карты) */}
+          <div className="border-t border-border-soft pt-3">
+            <div className="text-[12px] text-muted uppercase tracking-wide mb-1.5">
+              {t('Способ оплаты', 'Payment method')}
+            </div>
+            {pmLoading && <p className="text-[12px] text-muted">{t('Загрузка…', 'Loading…')}</p>}
+            {!pmLoading && paymentMethods.length === 0 && (
+              <p className="text-[12px] text-muted">
+                {t('Карта не привязана. Чтобы подписка продлевалась автоматически, включите автопродление.', 'No card linked. To keep your subscription active automatically, enable auto-renewal.')}
+              </p>
+            )}
+            {!pmLoading && paymentMethods.length > 0 && paymentMethods.map((pm) => {
+              // v0.9.35-dev.6.10.1: различаем тип метода. У СБП/ЮMoney/кошельков
+              // нет номера карты — показываем название без маски «••••»,
+              // чтобы не рисовать вводящее в заблуждение «Карта •••• ••••».
+              const mt = (pm.method_type ?? '').toLowerCase();
+              const isCard = mt === 'bank_card' || mt === '' || (!!pm.card_last4);
+              const expStr = (pm.card_expiry_month != null && pm.card_expiry_year != null)
+                ? ` · ${String(pm.card_expiry_month).padStart(2, '0')}/${String(pm.card_expiry_year).slice(-2)}`
+                : '';
+              // Человекочитаемое название для не-карточных методов.
+              const methodLabel = (() => {
+                switch (mt) {
+                  case 'sbp': return t('СБП', 'SBP');
+                  case 'yoo_money': return t('ЮMoney', 'YooMoney');
+                  case 'sberbank': return t('SberPay', 'SberPay');
+                  case 'tinkoff_bank': return t('T-Pay', 'T-Pay');
+                  case 'qiwi': return 'QIWI';
+                  default: return t('Электронный кошелёк', 'E-wallet');
+                }
+              })();
+              // F3: бренд карты живёт в card_type (Visa/MasterCard/Mir) — именно его
+              // пишет payment-webhook (миграция 0016). Legacy-колонка card_brand
+              // больше не заполняется, поэтому читаем card_type.
+              const brandStr = pm.card_type ? pm.card_type.toUpperCase() : t('Карта', 'Card');
+              return (
+                <div key={pm.id} className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <CreditCard size={14} className="text-muted shrink-0" />
+                    <span className="text-[13px] font-mono tabular-nums">
+                      {isCard
+                        ? `${brandStr} •••• ${pm.card_last4 ?? '••••'}${expStr}`
+                        : methodLabel}
+                    </span>
+                  </div>
+                  {/* v0.9.35-dev.6.9.3: в блоке карты остаётся только «Обновить».
+                      Отключение автопродления (detach) переехало в блок
+                      статуса выше — одно понятное действие «Отключить». */}
+                  <div className="flex items-center gap-3 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => navigate('/checkout?mode=update-card')}
+                      className="text-[12px] underline text-muted hover:text-fg"
+                    >
+                      {t('Обновить карту', 'Update card')}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {/* v0.9.35-dev.6.9.3: единая кнопка «Включить автопродление»
+                вместо «Привязать карту». Клик → checkout (шаг 1: привязка
+                карты через 1₽ + возврат). После возврата карта появляется
+                через realtime, и выше (блок статуса) появляется кнопка
+                «Включить автопродление» (шаг 2: reactivate). Показываем только
+                когда карты нет И нет привязки (чтобы не дублировать кнопку
+                статуса в случае, когда pm_id есть). */}
+            {!pmLoading && paymentMethods.length === 0 && !entitlement.paymentMethodId && !entitlement.autoRenew && (
+              <button
+                type="button"
+                onClick={() => navigate('/checkout?mode=update-card')}
+                style={{ background: 'var(--accent, #01696F)' }}
+                className="mt-2 text-white text-[12px] px-3 py-1.5 rounded-md hover:opacity-90 transition-opacity flex items-center gap-1.5"
+              >
+                <RotateCcw size={12} />
+                {t('Включить автопродление', 'Enable auto-renewal')}
+              </button>
+            )}
+          </div>
+
+          <p className="text-[11px] text-muted flex items-start gap-1 border-t border-border-soft pt-3">
+            <Info size={11} className="mt-0.5 shrink-0" />
+            {t(
+              'Отмена автопродления не возвращает деньги за текущий период — вы просто перестанете платить в будущем. Для возврата обратитесь в поддержку.',
+              'Cancelling auto-renewal does not refund the current period — you simply stop paying in the future. For a refund, contact support.',
+            )}
+          </p>
+        </div>
+      )}
+
+      {/* v0.9.35-dev.6.9.3: модалка подтверждения отключения автопродления (detach).
+          Прежняя отдельная модалка cancel удалена — осталось одно действие. */}
+      <ConfirmDialog
+        open={detachConfirmOpen}
+        title={t('Отключить автопродление?', 'Disable auto-renewal?')}
+        message={
+          validUntilStr
+            ? t(
+                `Карта будет отвязана, автопродление отключится. Доступ к Pro-функциям сохранится до ${validUntilStr}, дальше аккаунт вернётся на Free. Деньги за текущий период не возвращаются. Чтобы снова включить автопродление, потребуется привязать карту заново.`,
+                `Your card will be detached and auto-renewal disabled. Pro access remains until ${validUntilStr}, then the account downgrades to Free. The current period is non-refundable. To re-enable auto-renewal, you will need to link a card again.`,
+              )
+            : t(
+                'Карта будет отвязана, автопродление отключится. Доступ к Pro-функциям сохранится до конца оплаченного периода. Чтобы снова включить автопродление, потребуется привязать карту заново.',
+                'Your card will be detached and auto-renewal disabled. Pro access remains until the end of the paid period. To re-enable auto-renewal, you will need to link a card again.',
+              )
+        }
+        confirmLabel={detachBusy ? t('Отключаем…', 'Disabling…') : t('Отключить автопродление', 'Disable auto-renewal')}
+        cancelLabel={t('Оставить', 'Keep')}
+        danger
+        onConfirm={handleDetachPaymentMethod}
+        onCancel={() => setDetachConfirmOpen(false)}
+      />
+
+      {/* v0.9.35-dev.6.6 — Upgrade confirm */}
+      <ConfirmDialog
+        open={upgradeConfirmOpen}
+        title={t('Перейти на годовый план?', 'Upgrade to Annual?')}
+        message={t(
+          'С вашей привязанной карты будет списано 2 990 ₽. К вашему текущему периоду добавится +365 дней.',
+          'Your saved card will be charged 2,990 ₽. +365 days will be added to your current period.',
+        )}
+        confirmLabel={upgradeBusy ? t('Обрабатываем…', 'Processing…') : t('Перейти за 2 990 ₽', 'Upgrade for 2,990 ₽')}
+        cancelLabel={t('Отмена', 'Cancel')}
+        onConfirm={() => void handleUpgradePlan()}
+        onCancel={() => setUpgradeConfirmOpen(false)}
+      />
+
+      {/* ──── Trial CTA — v0.9.35-dev.6.8: привязка карты обязательна ──── */}
+      {/* v0.9.35-dev.6.8.1: guard !subsLoading убирает flash-of-free — CTA
+          «Попробуйте Pro бесплатно» больше не мелькает на секунду при переходе
+          на вкладку, пока entitlement ещё грузится из кэша. */}
+      {!subsLoading && canStartTrial && (
+        <div
+          className="rounded-lg p-4 space-y-3 border"
+          style={{
+            background: 'color-mix(in oklab, var(--accent, #01696F) 8%, transparent)',
+            borderColor: 'color-mix(in oklab, var(--accent, #01696F) 30%, transparent)',
+          }}
+        >
+          <div className="flex items-start gap-2">
+            <Sparkles size={16} className="mt-0.5 shrink-0" style={{ color: 'var(--accent, #01696F)' }} />
+            <div className="flex-1">
+              <h4 className="text-[14px] font-semibold">{t('Попробуйте Pro бесплатно', 'Try Pro for free')}</h4>
+              <p className="text-[12px] text-muted mt-1">
+                {t(
+                  '14 дней всех функций Pro. После trial — 299 ₽/мес, отмена в любой момент.',
+                  '14 days of all Pro features. After trial — ₽299/mo, cancel anytime.',
+                )}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate('/checkout?mode=trial')}
+            style={{ background: 'var(--accent, #01696F)' }}
+            className="text-white px-3 py-1.5 text-[13px] rounded-md"
+          >
+            {t('Начать бесплатный trial', 'Start free trial')}
+          </button>
+        </div>
+      )}
+
+      {/* ──── Оформить подписку (→ /checkout) — скрыто для pro/lifetime ──── */}
+      {/* v0.9.35-dev.6.4.1: кнопка активна, каждый тариф — кликабельный ряд,
+          ведёт на /checkout?tier={monthly|annual|lifetime}. Cloud/YooKassa уже подключены (dev.6.4).
+          v0.9.35-dev.6.7: скрыт если у пользователя уже активная подписка. */}
+      {!subsLoading && !entitlement.isPaidPro && <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
+        <h4 className="text-[14px] font-semibold flex items-center gap-2">
+          <Cloud size={14} />
+          {t('Оформить подписку', 'Purchase subscription')}
+        </h4>
+        <div className="space-y-1.5 text-[13px]">
+          <button
+            type="button"
+            onClick={() => navigate('/checkout?tier=monthly')}
+            className="w-full flex justify-between items-center px-3 py-2 rounded-md border border-border-soft/60 hover:bg-surface transition-colors"
+          >
+            <span>{t('Ежемесячно', 'Monthly')}</span>
+            <span className="font-medium tabular-nums">
+              {PRICE_MONTHLY} / {t('мес', 'mo')}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/checkout?tier=annual')}
+            className="w-full flex justify-between items-center px-3 py-2 rounded-md border transition-colors"
+            style={{
+              background: 'color-mix(in oklab, var(--accent, #01696F) 8%, transparent)',
+              borderColor: 'color-mix(in oklab, var(--accent, #01696F) 30%, transparent)',
+            }}
+          >
+            <span className="flex items-center gap-2">
+              {t('Ежегодно', 'Annual')}
+              <span className="text-[10px] px-1.5 py-0.5 rounded text-white font-medium leading-none" style={{ background: 'var(--accent, #01696F)' }}>
+                {t('выгодно', 'best')}
+              </span>
+            </span>
+            <span className="font-medium tabular-nums">
+              {PRICE_ANNUAL} / {t('год', 'yr')}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/checkout?tier=lifetime')}
+            className="w-full flex justify-between items-center px-3 py-2 rounded-md border border-border-soft/60 hover:bg-surface transition-colors"
+          >
+            <span>Lifetime</span>
+            <span className="font-medium tabular-nums">
+              {PRICE_LIFETIME}
+            </span>
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate('/checkout')}
+          style={{ background: 'var(--accent, #01696F)' }}
+          className="w-full px-3 py-2 text-[13px] rounded-md text-white font-medium hover:opacity-90 transition-opacity"
+        >
+          {t('Оплатить картой', 'Pay by card')}
+        </button>
+        <p className="text-[11px] text-muted flex items-start gap-1">
+          <Info size={11} className="mt-0.5 shrink-0" />
+          {t(
+            'Оплата через ЮKassa. Пока магазин в test-режиме (prod-модерация). После оплаты автопродление можно включить в настройках подписки.',
+            'Payment via YooKassa. Store is in test mode (prod moderation). After payment you can enable auto-renewal in subscription settings.',
+          )}
+        </p>
+      </div>}
+
+      {/* ──── Альтернативные способы оплаты — скрыты для pro/lifetime ──── */}
+      {!subsLoading && !entitlement.isPaidPro && PAYMENT_METHODS.length > 0 && (
+        <details className="bg-surface-alt border border-border-soft rounded-lg">
+          <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2">
+            <ExternalLink size={14} />
+            {t('Альтернативные способы оплаты', 'Alternative payment methods')}
+          </summary>
+          <div className="px-4 pb-4 space-y-3">
+            <p className="text-[12px] text-muted">
+              {PRICE_LINE
+                ? t(
+                    `Переведите нужную сумму (${PRICE_LINE}) любым способом, скопируйте ID транзакции или хэш перевода и вставьте в форму ниже. Проверка занимает до 24 часов.`,
+                    `Transfer the required amount (${PRICE_LINE}) by any method, copy the transaction ID or transfer hash, and paste it in the form below. Review takes up to 24 hours.`,
+                  )
+                : t(
+                    'Переведите нужную сумму любым способом, скопируйте ID транзакции или хэш перевода и вставьте в форму ниже. Проверка занимает до 24 часов.',
+                    'Transfer the required amount by any method, copy the transaction ID or transfer hash, and paste it in the form below. Review takes up to 24 hours.',
+                  )}
+            </p>
+
+            {PAYMENT_METHODS.map((m) => (
+              <div key={m.key} className="border border-border-soft rounded-md p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-semibold uppercase tracking-wide">{m.label}</span>
+                  {m.linkUrl && (
+                    <a
+                      href={m.linkUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[12px] flex items-center gap-1"
+                      style={{ color: 'var(--accent, #01696F)' }}
+                    >
+                      {t('Открыть', 'Open')} <ExternalLink size={11} />
+                    </a>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="text-[11px] flex-1 bg-surface px-2 py-1 rounded font-mono break-all">
+                    {m.displayValue}
+                  </code>
+                  <button
+                    onClick={() => copyToClipboard(m.value, m.label)}
+                    className="p-1.5 rounded hover:bg-surface"
+                    title={t('Скопировать', 'Copy')}
+                  >
+                    <Copy size={12} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* ──── Форма ручной активации — свёрнута по умолчанию, скрыта для pro/lifetime ──── */}
+      {!subsLoading && !entitlement.isPaidPro && <details className="bg-surface-alt border border-border-soft rounded-lg">
+        <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2">
+          <KeyRound size={14} />
+          {t('Ручная активация', 'Manual activation')}
+        </summary>
+        <div className="px-4 pb-4 space-y-3">
+        <p className="text-[12px] text-muted">
+          {t(
+            'Отправили платёж? Оставьте заявку — админ проверит и активирует подписку.',
+            'Made a payment? Submit a request — admin will verify and activate your subscription.',
+          )}
+        </p>
+
+        <div className="space-y-2">
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('Email аккаунта', 'Account email')}
+            </span>
+            <input
+              type="text"
+              value={userEmail ?? ''}
+              disabled
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface opacity-70"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('Тариф', 'Plan')}
+            </span>
+            <select
+              value={planRequested}
+              onChange={e => setPlanRequested(e.target.value as 'monthly' | 'annual' | 'lifetime')}
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface"
+            >
+              <option value="monthly">
+                {t('Ежемесячно', 'Monthly')}{PRICE_MONTHLY ? ` — ${PRICE_MONTHLY}` : ''}
+              </option>
+              <option value="annual">
+                {t('Ежегодно', 'Annual')}{PRICE_ANNUAL ? ` — ${PRICE_ANNUAL}` : ''}
+              </option>
+              <option value="lifetime">
+                Lifetime{PRICE_LIFETIME ? ` — ${PRICE_LIFETIME}` : ''}
+              </option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('Способ оплаты', 'Payment method')}
+            </span>
+            <select
+              value={providerHint}
+              onChange={e => setProviderHint(e.target.value as any)}
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface"
+            >
+              {PAYMENT_METHODS.map((m) => (
+                <option key={m.key} value={m.key}>{m.label}</option>
+              ))}
+              <option value="other">{t('Другой', 'Other')}</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('ID транзакции / хэш перевода', 'Transaction ID / transfer hash')} *
+            </span>
+            <input
+              type="text"
+              value={txRef}
+              onChange={e => setTxRef(e.target.value)}
+              placeholder={t('например, 0xabc… или ID платежа провайдера', 'e.g. 0xabc… or provider payment ID')}
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface font-mono"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[12px] text-muted uppercase tracking-wide">
+              {t('Комментарий (необязательно)', 'Notes (optional)')}
+            </span>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={2}
+              placeholder={t('дата, сумма, время перевода…', 'date, amount, transfer time…')}
+              className="w-full mt-1 px-2 py-1.5 text-[13px] rounded-md border border-border-soft bg-surface"
+            />
+          </label>
+        </div>
+
+        <button
+          onClick={handleSubmitActivation}
+          disabled={submitting || !txRef.trim()}
+          style={{ background: 'var(--accent, #01696F)' }}
+          className="text-white px-3 py-1.5 text-[13px] rounded-md disabled:opacity-60"
+        >
+          {submitting ? t('Отправляем…', 'Submitting…') : t('Отправить заявку', 'Submit request')}
+        </button>
+        </div>
+      </details>}
+
+      {/* ──── История заявок — свёрнута по умолчанию, скрыта для pro/lifetime ──── */}
+      {!subsLoading && !entitlement.isPaidPro && <details className="bg-surface-alt border border-border-soft rounded-lg">
+        <summary className="cursor-pointer px-4 py-3 text-[14px] font-semibold flex items-center gap-2 justify-between">
+          <span className="flex items-center gap-2">
+            <Clock size={14} />
+            {t('Мои заявки', 'My requests')}
+          </span>
+          <button
+            onClick={(e) => { e.preventDefault(); void reloadRequests(); }}
+            disabled={reqLoading}
+            className="p-1 rounded hover:bg-surface"
+            title={t('Обновить', 'Refresh')}
+          >
+            <RefreshCw size={12} className={reqLoading ? 'animate-spin' : ''} />
+          </button>
+        </summary>
+        <div className="px-4 pb-4 space-y-2">
+        {requests.length === 0 && !reqLoading && (
+          <p className="text-[12px] text-muted">
+            {t('Заявок ещё нет.', 'No requests yet.')}
+          </p>
+        )}
+        {reqLoading && requests.length === 0 && (
+          <p className="text-[12px] text-muted">{t('Загрузка…', 'Loading…')}</p>
+        )}
+        {requests.length > 0 && (
+          <ul className="space-y-2">
+            {requests.map(r => (
+              <li key={r.id} className="border border-border-soft rounded-md p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-medium">
+                    {planLabelForRequest(r.plan_requested, isRu)}
+                    <span className="text-muted ml-1.5">· {r.provider_hint}</span>
+                  </span>
+                  <RequestStatusBadge status={r.status} isRu={isRu} />
+                </div>
+                <div className="text-[11px] text-muted font-mono break-all">
+                  tx: {r.tx_ref}
+                </div>
+                <div className="text-[11px] text-muted">
+                  {new Date(r.created_at).toLocaleString(isRu ? 'ru-RU' : 'en-US')}
+                </div>
+                {r.admin_notes && (
+                  <div className="text-[11px] italic pt-1 border-t border-border-soft">
+                    {r.admin_notes}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        </div>
+      </details>}
+
+      {/* v0.9.35-dev.6.6 — Admin link */}
+      {entitlement.isAdmin && (
+        <div className="pt-2 border-t border-border-soft">
+          <button
+            type="button"
+            onClick={() => navigate('/admin')}
+            className="flex items-center gap-1.5 text-[12px] text-muted hover:text-accent transition-colors"
+          >
+            <Shield size={12} />
+            {t('Администрирование', 'Administration')}
+          </button>
+        </div>
+      )}
+
+      {/* ──── Footer info ──── */}
+      <details className="text-[12px] text-muted">
+        <summary className="cursor-pointer">{t('Что даёт подписка?', 'What does the subscription include?')}</summary>
+        <ul className="mt-2 space-y-1 pl-4 list-disc">
+          <li>{t('Синхронизация задач между устройствами', 'Task sync across devices')}</li>
+          <li>{t('Календарь и напоминания', 'Calendar and reminders')}</li>
+          <li>{t('Real-time обновления', 'Real-time updates')}</li>
+          <li>{t('Приоритет в поддержке', 'Priority support')}</li>
+        </ul>
+      </details>
+    </div>
+  );
+}
+
+// Строка из таблицы activation_requests, ограниченная теми колонками,
+// что нужны UI. См. миграцию 0007_entitlements.sql.
+interface ActivationRequestRow {
+  id: string;
+  created_at: string;
+  plan_requested: 'monthly' | 'annual' | 'lifetime';
+  provider_hint: string;
+  tx_ref: string;
+  status: 'pending' | 'approved' | 'rejected';
+  admin_notes: string | null;
+}
+
+function planLabelForRequest(plan: 'monthly' | 'annual' | 'lifetime', isRu: boolean): string {
+  switch (plan) {
+    case 'monthly': return isRu ? 'Ежемесячно' : 'Monthly';
+    case 'annual': return isRu ? 'Ежегодно' : 'Annual';
+    case 'lifetime': return 'Lifetime';
+  }
+}
+
+function RequestStatusBadge({ status, isRu }: { status: 'pending' | 'approved' | 'rejected'; isRu: boolean }) {
+  const cfg = (() => {
+    switch (status) {
+      case 'pending':
+        return {
+          icon: <Clock size={11} />,
+          label: isRu ? 'На проверке' : 'Pending',
+          color: '#DA7101',
+        };
+      case 'approved':
+        return {
+          icon: <CheckCircle2 size={11} />,
+          label: isRu ? 'Одобрена' : 'Approved',
+          color: '#437A22',
+        };
+      case 'rejected':
+        return {
+          icon: <XCircle size={11} />,
+          label: isRu ? 'Отклонена' : 'Rejected',
+          color: '#A12C7B',
+        };
+    }
+  })();
+  return (
+    <span
+      className="text-[11px] font-medium px-1.5 py-0.5 rounded flex items-center gap-1"
+      style={{
+        background: `color-mix(in oklab, ${cfg.color} 15%, transparent)`,
+        color: cfg.color,
+      }}
+    >
+      {cfg.icon} {cfg.label}
+    </span>
   );
 }

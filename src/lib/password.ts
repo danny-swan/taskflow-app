@@ -70,13 +70,11 @@ export function passwordHint(ru: boolean): string {
 
 // ─── Ephemeral verify ────────────────────────────────────────────────────────
 
-const FALLBACK_URL = 'https://sejpmzrmtgcvevukggkx.supabase.co';
-const FALLBACK_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNlanBtenJtdGdjdmV2dWtnZ2t4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwNjYzNDAsImV4cCI6MjA5ODY0MjM0MH0.TXGc-JS5TyaR_egzRt71cWUB8YDaWwnMrn-zrTW-aMM';
-
-const url = (import.meta.env.VITE_SUPABASE_URL as string) || FALLBACK_URL;
-const anonKey =
-  (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || FALLBACK_ANON_KEY;
+// URL/anon key берём из env — те же, что и в глобальном supabase-клиенте.
+// Отсутствие уже обработано в `./supabase.ts` (throw на старте), здесь просто
+// предполагаем string.
+const url = import.meta.env.VITE_SUPABASE_URL as string;
+const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 /**
  * Проверяет текущий пароль пользователя, не затрагивая глобальную сессию.

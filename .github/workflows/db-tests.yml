@@ -1,0 +1,137 @@
+name: DB tests (pgTAP)
+
+# v0.9.35-dev.6.5: регрессионная защита для миграций.
+#
+# Что проверяем:
+#   1) GRANT'ы на все public.* таблицы (миграции 0010-0013).
+#   2) RLS enabled + own row visibility (не даём чужие строки).
+#   3) EXECUTE закрыт на trigger-функции (миграция 0013).
+#
+# Как работает:
+#   - Поднимаем ванильный Postgres 15 в контейнере.
+#   - Применяем supabase/tests/00_auth_shim.sql — мок auth-схемы Supabase.
+#   - Применяем миграции 0001-0013 последовательно.
+#   - Прогоняем pgTAP-тесты через pg_prove.
+#
+# Триггеры:
+#   - Любой PR/push в develop или main, затрагивающий supabase/**.
+#   - Ручной запуск через workflow_dispatch.
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/db-tests.yml'
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - 'supabase/**'
+  workflow_dispatch:
+
+jobs:
+  pgtap:
+    name: pgTAP на vanilla Postgres 15
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: taskflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: taskflow_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Добавить PGDG apt-репозиторий
+        # Ubuntu 24.04 (noble) в стандартных репах даёт только postgresql-client-16.
+        # Добавляем PGDG чтобы получить postgresql-client-15 (совпадает с сервером).
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+
+      - name: Установить psql-клиент и pgTAP-инструменты
+        run: |
+          # postgresql-client-15 — psql того же мажора что и сервер
+          # libtap-parser-sourcehandler-pgtap-perl — pg_prove-раннер
+          sudo apt-get install -y \
+            postgresql-client-15 \
+            libtap-parser-sourcehandler-pgtap-perl
+
+      - name: Установить pgTAP расширение в контейнер Postgres
+        # Расширение pgTAP не входит в базовый образ postgres:15 (Debian bookworm-slim).
+        # Ставим внутри контейнера через docker exec.
+        # В bookworm postgresql-15-pgtap есть в main репах (без PGDG).
+        run: |
+          CONTAINER_ID=$(docker ps --filter "ancestor=postgres:15" --format "{{.ID}}")
+          echo "Container: $CONTAINER_ID"
+          docker exec -u root $CONTAINER_ID bash -c '
+            apt-get update &&
+            apt-get install -y postgresql-15-pgtap
+          '
+          # Перезапускать Postgres не нужно — расширение подхватывается при CREATE EXTENSION.
+
+      - name: Проверить что Postgres доступен
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h localhost -U postgres; then
+              echo "Postgres ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres не ответил" >&2
+          exit 1
+
+      - name: Применить auth shim (мок Supabase auth-схемы)
+        run: psql -v ON_ERROR_STOP=1 -f supabase/tests/00_auth_shim.sql
+
+      - name: Применить миграции 0001-0013
+        run: |
+          for f in $(ls supabase/migrations/*.sql | sort); do
+            echo "=== Applying $f ==="
+            psql -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Проверить что миграции применились (sanity check)
+        run: |
+          psql -c "\dt public.*"
+          psql -c "SELECT count(*) AS migration_count FROM information_schema.tables WHERE table_schema='public';"
+
+      - name: Прогнать pgTAP тесты
+        # pg_prove читает тесты из указанной директории и применяет каждый файл
+        # через psql, собирая TAP-вывод. Флаг -r обходит директорию рекурсивно,
+        # но нам достаточно явно перечислить 01-03 (00_auth_shim уже применён).
+        run: |
+          pg_prove --verbose \
+            supabase/tests/01_grants_test.sql \
+            supabase/tests/02_rls_test.sql \
+            supabase/tests/03_functions_test.sql \
+            supabase/tests/04_wave2_test.sql \
+            supabase/tests/05_wave4_test.sql \
+            supabase/tests/06_wave4_rate_limit_test.sql
