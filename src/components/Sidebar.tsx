@@ -60,11 +60,6 @@ export function Sidebar() {
         <div className="text-[10px] text-faint mt-0.5 ml-[2px] tracking-wider tabular mono">v{__APP_VERSION__}</div>
       </div>
 
-      {/* v0.9.35-dev.3: pending sync indicator.
-          Виден в dev-сборке всегда (для отладки sync-слоя), в prod — только если count > 0.
-          В dev.4 к этому чипу будет привязан realtime-статус push'а. */}
-      <PendingSyncChip />
-
       {/* v0.9.35-dev.6: баннер статуса подписки (trial / free-CTA / expired). */}
       <SubscriptionBanner />
 
@@ -90,6 +85,12 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      {/* v0.9.35-dev.3: pending sync indicator.
+          Виден в dev-сборке всегда (для отладки sync-слоя), в prod — только если count > 0.
+          В dev.4 к этому чипу будет привязан realtime-статус push'а.
+          Размещён внизу (под nav), чтобы появление/исчезновение чипа не сдвигало пункты навигации. */}
+      <PendingSyncChip />
 
       {/* Footer: language + theme */}
       <div className="p-2.5 border-t border-border-soft flex items-center gap-2 bg-[var(--surface)]">
