@@ -58,6 +58,11 @@
 
 import { TIER_PRICING, verifyPaymentAmount, isRecurringTier } from '../_shared/pricing.ts'
 import { assessVerifiedPayment } from '../_shared/yookassa-verify.ts'
+import {
+  checkRateLimit,
+  getClientIp as getTrustedClientIp,
+  rateLimitResponse,
+} from '../_shared/rate-limit.ts'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -227,6 +232,19 @@ export const handler = async (req: Request): Promise<Response> => {
 
     if (payload.type !== 'notification' || !payload.event || !payload.object?.id) {
       return json({ error: 'Malformed ЮKassa notification' }, 400)
+    }
+
+    // ─── N13. Rate limiting (per-IP) ─────────────────────────────────────────
+    // Проверяем ПОСЛЕ базовой валидации payload, но ДО тяжёлой обработки
+    // (dual-verify GET /v3/payments + запись в БД). 60 req/min на IP —
+    // достаточно для легитимных пачек уведомлений ЮKassa (у которой один IP),
+    // но отсекает флуд. fail-open встроен в checkRateLimit: если лимитер упал,
+    // легитимный webhook НЕ теряется. Доверяем cf-connecting-ip / x-real-ip
+    // (не x-forwarded-for — подделываем, см. N8).
+    const rlIp = getTrustedClientIp(req)
+    const webhookLimit = await checkRateLimit(`payment-webhook:ip:${rlIp}`, 60, 60)
+    if (!webhookLimit.allowed) {
+      return rateLimitResponse(webhookLimit.retryAfter, CORS_HEADERS)
     }
 
     const paymentId = payload.object.id

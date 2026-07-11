@@ -18,6 +18,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 import { corsHeaders } from '../_shared/cors.ts'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '../_shared/rate-limit.ts'
 
 const TRIAL_DAYS = 14
 
@@ -59,6 +60,22 @@ Deno.serve(async (req) => {
     }
     const user = userData.user
     const userId = user.id
+
+    // ─── N13. Rate limiting ──────────────────────────────────────────────────
+    // Trial активируется один раз на аккаунт, поэтому лимиты жёсткие: 3 req/hour
+    // на пользователя и 5 req/hour на IP. Проверяем ПОСЛЕ резолва userId.
+    // fail-open встроен в checkRateLimit.
+    const clientIp = getClientIp(req)
+    const [userLimit, ipLimit] = await Promise.all([
+      checkRateLimit(`start-trial:user:${userId}`, 3, 3600),
+      checkRateLimit(`start-trial:ip:${clientIp}`, 5, 3600),
+    ])
+    if (!userLimit.allowed) {
+      return rateLimitResponse(userLimit.retryAfter, CORS_HEADERS)
+    }
+    if (!ipLimit.allowed) {
+      return rateLimitResponse(ipLimit.retryAfter, CORS_HEADERS)
+    }
 
     // ─── 3. Admin client для read/write user_entitlements ─────────────────
     const admin = createClient(supabaseUrl, serviceRoleKey, {

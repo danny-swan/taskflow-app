@@ -55,6 +55,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 import { corsHeaders } from '../_shared/cors.ts'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '../_shared/rate-limit.ts'
 
 // ─── Прайс-лист (единственный источник истины в этой функции) ────────────────
 // В случае изменения — синхронизировать с:
@@ -155,6 +156,22 @@ export const handler = async (req: Request): Promise<Response> => {
     const email = user.email
     if (!email) {
       return json({ error: 'User has no email — cannot issue receipt' }, 400)
+    }
+
+    // ─── N13. Rate limiting ──────────────────────────────────────────────────
+    // Проверяем ПОСЛЕ резолва userId (нужен per-user ключ). Два независимых
+    // лимита: 10 req/min на пользователя и 30 req/min на IP. Любое превышение
+    // → 429. fail-open встроен в checkRateLimit (ошибка лимитера не блокирует).
+    const clientIp = getClientIp(req)
+    const [userLimit, ipLimit] = await Promise.all([
+      checkRateLimit(`create-payment:user:${user.id}`, 10, 60),
+      checkRateLimit(`create-payment:ip:${clientIp}`, 30, 60),
+    ])
+    if (!userLimit.allowed) {
+      return rateLimitResponse(userLimit.retryAfter, CORS_HEADERS)
+    }
+    if (!ipLimit.allowed) {
+      return rateLimitResponse(ipLimit.retryAfter, CORS_HEADERS)
     }
 
     // ─── 3. Валидация payload ────────────────────────────────────────────────
