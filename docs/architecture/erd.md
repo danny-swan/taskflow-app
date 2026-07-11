@@ -1,8 +1,8 @@
 # TaskFlow — ERD и Data Dictionary (живой документ)
 
 > Сгенерировано напрямую из живой схемы Supabase-проекта `taskflow` (`sejpmzrmtgcvevukggkx`, PostgreSQL 17.6, eu-central-1) — не из миграций и не из памяти.
-> Дата снимка: 10.07.2026. Число строк по таблицам — снимок на эту дату, не поддерживается автоматически.
-> **Версия схемы / последняя миграция: `0020_wave2_security_hardening`** (Wave 2, безопасность — ПРИМЕНЕНА НА ПРОД 2026-07-10). Снимок снят с живой схемы ПОСЛЕ применения 0020.
+> Дата снимка: 10.07.2026 (базовый); **дополнено вручную 11.07.2026** секцией `rate_limits` и историей миграций по Wave 3/4 (0021–0024) — эти правки внесены по факту миграций, без полной регенерации из живой схемы. Число строк по таблицам — снимок на 10.07, не поддерживается автоматически.
+> **Версия схемы / последняя миграция: `0024_wave4_rate_limits`** (Wave 4 PR-B, rate limiting — ПРИМЕНЕНА НА ПРОД 2026-07-11). На проде применён полный набор `0001`–`0024`.
 > **Правило обновления:** после каждой миграции/изменения схемы — перегенерировать этот файл (```list_tables(verbose=true)``` + ```generate_typescript_types``` через Supabase-коннектор), не редактировать вручную "по памяти".
 
 Компаньон-файл с точными TypeScript-типами (авто-сгенерирован, 1:1 со схемой): `taskflow_schema_types.ts` — использовать в коде вместо ручных интерфейсов, чтобы фронт/эджи не расходились с реальной БД (это и есть корень багов F1-F3).
@@ -44,6 +44,8 @@ erDiagram
     sync_task_templates ..o{ sync_tags : "tag_id — НЕ FK"
     sync_overdue_events ..o{ sync_tasks : "task_id — НЕ FK"
 ```
+
+> **`rate_limits`** (Wave 4, N13) намеренно **не связана** ни с `auth.users`, ни с другими таблицами — это серверный счётчик частоты запросов с текстовым ключом (`user:<id>:<endpoint>` / `ip:<addr>:<endpoint>`), не бизнес-сущность. Поэтому в ER-диаграмме её нет; описание — в разделе «Инфраструктура: rate limiting» ниже.
 
 **Важно про пунктирные связи (`..o{`):** `status_id`, `tag_id`, `task_id` — это soft-references. На уровне Postgres FK-constraint отсутствует (проверено по `list_tables` — в constraints их нет). Целостность держится только на коде клиента/edge-функций. Это ещё один пункт в "критические взаимосвязи" — при рефакторинге синка легко создать сироту (task с несуществующим status_id), и БД это не поймает, только приложение (см. `DeferRowError` в dev.6.10.3).
 
@@ -178,6 +180,30 @@ PK = `user_id` (1:1 с пользователем, не история).
 
 ---
 
+## 5a. Инфраструктура: rate limiting (Wave 4, N13)
+
+### `rate_limits` — серверный счётчик частоты запросов
+Добавлена миграцией `0024_wave4_rate_limits` (ПРИМЕНЕНА НА ПРОД 2026-07-11). Не бизнес-сущность и не связана FK ни с одной таблицей — общий счётчик fixed-window для stateless многоинстансных edge-функций. См. ADR 0004.
+
+| Колонка | Тип | Null | Default | Комментарий |
+|---|---|---|---|---|
+| key | text (PK) | нет | — | ключ бакета: `user:<uuid>:<endpoint>` или `ip:<addr>:<endpoint>` |
+| window_start | timestamptz | нет | now() | начало текущего окна (fixed window) |
+| count | integer | нет | 0 | число запросов в окне; RPC инкрементит атомарно |
+| expires_at | timestamptz | нет | — | конец окна; cron удаляет строки с `expires_at < now()` |
+
+**Индекс:** `idx_rate_limits_expires_at` на `(expires_at)` — под cleanup-DELETE.
+
+**RLS/привилегии:** RLS включён **без политик** (deny-by-default) + явный `REVOKE ALL FROM anon, authenticated`. `GRANT SELECT/INSERT/UPDATE/DELETE` только `service_role`. Таблица чисто серверная — клиенты к ней не ходят.
+
+**RPC `check_rate_limit(p_key text, p_max_requests integer, p_window_seconds integer)`** → `TABLE(allowed boolean, retry_after integer)`. Единственная точка входа для edge-функций. `SECURITY DEFINER` + `SET search_path = public, pg_temp` (N18), `EXECUTE` только `service_role`. Один UPSERT `INSERT ... ON CONFLICT (key) DO UPDATE` под row-lock делает логику окна атомарно (нет строки → count=1; окно истекло → сброс; окно активно → count+1). При превышении возвращает `allowed=false` + `retry_after` (секунды).
+
+**Cleanup:** cron-job `rate-limits-cleanup` (`*/5 * * * *`, pg_cron) — `DELETE ... WHERE expires_at < now()`. Создаётся идемпотентно (unschedule+schedule) с двухшаговым guard по pg_cron (как в 0015).
+
+**Использование (edge, после auth):** `create-payment` v18 (user 10/60s + IP 30/60s), `start-trial` v10 (user 3/3600s + IP 5/3600s), `payment-webhook` v26 (IP 60/60s, после валидации payload до dual-verify). fail-open by design: сбой RPC → запрос пропускается.
+
+---
+
 ## 6. Views (после Wave 2 — `security_invoker=on`)
 
 Обе view после миграции `0020` (применена на прод 2026-07-10) имеют `reloptions security_invoker=on` (исполняются с правами вызывающего, т.е. под его RLS) **и** `REVOKE ALL FROM anon, authenticated` (прямого `SELECT` через PostgREST у обычных ролей нет).
@@ -200,10 +226,10 @@ PK = `user_id` (1:1 с пользователем, не история).
 
 **Итог Wave 2:** RPC-утечка email закрыта — обычный залогиненный юзер получает `Forbidden: admin only`, доступ к email имеет только админ (подтверждено на живой схеме 2026-07-10 и pgTAP-тестом `tests/04_wave2_test.sql`).
 
-Дополнительно замечено линтером (не критично, но стоит знать):
-- `function_search_path_mutable` — у `tg_payment_methods_touch_updated_at` не зафиксирован `search_path` (та же категория риска, что и вокруг GRANT-инцидентов).
-- `extension_in_public` — `pg_net` установлен в схему `public`, а не в отдельную.
-- `auth_leaked_password_protection` выключена (проверка паролей по HaveIBeenPwned) — быстро включить в Auth-настройках, бесплатно и без риска.
+Дополнительно замечено линтером (статус после Wave 4, 2026-07-11):
+- `function_search_path_mutable` — **N18 ✅ ИСПРАВЛЕНО** (миграция `0022`, на проде 2026-07-11): `SET search_path` зафиксирован у public-функций без явного search_path (в т.ч. `tg_payment_methods_touch_updated_at`).
+- `extension_in_public` — **N17 🟡 ЧАСТИЧНО** (миграция `0023`, на проде 2026-07-11): идемпотентная попытка `ALTER EXTENSION pg_net SET SCHEMA extensions` не состоялась (non-relocatable) — на проде pg_net **остался в `public`**. Риска нет (вызываемый API в схеме `net`), но отклонение от идеала — known-limitation.
+- `auth_leaked_password_protection` — **N16 🟡 PENDING** (Wave 4): код/конфиг готовы + ops-гайд `docs/ops/supabase-auth-hardening.md`, но тумблер включается ВРУЧНУЮ в Supabase Dashboard (Auth → Providers → Email); на 2026-07-11 ещё не включён.
 
 ---
 
@@ -224,7 +250,7 @@ PK = `user_id` (1:1 с пользователем, не история).
 | Extension | Schema | Версия | Назначение |
 |---|---|---|---|
 | pg_cron | pg_catalog | 1.6.4 | планировщик — на нём висит `renew-subscription` cron |
-| pg_net | public ⚠️ | 0.20.3 | async HTTP из БД — см. finding выше про public-схему |
+| pg_net | public ⚠️ | 0.20.3 | async HTTP из БД. **N17 🟡:** миграция `0023` (Wave 4) пыталась перенести в схему `extensions`, но перенос не состоялся (non-relocatable) — на проде осталось в `public`. Вызываемый API живёт в схеме `net` (не трогали) |
 | pgcrypto | extensions | 1.3 | криптофункции |
 | uuid-ossp | extensions | 1.1 | генерация uuid (`gen_random_uuid()` использует его косвенно) |
 | supabase_vault | vault | 0.3.1 | секреты |
@@ -233,7 +259,7 @@ PK = `user_id` (1:1 с пользователем, не история).
 
 ---
 
-## 10. История миграций (по факту в БД, 17 применённых)
+## 10. История миграций (по факту на проде — полный набор `0001`–`0024`)
 
 | Версия (timestamp) | Название |
 |---|---|
@@ -254,6 +280,10 @@ PK = `user_id` (1:1 с пользователем, не история).
 | 20260708134841 | pg_cron_renew_subscription |
 | 20260708141740 | 0019_cron_new_apikey_auth |
 | 0020 (применена на прод 2026-07-10) | 0020_wave2_security_hardening — **Wave 2:** `security_invoker=on` + REVOKE на view `admin_users_summary`/`sync_status_summary` (N4/N5); `WITH CHECK` для `profiles_update_own` (N12); admin-гейт `is_admin_user()` в `get_users_emails` (N15, см. ADR 0002) |
+| 0021 (применена на прод 2026-07-10) | 0021_revoke_default_privileges_footgun — **Wave 3:** N6 — откат `ALTER DEFAULT PRIVILEGES` из 0010/0011; будущие таблицы больше не получают a/r/w автоматически |
+| 0022 (применена на прод 2026-07-11) | 0022_wave4_fix_function_search_paths — **Wave 4 PR-A:** N18 — фиксация `SET search_path` у public-функций без явного search_path |
+| 0023 (применена на прод 2026-07-11, частично) | 0023_wave4_move_pg_net — **Wave 4 PR-A:** N17 — попытка переноса pg_net в схему `extensions`; на проде осталось в `public` (non-relocatable, known-limitation) |
+| 0024 (применена на прод 2026-07-11) | 0024_wave4_rate_limits — **Wave 4 PR-B:** N13 — таблица `rate_limits` + RPC `check_rate_limit` + cron `rate-limits-cleanup`; RLS deny-by-default (см. ADR 0004, раздел 5a). Применена в 2 части (pg_cron уже установлен) |
 
 ---
 
