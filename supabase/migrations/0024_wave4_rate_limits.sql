@@ -17,8 +17,9 @@
 --   RLS включён без политик (deny-by-default), плюс явный REVOKE для anon/auth.
 --
 -- CI/vanilla Postgres: таблица и функция создаются везде. Cron-cleanup обёрнут
--- в guard по pg_available_extensions (как 0015/0018/0019) — на vanilla PG без
--- pg_cron блок становится no-op с NOTICE, миграция проходит в db-tests.yml.
+-- в двухшаговый guard (как 0015): pg_available_extensions → CREATE EXTENSION IF
+-- NOT EXISTS → перепроверка pg_extension перед обращением к cron.*. На vanilla
+-- PG без pg_cron блок — no-op с NOTICE, миграция проходит в db-tests.yml.
 -- ============================================================================
 
 -- ─── 1. Таблица счётчиков ────────────────────────────────────────────────────
@@ -90,9 +91,15 @@ GRANT EXECUTE ON FUNCTION public.check_rate_limit(text,integer,integer) TO servi
 -- Каждые 5 минут удаляем истёкшие строки, чтобы таблица не пухла. Идемпотентно:
 -- сначала снимаем job с этим именем (если есть), затем создаём заново. Не трогаем
 -- существующие cron-джобы (taskflow-renew-subscriptions и т.п.).
+-- Guard в два шага, как в 0015: (1) available (есть на диске) ≠ installed;
+-- (2) фактическая установка через pg_extension ПЕРЕД обращением к cron.*.
+-- Иначе на инстансе, где pg_cron доступен, но CREATE EXTENSION ещё не
+-- выполнялся (нет схемы `cron`), голый cron.schedule упал бы
+-- «schema "cron" does not exist» и уронил миграцию.
 DO $mig$
 DECLARE
   has_pg_cron boolean;
+  cron_installed boolean;
 BEGIN
   SELECT exists(SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron') INTO has_pg_cron;
 
@@ -101,6 +108,18 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Идемпотентная установка (в норме уже сделана миграцией 0015; дубль-страховка
+  -- на случай, если 0015 вышла раньше своего CREATE EXTENSION — напр. pg_net был
+  -- недоступен и 0015 вернулась до установки pg_cron).
+  EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA cron';
+
+  SELECT exists(SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') INTO cron_installed;
+  IF NOT cron_installed THEN
+    RAISE NOTICE '[migration 0024] pg_cron available but not installed — skipping rate-limits cleanup schedule.';
+    RETURN;
+  END IF;
+
+  -- Снимаем прежний job с этим именем (если был) — идемпотентно, без дублей.
   BEGIN
     PERFORM cron.unschedule('rate-limits-cleanup');
   EXCEPTION WHEN OTHERS THEN
