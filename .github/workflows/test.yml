@@ -17,6 +17,7 @@ on:
     branches:
       - main
       - develop
+      - feat/workspaces
   workflow_dispatch:
 
 jobs:
