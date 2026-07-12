@@ -68,13 +68,17 @@ SELECT lives_ok(
        WHERE id = 'a1a1a1a1-1111-1111-1111-111111111111'::uuid $q$,
   'N12: user1 может обновить свой профиль (id не меняется)');
 
--- Попытка сменить id на чужой (существующий в auth.users) — блокируется WITH CHECK.
-SELECT throws_ok(
-  $q$ UPDATE public.profiles SET id = 'a2a2a2a2-2222-2222-2222-222222222222'::uuid
-       WHERE id = 'a1a1a1a1-1111-1111-1111-111111111111'::uuid $q$,
-  '42501',
-  NULL,
-  'N12: user1 НЕ может сменить id на чужой (WITH CHECK блокирует)');
+-- Попытка сменить id на чужой (существующий в auth.users). С миграции 0026
+-- неизменяемость id обеспечивает guard-триггер profiles_guard_immutable: он
+-- BEFORE UPDATE молча возвращает old.id, поэтому UPDATE не бросает 42501, но и
+-- id не меняется — строка по-прежнему принадлежит user1.
+UPDATE public.profiles SET id = 'a2a2a2a2-2222-2222-2222-222222222222'::uuid
+  WHERE id = 'a1a1a1a1-1111-1111-1111-111111111111'::uuid;
+SELECT is(
+  (SELECT count(*)::int FROM public.profiles
+     WHERE id = 'a1a1a1a1-1111-1111-1111-111111111111'::uuid),
+  1,
+  'N12: user1 НЕ может сменить id — guard возвращает прежний id');
 
 RESET ROLE;
 

@@ -18,6 +18,7 @@ import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { useEntitlement, submitActivationRequest, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, changePlan, type PaymentMethodRow } from '../lib/entitlements';
 import { supabase } from '../lib/supabase';
+import { ProfileBlock } from '../components/ProfileBlock';
 
 type Sub = 'general' | 'account' | 'subscription' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
 
@@ -2205,6 +2206,9 @@ function AccountSection() {
           </div>
         )}
       </div>
+
+      {/* v1.0.x: кастомизация профиля — публичный ID, ник, аватар, «о себе». */}
+      <ProfileBlock userId={user.id} isRu={isRu} />
 
       {/* v0.9.14: смена пароля и email — только для email-провайдера. Google-юзеры меняют в своём аккаунте Google. */}
       {isEmailProvider && (
