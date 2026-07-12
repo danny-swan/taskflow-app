@@ -221,6 +221,20 @@ export async function syncNow(): Promise<SyncResult> {
     // 3. Регистрируем устройство (idempotent).
     await ensureDeviceRegistered(userId, clientId);
 
+    // 3.5. Согласование personal-пространства (Wave A, PR-2).
+    //
+    // Локально-only база (создана без входа) держит personal-ws под placeholder-id
+    // `ws_local`. Перед первым pull/push нужно переименовать все локальные ссылки
+    // `ws_local` → детерминированный `ws_<uid>` (совпадающий с серверным
+    // backfill'ом 0027), иначе строки не склеятся по PK. Идемпотентно и дёшево:
+    // если placeholder'а уже нет — быстрый no-op. Ошибки не должны валить sync.
+    try {
+      const { reconcilePersonalWorkspace } = await import('./workspace');
+      reconcilePersonalWorkspace(userId);
+    } catch (e) {
+      logger.warn('[sync/orchestrator] reconcilePersonalWorkspace failed:', e);
+    }
+
     // 4. Первый pull — забираем изменения из облака.
     setState({ status: 'pulling', lastSyncedAt: currentState.lastSyncedAt, lastError: null });
     let pullResult: PullResult | null = null;

@@ -93,15 +93,15 @@ vi.mock('../supabase', () => ({
           return Promise.resolve({ error: null });
         },
         select() {
-          return {
-            eq: () => ({
-              gt: () => ({
-                order: () => ({
-                  limit: async () => ({ data: selectData[table] ?? [], error: null }),
-                }),
+          const chain = {
+            gt: () => ({
+              order: () => ({
+                limit: async () => ({ data: selectData[table] ?? [], error: null }),
               }),
             }),
           };
+          // Скоуп-фильтр: user_id-таблицы через .eq, ws_settings через .in.
+          return { eq: () => chain, in: () => chain };
         },
       };
     },

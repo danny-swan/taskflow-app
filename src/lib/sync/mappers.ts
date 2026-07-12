@@ -31,12 +31,14 @@ export interface LocalTaskRow {
   deleted_at: string | null;
   version: number;
   client_id: string | null;
+  workspace_id: string;
 }
 
 /** Payload для sync_tasks в Supabase (integer'ы заменены на uuid'ы). */
 export interface CloudTaskPayload {
   id: string;                    // uuid задачи
   user_id: string;               // uuid из auth
+  workspace_id: string;          // ws_<uid> (или иное пространство)
   title: string;
   comment: string;
   status_id: string | null;      // uuid статуса
@@ -56,42 +58,58 @@ export interface CloudTaskPayload {
 /**
  * Резолвит локальный status_id (int) → uuid статуса.
  * Возвращает null если статус не найден или без uuid (странная база).
+ *
+ * Если передан workspaceId — поиск ограничен этим пространством (иначе задача
+ * из одного ws могла бы подхватить uuid статуса другого ws). В Wave A ws один,
+ * поэтому фильтр эквивалентен старому поведению, но код готов к shared (Wave B).
  */
-export function resolveStatusUuid(statusId: number): string | null {
-  const row = db.get<{ uuid: string | null }>(
-    'SELECT uuid FROM statuses WHERE id=?',
-    [statusId],
-  );
+export function resolveStatusUuid(statusId: number, workspaceId?: string | null): string | null {
+  const row = workspaceId
+    ? db.get<{ uuid: string | null }>(
+        'SELECT uuid FROM statuses WHERE id=? AND workspace_id=?',
+        [statusId, workspaceId],
+      )
+    : db.get<{ uuid: string | null }>('SELECT uuid FROM statuses WHERE id=?', [statusId]);
   return row?.uuid ?? null;
 }
 
-/** Резолвит локальный tag_id (int) → uuid тега. NULL → NULL. */
-export function resolveTagUuid(tagId: number | null): string | null {
+/** Резолвит локальный tag_id (int) → uuid тега. NULL → NULL. Опц. фильтр по ws. */
+export function resolveTagUuid(tagId: number | null, workspaceId?: string | null): string | null {
   if (tagId === null || tagId === undefined) return null;
-  const row = db.get<{ uuid: string | null }>(
-    'SELECT uuid FROM tags WHERE id=?',
-    [tagId],
-  );
+  const row = workspaceId
+    ? db.get<{ uuid: string | null }>(
+        'SELECT uuid FROM tags WHERE id=? AND workspace_id=?',
+        [tagId, workspaceId],
+      )
+    : db.get<{ uuid: string | null }>('SELECT uuid FROM tags WHERE id=?', [tagId]);
   return row?.uuid ?? null;
 }
 
-/** Резолвит uuid статуса → локальный id. NULL/несуществующий → первый видимый статус. */
-export function resolveStatusIdByUuid(uuid: string | null): number | null {
+/**
+ * Резолвит uuid статуса → локальный id. NULL/несуществующий → null.
+ * Опц. workspaceId ограничивает поиск пространством задачи (защита от подхвата
+ * статуса чужого ws при коллизиях; в Wave A ws один).
+ */
+export function resolveStatusIdByUuid(uuid: string | null, workspaceId?: string | null): number | null {
   if (!uuid) return null;
-  const row = db.get<{ id: number }>(
-    'SELECT id FROM statuses WHERE uuid=? AND deleted_at IS NULL',
-    [uuid],
-  );
+  const row = workspaceId
+    ? db.get<{ id: number }>(
+        'SELECT id FROM statuses WHERE uuid=? AND workspace_id=? AND deleted_at IS NULL',
+        [uuid, workspaceId],
+      )
+    : db.get<{ id: number }>('SELECT id FROM statuses WHERE uuid=? AND deleted_at IS NULL', [uuid]);
   return row?.id ?? null;
 }
 
-/** Резолвит uuid тега → локальный id. NULL → NULL. */
-export function resolveTagIdByUuid(uuid: string | null): number | null {
+/** Резолвит uuid тега → локальный id. NULL → NULL. Опц. фильтр по ws. */
+export function resolveTagIdByUuid(uuid: string | null, workspaceId?: string | null): number | null {
   if (!uuid) return null;
-  const row = db.get<{ id: number }>(
-    'SELECT id FROM tags WHERE uuid=? AND deleted_at IS NULL',
-    [uuid],
-  );
+  const row = workspaceId
+    ? db.get<{ id: number }>(
+        'SELECT id FROM tags WHERE uuid=? AND workspace_id=? AND deleted_at IS NULL',
+        [uuid, workspaceId],
+      )
+    : db.get<{ id: number }>('SELECT id FROM tags WHERE uuid=? AND deleted_at IS NULL', [uuid]);
   return row?.id ?? null;
 }
 
@@ -107,10 +125,11 @@ export function taskToCloudPayload(
   return {
     id: row.uuid,
     user_id: userId,
+    workspace_id: row.workspace_id,
     title: row.title,
     comment: row.comment,
-    status_id: resolveStatusUuid(row.status_id),
-    tag_id: resolveTagUuid(row.tag_id),
+    status_id: resolveStatusUuid(row.status_id, row.workspace_id),
+    tag_id: resolveTagUuid(row.tag_id, row.workspace_id),
     start_date: row.start_date,
     deadline: row.deadline,
     finish_date: row.finish_date,
@@ -141,12 +160,14 @@ export interface LocalStatusRow {
   deleted_at: string | null;
   version: number;
   client_id: string | null;
+  workspace_id: string;
 }
 
 /** Payload для sync_statuses. */
 export interface CloudStatusPayload {
   id: string;
   user_id: string;
+  workspace_id: string;
   name: string;
   color: string;
   behavior: string;
@@ -170,6 +191,7 @@ export function statusToCloudPayload(
   return {
     id: row.uuid,
     user_id: userId,
+    workspace_id: row.workspace_id,
     name: row.name,
     color: row.color,
     behavior: row.behavior,
@@ -198,12 +220,14 @@ export interface LocalTagRow {
   deleted_at: string | null;
   version: number;
   client_id: string | null;
+  workspace_id: string;
 }
 
 /** Payload для sync_tags. */
 export interface CloudTagPayload {
   id: string;
   user_id: string;
+  workspace_id: string;
   name: string;
   color: string;
   sort_order: number;
@@ -222,6 +246,7 @@ export function tagToCloudPayload(
   return {
     id: row.uuid,
     user_id: userId,
+    workspace_id: row.workspace_id,
     name: row.name,
     color: row.color,
     sort_order: row.sort_order,
@@ -248,12 +273,14 @@ export interface LocalTemplateRow {
   deleted_at: string | null;
   version: number;
   client_id: string | null;
+  workspace_id: string;
 }
 
 /** Payload для sync_task_templates. */
 export interface CloudTemplatePayload {
   id: string;
   user_id: string;
+  workspace_id: string;
   name: string;
   title: string;
   comment: string;
@@ -275,11 +302,12 @@ export function templateToCloudPayload(
   return {
     id: row.uuid,
     user_id: userId,
+    workspace_id: row.workspace_id,
     name: row.name,
     title: row.title,
     comment: row.comment,
-    status_id: row.status_id !== null ? resolveStatusUuid(row.status_id) : null,
-    tag_id: resolveTagUuid(row.tag_id),
+    status_id: row.status_id !== null ? resolveStatusUuid(row.status_id, row.workspace_id) : null,
+    tag_id: resolveTagUuid(row.tag_id, row.workspace_id),
     sort_order: row.sort_order,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -313,12 +341,14 @@ export interface LocalOverdueEventRow {
   deleted_at: string | null;
   version: number;
   client_id: string | null;
+  workspace_id: string;
 }
 
 /** Payload для sync_overdue_events. */
 export interface CloudOverdueEventPayload {
   id: string;
   user_id: string;
+  workspace_id: string;
   task_id: string;             // uuid задачи
   deadline_snapshot: string;
   event_date: string;
@@ -357,6 +387,7 @@ export function overdueEventToCloudPayload(
   return {
     id: row.uuid,
     user_id: userId,
+    workspace_id: row.workspace_id,
     task_id: resolveTaskUuid(row.task_id),
     deadline_snapshot: row.deadline_snapshot,
     event_date: row.event_date,
@@ -387,12 +418,14 @@ export interface LocalHoldPeriodRow {
   deleted_at: string | null;
   version: number;
   client_id: string | null;
+  workspace_id: string;
 }
 
 /** Payload для sync_task_hold_periods. */
 export interface CloudHoldPeriodPayload {
   id: string;
   user_id: string;
+  workspace_id: string;
   task_id: string;             // uuid задачи
   started_at: string;
   ended_at: string | null;
@@ -411,6 +444,7 @@ export function holdPeriodToCloudPayload(
   return {
     id: row.uuid,
     user_id: userId,
+    workspace_id: row.workspace_id,
     task_id: resolveTaskUuid(row.task_id),
     started_at: row.started_at,
     ended_at: row.ended_at,
@@ -422,11 +456,171 @@ export function holdPeriodToCloudPayload(
   };
 }
 
+// ─── workspaces / workspace_members / workspace_settings ────────────────────
+//
+// Три новые ws-сущности (Wave A PR-2). Пространство и членство — «родители» для
+// всех прочих sync-таблиц (задача/статус ссылаются на workspace_id), поэтому в
+// PUSH_ORDER идут первыми. Поля — строго как в 0027 (сервер) и v11 (локально).
+//
+// Особенности контракта относительно шести старых таблиц:
+//   * sync_workspaces имеет собственный id (== ws_<uid>) + user_id + owner_id
+//     (в Wave A user_id == owner_id). Локально нет колонки user_id — берём
+//     owner_id (или переданный userId как fallback).
+//   * sync_workspace_settings НЕ имеет колонок id и user_id: PK = (workspace_id,
+//     key). Поэтому upsert идёт onConflict 'workspace_id,key', а pull скоупится
+//     по workspace_id (не по user_id). Локальный uuid используется только как
+//     ключ outbox/fetchLocal.
+
+/** Локальная строка пространства. */
+export interface LocalWorkspaceRow {
+  id: number;
+  uuid: string;                  // = серверный sync_workspaces.id (ws_<uid>)
+  name: string;
+  kind: string;
+  owner_id: string | null;       // uuid владельца
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  version: number;
+  client_id: string | null;
+}
+
+/** Payload для sync_workspaces. */
+export interface CloudWorkspacePayload {
+  id: string;
+  user_id: string;
+  owner_id: string;
+  name: string;
+  kind: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  version: number;
+  client_id: string;
+}
+
+export function workspaceToCloudPayload(
+  row: LocalWorkspaceRow,
+  userId: string,
+  clientId: string,
+): CloudWorkspacePayload {
+  const owner = row.owner_id ?? userId;
+  return {
+    id: row.uuid,
+    user_id: owner,            // Wave A: владелец == пользователь
+    owner_id: owner,
+    name: row.name,
+    kind: row.kind,
+    sort_order: row.sort_order,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    deleted_at: row.deleted_at,
+    version: row.version,
+    client_id: row.client_id ?? clientId,
+  };
+}
+
+/** Локальная строка членства. */
+export interface LocalMemberRow {
+  id: number;
+  uuid: string;
+  workspace_id: string;
+  user_id: string | null;
+  role: string;
+  invited_by: string | null;
+  joined_at: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  version: number;
+  client_id: string | null;
+}
+
+/** Payload для sync_workspace_members. */
+export interface CloudMemberPayload {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  role: string;
+  invited_by: string | null;
+  joined_at: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  version: number;
+  client_id: string;
+}
+
+export function memberToCloudPayload(
+  row: LocalMemberRow,
+  userId: string,
+  clientId: string,
+): CloudMemberPayload {
+  return {
+    id: row.uuid,
+    workspace_id: row.workspace_id,
+    user_id: row.user_id ?? userId,
+    role: row.role,
+    invited_by: row.invited_by,
+    joined_at: row.joined_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    deleted_at: row.deleted_at,
+    version: row.version,
+    client_id: row.client_id ?? clientId,
+  };
+}
+
+/** Локальная строка настройки пространства. */
+export interface LocalSettingRow {
+  id: number;
+  uuid: string | null;
+  workspace_id: string;
+  key: string;
+  value: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  version: number;
+  client_id: string | null;
+}
+
+/** Payload для sync_workspace_settings (PK = workspace_id+key, без id/user_id). */
+export interface CloudSettingPayload {
+  workspace_id: string;
+  key: string;
+  value: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  version: number;
+  client_id: string;
+}
+
+export function settingToCloudPayload(
+  row: LocalSettingRow,
+  _userId: string,
+  clientId: string,
+): CloudSettingPayload {
+  return {
+    workspace_id: row.workspace_id,
+    key: row.key,
+    value: row.value,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    deleted_at: row.deleted_at,
+    version: row.version,
+    client_id: row.client_id ?? clientId,
+  };
+}
+
 /**
  * Табличная информация для push цикла — как читать локальную строку и
  * конвертировать её в payload. Порядок в PUSH_ORDER важен: сначала parent'ы
- * (statuses/tags), потом children (tasks/templates), потом append-only
- * (overdue_events).
+ * (workspaces/members → statuses/tags), потом children (tasks/templates), потом
+ * append-only (overdue_events).
  */
 export interface TableSpec<L = any, C = any> {
   /** Имя таблицы в outbox (совпадает с локальной таблицей). */
@@ -437,6 +631,14 @@ export interface TableSpec<L = any, C = any> {
   fetchLocal: (uuid: string) => L | null;
   /** Конвертация локальной строки в облачный payload. */
   toCloud: (row: L, userId: string, clientId: string) => C;
+  /** Колонка(и) конфликта для upsert. По умолчанию 'id'. */
+  onConflict?: string;
+  /**
+   * Как скоупить pull. 'user_id' (по умолчанию) — WHERE user_id = <me>.
+   * 'workspace_id' — WHERE workspace_id IN (<мои ws>) (для таблиц без user_id,
+   * напр. sync_workspace_settings).
+   */
+  pullScope?: 'user_id' | 'workspace_id';
 }
 
 export const TASKS_SPEC: TableSpec<LocalTaskRow, CloudTaskPayload> = {
@@ -481,13 +683,41 @@ export const HOLD_PERIODS_SPEC: TableSpec<LocalHoldPeriodRow, CloudHoldPeriodPay
   toCloud: holdPeriodToCloudPayload,
 };
 
+export const WORKSPACES_SPEC: TableSpec<LocalWorkspaceRow, CloudWorkspacePayload> = {
+  outbox: 'workspaces',
+  cloud: 'sync_workspaces',
+  fetchLocal: (uuid) => db.get<LocalWorkspaceRow>('SELECT * FROM workspaces WHERE uuid=?', [uuid]),
+  toCloud: workspaceToCloudPayload,
+};
+
+export const WORKSPACE_MEMBERS_SPEC: TableSpec<LocalMemberRow, CloudMemberPayload> = {
+  outbox: 'workspace_members',
+  cloud: 'sync_workspace_members',
+  fetchLocal: (uuid) => db.get<LocalMemberRow>('SELECT * FROM workspace_members WHERE uuid=?', [uuid]),
+  toCloud: memberToCloudPayload,
+};
+
+export const WORKSPACE_SETTINGS_SPEC: TableSpec<LocalSettingRow, CloudSettingPayload> = {
+  outbox: 'workspace_settings',
+  cloud: 'sync_workspace_settings',
+  fetchLocal: (uuid) => db.get<LocalSettingRow>('SELECT * FROM workspace_settings WHERE uuid=?', [uuid]),
+  toCloud: settingToCloudPayload,
+  onConflict: 'workspace_id,key',   // серверный PK — (workspace_id, key), нет id
+  pullScope: 'workspace_id',        // таблица без user_id → скоуп по ws
+};
+
 /**
  * Порядок push'а: parent'ы первыми, чтобы ссылки на облаке разрешились.
- * statuses → tags → tasks → task_templates → overdue_events.
- * overdue_events идут ПОСЛЕ tasks — их маппер требует task.uuid, а task
- * должен быть уже запушен и виден в облаке.
+ * workspaces → workspace_members → workspace_settings → statuses → tags →
+ * tasks → task_templates → overdue_events → task_hold_periods.
+ * Пространство и членство — «родители» для всего (RLS через членство), их надо
+ * создать раньше любых строк, ссылающихся на workspace_id. overdue_events идут
+ * ПОСЛЕ tasks — их маппер требует task.uuid, уже запушенный и видимый в облаке.
  */
 export const PUSH_ORDER: TableSpec[] = [
+  WORKSPACES_SPEC,
+  WORKSPACE_MEMBERS_SPEC,
+  WORKSPACE_SETTINGS_SPEC,
   STATUSES_SPEC,
   TAGS_SPEC,
   TASKS_SPEC,

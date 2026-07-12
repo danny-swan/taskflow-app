@@ -19,7 +19,10 @@ export type SyncEntityTable =
   | 'statuses'
   | 'task_templates'
   | 'overdue_events'
-  | 'task_hold_periods';
+  | 'task_hold_periods'
+  | 'workspaces'
+  | 'workspace_members'
+  | 'workspace_settings';
 
 /** Тип операции в outbox. */
 export type SyncOutboxOp = 'upsert' | 'delete';
