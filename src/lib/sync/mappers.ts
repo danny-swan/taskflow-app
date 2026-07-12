@@ -366,6 +366,62 @@ export function overdueEventToCloudPayload(
   };
 }
 
+// ─── task_hold_periods ──────────────────────────────────────────────────────
+//
+// Интервалы статуса «Приостановлено» для столбца «Холд» в Статистике.
+// Ссылается на задачу через int task_id → tasks.id; в облаке task_id — uuid.
+//
+// В отличие от overdue_events, строка МУТАБЕЛЬНА (ended_at закрывается при
+// выходе из холда), поэтому есть updated_at + version, а pull идёт по LWW
+// (курсор updated_at), как у tasks/statuses/tags.
+
+/** Локальная строка холд-интервала. */
+export interface LocalHoldPeriodRow {
+  id: number;
+  task_id: number;
+  started_at: string;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+  uuid: string;
+  deleted_at: string | null;
+  version: number;
+  client_id: string | null;
+}
+
+/** Payload для sync_task_hold_periods. */
+export interface CloudHoldPeriodPayload {
+  id: string;
+  user_id: string;
+  task_id: string;             // uuid задачи
+  started_at: string;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  version: number;
+  client_id: string;
+}
+
+export function holdPeriodToCloudPayload(
+  row: LocalHoldPeriodRow,
+  userId: string,
+  clientId: string,
+): CloudHoldPeriodPayload {
+  return {
+    id: row.uuid,
+    user_id: userId,
+    task_id: resolveTaskUuid(row.task_id),
+    started_at: row.started_at,
+    ended_at: row.ended_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    deleted_at: row.deleted_at,
+    version: row.version,
+    client_id: row.client_id ?? clientId,
+  };
+}
+
 /**
  * Табличная информация для push цикла — как читать локальную строку и
  * конвертировать её в payload. Порядок в PUSH_ORDER важен: сначала parent'ы
@@ -418,6 +474,13 @@ export const OVERDUE_EVENTS_SPEC: TableSpec<LocalOverdueEventRow, CloudOverdueEv
   toCloud: overdueEventToCloudPayload,
 };
 
+export const HOLD_PERIODS_SPEC: TableSpec<LocalHoldPeriodRow, CloudHoldPeriodPayload> = {
+  outbox: 'task_hold_periods',
+  cloud: 'sync_task_hold_periods',
+  fetchLocal: (uuid) => db.get<LocalHoldPeriodRow>('SELECT * FROM task_hold_periods WHERE uuid=?', [uuid]),
+  toCloud: holdPeriodToCloudPayload,
+};
+
 /**
  * Порядок push'а: parent'ы первыми, чтобы ссылки на облаке разрешились.
  * statuses → tags → tasks → task_templates → overdue_events.
@@ -430,6 +493,7 @@ export const PUSH_ORDER: TableSpec[] = [
   TASKS_SPEC,
   TEMPLATES_SPEC,
   OVERDUE_EVENTS_SPEC,
+  HOLD_PERIODS_SPEC,
 ];
 
 /** Возвращает spec по имени outbox таблицы. */

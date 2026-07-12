@@ -18,7 +18,8 @@ export type SyncEntityTable =
   | 'tags'
   | 'statuses'
   | 'task_templates'
-  | 'overdue_events';
+  | 'overdue_events'
+  | 'task_hold_periods';
 
 /** Тип операции в outbox. */
 export type SyncOutboxOp = 'upsert' | 'delete';

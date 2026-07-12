@@ -345,7 +345,7 @@ describe('isPermanentError (v0.9.35-dev.5)', () => {
 // ─── 3. Realtime debounce ────────────────────────────────────────────────────
 
 describe('realtime schedulePull (v0.9.35-dev.5)', () => {
-  it('WATCHED_TABLES содержит все 5 sync-таблиц', async () => {
+  it('WATCHED_TABLES содержит все sync-таблицы', async () => {
     const { _internals } = await import('./realtime');
     expect(_internals.WATCHED_TABLES).toEqual([
       'sync_tasks',
@@ -353,6 +353,7 @@ describe('realtime schedulePull (v0.9.35-dev.5)', () => {
       'sync_tags',
       'sync_task_templates',
       'sync_overdue_events',
+      'sync_task_hold_periods',
     ]);
   });
 
