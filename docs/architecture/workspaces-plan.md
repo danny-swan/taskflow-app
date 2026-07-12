@@ -114,7 +114,7 @@ create table public.sync_workspace_settings (
 
 ### 2.3 Backfill существующих пользователей (миграция)
 Для каждого `user_id`, у которого есть хоть одна строка в любой sync-таблице (или профиль):
-1. Создать `sync_workspaces` (`kind='personal'`, `name='Мои задачи'`, `owner_id=user_id`, детерминированный `id` — например `ws_<user_id>` или uuidv5 от user_id, чтобы idempotent).
+1. Создать `sync_workspaces` (`kind='personal'`, `name='Мои задачи'`, `owner_id=user_id`, детерминированный `id`). **Зафиксированная схема id (реализовано в 0027 / v11):** `id = 'ws_' || replace(user_id::text, '-', '')` — префикс `ws_` + 32 hex-символа user_id без дефисов (напр. `ws_41111111111111111111111111111111`). Без `uuidv5` (в vanilla PG нет `uuid_generate_v5` без расширения); на клиенте тривиально воспроизводимо: `'ws_' + userId.toLowerCase().replace(/-/g,'')`. Идемпотентно по PK; сервер и клиент генерируют идентичный id → строки склеиваются при первом sync.
 2. Создать `sync_workspace_members` (`role='owner'`).
 3. `UPDATE sync_tasks SET workspace_id = <personal ws id> WHERE user_id = <user_id> AND workspace_id IS NULL` — то же для 5 остальных таблиц.
 4. Перенести `overdue_mode` из клиента невозможно на сервере (он локальный) → `sync_workspace_settings(overdue_mode)` **не заполняем на сервере**; клиентская миграция v11 запишет туда локальное значение при первом запуске (см. §3.3).
@@ -179,7 +179,7 @@ RLS каждой sync-таблицы переписываем:
 - `TARGET_VERSION: 10 → 11`.
 - Создать локальные `workspaces`, `workspace_members`, `workspace_settings`.
 - `ALTER TABLE ... ADD COLUMN workspace_id TEXT` в 6 локальных таблицах.
-- Backfill локально: создать personal-пространство (тот же детерминированный id, что сервер — согласовать схему генерации id, чтобы после первого sync строки склеились по id), проставить `workspace_id` во все локальные строки.
+- Backfill локально: создать personal-пространство (тот же детерминированный id, что сервер: `'ws_' + userId.toLowerCase().replace(/-/g,'')` при наличии `bound_user_id`), проставить `workspace_id` во все локальные строки. **Local-only база (не привязана к аккаунту):** id = `ws_local`; согласование `ws_local` ↔ серверный `ws_<uid>` при первой привязке+sync — задел PR-2.
 - **Перенести `overdue_mode`** из локальной `settings` в `workspace_settings(personal, 'overdue_mode', <текущее значение>)`, поставить в outbox на push.
 - Инкрементно, не трогая v1–v10.
 

@@ -94,25 +94,38 @@ BEGIN
     ('dev-u2', u2, 'linux')
   ON CONFLICT DO NOTHING;
 
-  -- sync_statuses: минимум чтобы был FK для sync_tasks
-  INSERT INTO public.sync_statuses (id, user_id, name, color)
+  -- Workspaces (0027): personal-пространство + owner-членство на каждого юзера.
+  -- id по детерминированной схеме ws_<uid без дефисов> (как в backfill'е 0027).
+  INSERT INTO public.sync_workspaces (id, user_id, owner_id, name, kind)
   VALUES
-    ('st-u1', u1, 'todo', '#888'),
-    ('st-u2', u2, 'todo', '#888')
+    ('ws-u1', u1, u1, 'Мои задачи', 'personal'),
+    ('ws-u2', u2, u2, 'Мои задачи', 'personal')
+  ON CONFLICT DO NOTHING;
+  INSERT INTO public.sync_workspace_members (id, workspace_id, user_id, role)
+  VALUES
+    ('wsm-u1', 'ws-u1', u1, 'owner'),
+    ('wsm-u2', 'ws-u2', u2, 'owner')
+  ON CONFLICT DO NOTHING;
+
+  -- sync_statuses: минимум чтобы был FK для sync_tasks
+  INSERT INTO public.sync_statuses (id, user_id, workspace_id, name, color)
+  VALUES
+    ('st-u1', u1, 'ws-u1', 'todo', '#888'),
+    ('st-u2', u2, 'ws-u2', 'todo', '#888')
   ON CONFLICT DO NOTHING;
 
   -- sync_tasks: одна задача на юзера
-  INSERT INTO public.sync_tasks (user_id, id, title, status_id)
+  INSERT INTO public.sync_tasks (user_id, workspace_id, id, title, status_id)
   VALUES
-    (u1, 'task-u1', 'Task from user1', 'st-u1'),
-    (u2, 'task-u2', 'Task from user2', 'st-u2')
+    (u1, 'ws-u1', 'task-u1', 'Task from user1', 'st-u1'),
+    (u2, 'ws-u2', 'task-u2', 'Task from user2', 'st-u2')
   ON CONFLICT DO NOTHING;
 
   -- sync_task_hold_periods: один интервал на юзера (ссылка на свою задачу)
-  INSERT INTO public.sync_task_hold_periods (id, user_id, task_id, started_at)
+  INSERT INTO public.sync_task_hold_periods (id, user_id, workspace_id, task_id, started_at)
   VALUES
-    ('hold-u1', u1, 'task-u1', now()),
-    ('hold-u2', u2, 'task-u2', now())
+    ('hold-u1', u1, 'ws-u1', 'task-u1', now()),
+    ('hold-u2', u2, 'ws-u2', 'task-u2', now())
   ON CONFLICT DO NOTHING;
 
   -- payment_methods: один метод на юзера (dev.6.5)

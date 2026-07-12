@@ -31,12 +31,17 @@ BEGIN
     ON CONFLICT (id) DO NOTHING;
   INSERT INTO public.profiles (id, email) VALUES (u1, 'hold-user1@test')
     ON CONFLICT (id) DO NOTHING;
-  INSERT INTO public.sync_statuses (id, user_id, name, color)
-    VALUES ('hold-st-u1', u1, 'Приостановлено', '#888') ON CONFLICT DO NOTHING;
-  INSERT INTO public.sync_tasks (user_id, id, title, status_id)
-    VALUES (u1, 'hold-task-u1', 'Held task', 'hold-st-u1') ON CONFLICT DO NOTHING;
-  INSERT INTO public.sync_task_hold_periods (id, user_id, task_id, started_at, version)
-    VALUES ('hold-p1', u1, 'hold-task-u1', now() - interval '3 days', 1)
+  -- Workspace + owner-членство (0027): workspace_id стал NOT NULL в sync-таблицах.
+  INSERT INTO public.sync_workspaces (id, user_id, owner_id, name, kind)
+    VALUES ('hold-ws-u1', u1, u1, 'Мои задачи', 'personal') ON CONFLICT DO NOTHING;
+  INSERT INTO public.sync_workspace_members (id, workspace_id, user_id, role)
+    VALUES ('hold-wsm-u1', 'hold-ws-u1', u1, 'owner') ON CONFLICT DO NOTHING;
+  INSERT INTO public.sync_statuses (id, user_id, workspace_id, name, color)
+    VALUES ('hold-st-u1', u1, 'hold-ws-u1', 'Приостановлено', '#888') ON CONFLICT DO NOTHING;
+  INSERT INTO public.sync_tasks (user_id, workspace_id, id, title, status_id)
+    VALUES (u1, 'hold-ws-u1', 'hold-task-u1', 'Held task', 'hold-st-u1') ON CONFLICT DO NOTHING;
+  INSERT INTO public.sync_task_hold_periods (id, user_id, workspace_id, task_id, started_at, version)
+    VALUES ('hold-p1', u1, 'hold-ws-u1', 'hold-task-u1', now() - interval '3 days', 1)
     ON CONFLICT DO NOTHING;
 END$$;
 
