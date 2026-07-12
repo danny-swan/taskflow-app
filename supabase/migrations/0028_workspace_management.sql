@@ -66,6 +66,13 @@ declare
   ws        text := coalesce(old.workspace_id, new.workspace_id);
   remaining int;
 begin
+  -- Пропускаем системные каскады (удаление auth.users сносит owner-membership
+  -- через user_id FK → ON DELETE CASCADE) и вызовы service_role/pgTAP-сетапов,
+  -- где auth.uid() = NULL. Гейт — только для явных пользовательских операций.
+  if (select auth.uid()) is null then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+
   -- Живые owner'ы в этом ws, кроме изменяемой/удаляемой строки.
   select count(*) into remaining
   from public.sync_workspace_members m
@@ -92,7 +99,7 @@ $$;
 
 comment on function public.assert_at_least_one_owner() is
   'Guard: не даёт удалить/понизить последнего живого owner''a пространства '
-  '(BEFORE UPDATE OR DELETE на sync_workspace_members).';
+  '(BEFORE UPDATE OR DELETE на sync_workspace_members). Не вмешивается в системные каскады (auth.uid() IS NULL).';
 
 drop trigger if exists assert_at_least_one_owner on public.sync_workspace_members;
 create trigger assert_at_least_one_owner

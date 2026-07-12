@@ -110,6 +110,11 @@ BEGIN
     ON CONFLICT DO NOTHING;
 END$$;
 
+-- Сами проверки гейта — только когда auth.uid() задан (явные пользовательские операции).
+-- Системные каскады (auth.uid() IS NULL) триггер пропускает — см. тест 5 ниже.
+SET LOCAL ROLE authenticated;
+SET LOCAL request.jwt.claim.sub TO 'b1111111-1111-1111-1111-111111111111';
+
 -- Нельзя удалить единственного owner'a (hard DELETE).
 SELECT throws_ok(
   $$ DELETE FROM public.sync_workspace_members WHERE id = 'mo1-10' $$,
@@ -130,6 +135,7 @@ SELECT lives_ok(
   $$ UPDATE public.sync_workspace_members SET role = 'viewer' WHERE id = 'med-10' $$,
   'понижение editor→viewer разрешено (owner остаётся)'
 );
+RESET ROLE;
 
 -- При наличии ВТОРОГО owner'a — можно удалить первого.
 DO $$
