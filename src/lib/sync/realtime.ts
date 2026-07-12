@@ -41,6 +41,7 @@ const WATCHED_TABLES = [
   'sync_tags',
   'sync_task_templates',
   'sync_overdue_events',
+  'sync_task_hold_periods',
 ] as const;
 
 const REALTIME_PULL_DEBOUNCE_MS = 600;

@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import * as db from '../lib/db';
 import type { Lang } from '../lib/i18n';
 import { detectOverdueEvents, detectOverdueEventForTask } from '../lib/overdue';
+import { recordHoldTransition } from '../lib/holdPeriods';
 import { todayISO } from '../lib/utils';
 import { pickQuote, quoteSetFor } from '../lib/quotes';
 import { logger } from '../lib/logger';
@@ -595,6 +596,8 @@ export const useStore = create<State>((set, get) => ({
        startDate, p.deadline ?? null, finishDate, now, now, order, rowUuid, clientId]
     );
     enqueueOutbox('tasks', rowUuid, 'upsert');
+    // Задачу могли создать сразу в статусе «Приостановлено» — открываем интервал.
+    recordHoldTransition(r.lastInsertRowid as number, null, p.status_id, get().statuses);
     get().refresh();
 
     // v0.9.2 (№3): если создали задачу с уже прошедшим дедлайном — тоже фиксируем как пересечение.
@@ -613,6 +616,8 @@ export const useStore = create<State>((set, get) => ({
     const fields: string[] = [];
     const vals: any[] = [];
     let patch: Partial<Task> = { ...p };
+    // Запоминаем прежний статус до UPDATE — нужен для учёта холд-интервалов.
+    const prevStatusId = get().tasks.find(t => t.id === id)?.status_id ?? null;
     if (p.status_id !== undefined) {
       const newStatus = get().statuses.find(s => s.id === p.status_id);
       const cur = get().tasks.find(t => t.id === id);
@@ -643,6 +648,11 @@ export const useStore = create<State>((set, get) => ({
     // для старых строк — enqueueOutbox тихо пропустит).
     const row = db.get<{ uuid: string | null }>('SELECT uuid FROM tasks WHERE id=?', [id]);
     enqueueOutbox('tasks', row?.uuid, 'upsert');
+
+    // Холд-интервалы: фиксируем вход/выход из статуса «Приостановлено».
+    if (p.status_id !== undefined && p.status_id !== prevStatusId) {
+      recordHoldTransition(id, prevStatusId, p.status_id, get().statuses);
+    }
     get().refresh();
 
     // v0.9.2 (№3): если изменился дедлайн или статус — перепроверяем пересечение
@@ -712,6 +722,8 @@ export const useStore = create<State>((set, get) => ({
         `UPDATE tasks SET status_id=?, archived=1, updated_at=?, version=version+1 WHERE id=?`,
         [targetId, now, id],
       );
+      // Ушли из «Приостановлено» в «Удалено» — закрываем открытый холд-интервал.
+      recordHoldTransition(id, cur.status_id, targetId, get().statuses);
     }
     enqueueOutbox('tasks', cur.uuid ?? null, 'upsert');
     get().refresh();

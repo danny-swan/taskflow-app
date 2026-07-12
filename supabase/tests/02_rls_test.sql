@@ -6,7 +6,7 @@
 --   3) authenticated не видит чужие строки
 
 BEGIN;
-SELECT plan(30);
+SELECT plan(33);
 
 -- ─── 1. RLS enabled на всех protected tables ───────────────────────────────
 SELECT ok(
@@ -40,6 +40,10 @@ SELECT ok(
 SELECT ok(
   (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.sync_overdue_events'::regclass),
   'RLS enabled on sync_overdue_events'
+);
+SELECT ok(
+  (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.sync_task_hold_periods'::regclass),
+  'RLS enabled on sync_task_hold_periods'
 );
 SELECT ok(
   (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.user_entitlements'::regclass),
@@ -102,6 +106,13 @@ BEGIN
   VALUES
     (u1, 'task-u1', 'Task from user1', 'st-u1'),
     (u2, 'task-u2', 'Task from user2', 'st-u2')
+  ON CONFLICT DO NOTHING;
+
+  -- sync_task_hold_periods: один интервал на юзера (ссылка на свою задачу)
+  INSERT INTO public.sync_task_hold_periods (id, user_id, task_id, started_at)
+  VALUES
+    ('hold-u1', u1, 'task-u1', now()),
+    ('hold-u2', u2, 'task-u2', now())
   ON CONFLICT DO NOTHING;
 
   -- payment_methods: один метод на юзера (dev.6.5)
@@ -185,6 +196,18 @@ SELECT is(
   (SELECT count(*)::int FROM public.renewal_attempts_log WHERE yookassa_payment_id = 'yk-pay-u2'),
   0,
   'user1 НЕ видит чужой renewal_attempts_log'
+);
+
+-- sync_task_hold_periods RLS — own row visibility
+SELECT is(
+  (SELECT count(*)::int FROM public.sync_task_hold_periods WHERE id = 'hold-u1'),
+  1,
+  'user1 видит свой sync_task_hold_periods'
+);
+SELECT is(
+  (SELECT count(*)::int FROM public.sync_task_hold_periods WHERE id = 'hold-u2'),
+  0,
+  'user1 НЕ видит чужой sync_task_hold_periods'
 );
 
 RESET ROLE;

@@ -6,6 +6,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import * as db from '../lib/db';
 import { exportCsv, exportJson } from '../lib/db';
 import { downloadFile, daysBetween, formatDate } from '../lib/utils';
+import { holdDaysByTask } from '../lib/holdPeriods';
 import { StatusDot } from '../components/StatusPill';
 // Modal component no longer used in Stats — replaced by ConfirmDialog
 
@@ -131,6 +132,8 @@ export function StatsPage() {
   // Stats screen shows ALL tasks including "Удалено" — strikethrough/opacity styles still applied per-row
 
   const rows = useMemo(() => {
+    // «Холд» = сумма всех холд-интервалов задачи в днях (task_hold_periods).
+    const holdMap = holdDaysByTask();
     return tasks
       .filter(t => {
         if (query && !(t.title.toLowerCase().includes(query.toLowerCase()) ||
@@ -152,7 +155,7 @@ export function StatsPage() {
           deadline: t.deadline,
           finish: t.finish_date,
           days: daysBetween(t.start_date, t.finish_date),
-          hold: 0,
+          hold: holdMap.get(t.id) ?? 0,
           comment: t.comment || '',
         };
       })

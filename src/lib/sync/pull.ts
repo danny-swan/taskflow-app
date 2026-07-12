@@ -325,6 +325,53 @@ function applyCloudRowTemplates(row: CloudRow): boolean {
   return true;
 }
 
+/**
+ * task_hold_periods: мутабельная строка (ended_at закрывается при выходе из
+ * холда), поэтому LWW по updated_at, как у tasks. Ссылается на task через
+ * uuid; если задача ещё не локальна — откладываем (DeferRowError).
+ */
+function applyCloudRowHoldPeriods(row: CloudRow): boolean {
+  const local = db.get<{ id: number; updated_at: string }>(
+    'SELECT id, updated_at FROM task_hold_periods WHERE uuid=?',
+    [row.id],
+  );
+  if (local) {
+    if (local.updated_at >= row.updated_at) return false;
+    db.run(
+      `UPDATE task_hold_periods
+       SET started_at=?, ended_at=?, updated_at=?, deleted_at=?, version=?, client_id=?
+       WHERE uuid=?`,
+      [row.started_at, row.ended_at, row.updated_at, row.deleted_at,
+       row.version, row.client_id, row.id],
+    );
+    return true;
+  }
+  const taskId = resolveTaskIdByUuid(row.task_id);
+  if (taskId === null) {
+    throw new DeferRowError(
+      `hold_period ${row.id}: task ${row.task_id} not local yet — deferring`,
+    );
+  }
+  db.run(
+    `INSERT INTO task_hold_periods
+      (uuid, task_id, started_at, ended_at, created_at, updated_at,
+       deleted_at, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [
+      row.id,
+      taskId,
+      row.started_at,
+      row.ended_at,
+      row.created_at,
+      row.updated_at,
+      row.deleted_at,
+      row.version,
+      row.client_id,
+    ],
+  );
+  return true;
+}
+
 /** Карта applier'ов по имени облачной таблицы. */
 const APPLIERS: Record<string, (row: CloudRow) => boolean> = {
   sync_tasks: applyCloudRowTasks,
@@ -332,6 +379,7 @@ const APPLIERS: Record<string, (row: CloudRow) => boolean> = {
   sync_tags: applyCloudRowTags,
   sync_task_templates: applyCloudRowTemplates,
   sync_overdue_events: applyCloudRowOverdueEvents,
+  sync_task_hold_periods: applyCloudRowHoldPeriods,
 };
 
 /**
@@ -467,6 +515,7 @@ export const _internals = {
   applyCloudRowTags,
   applyCloudRowTemplates,
   applyCloudRowOverdueEvents,
+  applyCloudRowHoldPeriods,
   cursorColumnFor,
   initialCursorValue,
   lastPulledCursorKey,

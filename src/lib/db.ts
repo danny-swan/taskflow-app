@@ -649,6 +649,7 @@ export async function clearUserData(): Promise<void> {
 
   // Порядок: сначала зависимые (overdue_events ссылается на tasks), потом
   // tasks, потом справочники. FK не жёсткие, но порядок делаем логичным.
+  await execBoth('DELETE FROM task_hold_periods');
   await execBoth('DELETE FROM overdue_events');
   await execBoth('DELETE FROM tasks');
   await execBoth('DELETE FROM task_templates');
@@ -656,7 +657,7 @@ export async function clearUserData(): Promise<void> {
   await execBoth('DELETE FROM statuses');
   await execBoth('DELETE FROM sync_outbox');
   // AUTOINCREMENT счётчики — чтобы новые id начинались с 1 (чистая база).
-  try { await execBoth(`DELETE FROM sqlite_sequence WHERE name IN ('tasks','tags','statuses','task_templates','overdue_events')`); } catch { /* may not exist */ }
+  try { await execBoth(`DELETE FROM sqlite_sequence WHERE name IN ('tasks','tags','statuses','task_templates','overdue_events','task_hold_periods')`); } catch { /* may not exist */ }
   // Сбрасываем курсоры pull, чтобы забрать всё облако заново.
   await execBoth(`DELETE FROM settings WHERE key LIKE 'sync_last_pulled_%'`);
 
@@ -835,6 +836,10 @@ export async function initDb(): Promise<void> {
     let overdueEvents: any[] = [];
     try { overdueEvents = await d.select('SELECT * FROM overdue_events'); }
     catch (e) { console.warn('[initDb] overdue_events not available yet:', e); }
+    // v0.9.35: task_hold_periods появляется после миграции v10. Защищаемся.
+    let holdPeriods: any[] = [];
+    try { holdPeriods = await d.select('SELECT * FROM task_hold_periods'); }
+    catch (e) { console.warn('[initDb] task_hold_periods not available yet:', e); }
 
     webDb = new SQL!.Database();
     ensureSchema(webDb);
@@ -891,6 +896,12 @@ export async function initDb(): Promise<void> {
       webDb.run(
         `INSERT OR REPLACE INTO overdue_events (id, task_id, deadline_snapshot, event_date, created_at, updated_at, uuid, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
         [e.id, e.task_id, e.deadline_snapshot, e.event_date, e.created_at, e.updated_at ?? e.created_at, ...syncCols(e)]
+      );
+    }
+    for (const h of holdPeriods) {
+      webDb.run(
+        `INSERT OR REPLACE INTO task_hold_periods (id, task_id, started_at, ended_at, created_at, updated_at, uuid, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [h.id, h.task_id, h.started_at, h.ended_at ?? null, h.created_at, h.updated_at ?? h.created_at, ...syncCols(h)]
       );
     }
   } else {

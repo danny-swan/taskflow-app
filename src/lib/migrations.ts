@@ -507,6 +507,98 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+
+  // ================================================================
+  // v10 — task_hold_periods (столбец «Холд» в Статистике).
+  //
+  // Каждый интервал, в течение которого задача находилась в статусе
+  // «Приостановлено», фиксируется отдельной строкой: started_at — когда задачу
+  // поставили на холд, ended_at — когда сняли (NULL = задача в холде сейчас).
+  // Столбец «Холд» = сумма длительностей всех интервалов в днях.
+  //
+  // Автор строк — клиент (store.updateTask → holdPeriods.recordHoldTransition),
+  // ровно как overdue_events. Синхронизируются вверх/вниз через sync_outbox →
+  // sync_task_hold_periods (mappers.ts / pull.ts). Серверного триггера НЕТ —
+  // это сломало бы local-only режим (без Supabase-аккаунта) и дублировало бы
+  // строки, которые клиент и так пушит.
+  //
+  // Бэкфилл: для задач, которые ПРЯМО СЕЙЧАС в статусе «Приостановлено»,
+  // открываем один интервал (started_at = tasks.updated_at, ended_at = NULL),
+  // чтобы уже висящий холд начал считаться. Идемпотентно — не создаём дубль,
+  // если открытый интервал у задачи уже есть.
+  // ================================================================
+  {
+    version: 10,
+    description:
+      'task_hold_periods: интервалы статуса «Приостановлено» для столбца «Холд» (Статистика)',
+    up: async ({ exec, select }) => {
+      // 1. Таблица + sync-колонки сразу (создаётся уже после sync-фундамента v5).
+      await exec(`
+        CREATE TABLE IF NOT EXISTS task_hold_periods (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id     INTEGER NOT NULL,
+          started_at  TEXT    NOT NULL,
+          ended_at    TEXT,
+          created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+          updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+          uuid        TEXT,
+          deleted_at  TEXT,
+          version     INTEGER NOT NULL DEFAULT 1,
+          client_id   TEXT
+        )
+      `);
+      await exec(
+        `CREATE INDEX IF NOT EXISTS idx_task_hold_periods_task ON task_hold_periods(task_id)`,
+      );
+      // Быстрый поиск открытого интервала задачи (ended_at IS NULL).
+      await exec(
+        `CREATE INDEX IF NOT EXISTS idx_task_hold_periods_open ON task_hold_periods(task_id) WHERE ended_at IS NULL AND deleted_at IS NULL`,
+      );
+      await exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_task_hold_periods_uuid ON task_hold_periods(uuid) WHERE uuid IS NOT NULL`,
+      );
+
+      // 2. Бэкфилл: открытый интервал для каждой задачи, что сейчас на холде.
+      try {
+        const clientRows = await select<{ value: string }>(
+          `SELECT value FROM settings WHERE key = 'client_id'`,
+        );
+        const clientId: string = clientRows[0]?.value ?? uuidv7();
+
+        // Задачи в статусе «Приостановлено» (по имени статуса), ещё не удалённые,
+        // и у которых НЕТ уже открытого интервала (идемпотентность).
+        const held = await select<{ id: number; updated_at: string }>(
+          `SELECT t.id AS id, t.updated_at AS updated_at
+             FROM tasks t
+             JOIN statuses s ON s.id = t.status_id
+            WHERE s.name = 'Приостановлено'
+              AND (t.deleted_at IS NULL)
+              AND NOT EXISTS (
+                SELECT 1 FROM task_hold_periods h
+                 WHERE h.task_id = t.id AND h.ended_at IS NULL AND h.deleted_at IS NULL
+              )`,
+        );
+        const now = new Date().toISOString();
+        for (const t of held) {
+          const rowUuid = uuidv7();
+          await exec(
+            `INSERT INTO task_hold_periods
+               (task_id, started_at, ended_at, created_at, updated_at, uuid, version, client_id)
+             VALUES (?, ?, NULL, ?, ?, ?, 1, ?)`,
+            [t.id, t.updated_at ?? now, now, now, rowUuid, clientId],
+          );
+          await exec(
+            `INSERT OR IGNORE INTO sync_outbox
+               (entity_table, entity_uuid, op, queued_at, attempt_count)
+             VALUES ('task_hold_periods', ?, 'upsert', datetime('now'), 0)`,
+            [rowUuid],
+          );
+        }
+      } catch (e) {
+        console.warn('[migrate v10] hold-period backfill skipped:', e);
+      }
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */

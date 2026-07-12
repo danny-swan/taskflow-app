@@ -9,7 +9,7 @@ BEGIN;
 -- Ожидаемое количество тестов: (14 таблиц × 4 CRUD × 2 роли)
 -- минус то, что не выдаётся — считаем вручную ниже.
 -- +5 (N6): default privileges НЕ выдают лишнего на будущие таблицы.
-SELECT plan(79);
+SELECT plan(83);
 
 -- ─── profiles (SELECT, UPDATE для authenticated; ALL для service_role) ─────
 SELECT ok(has_table_privilege('authenticated', 'public.profiles', 'SELECT'),
@@ -77,6 +77,11 @@ SELECT ok(has_table_privilege('authenticated', 'public.sync_overdue_events', 'SE
 SELECT ok(has_table_privilege('authenticated', 'public.sync_overdue_events', 'INSERT'), 'auth INSERT sync_overdue_events');
 SELECT ok(has_table_privilege('authenticated', 'public.sync_overdue_events', 'UPDATE'), 'auth UPDATE sync_overdue_events');
 SELECT ok(has_table_privilege('authenticated', 'public.sync_overdue_events', 'DELETE'), 'auth DELETE sync_overdue_events');
+
+SELECT ok(has_table_privilege('authenticated', 'public.sync_task_hold_periods', 'SELECT'), 'auth SELECT sync_task_hold_periods');
+SELECT ok(has_table_privilege('authenticated', 'public.sync_task_hold_periods', 'INSERT'), 'auth INSERT sync_task_hold_periods');
+SELECT ok(has_table_privilege('authenticated', 'public.sync_task_hold_periods', 'UPDATE'), 'auth UPDATE sync_task_hold_periods');
+SELECT ok(has_table_privilege('authenticated', 'public.sync_task_hold_periods', 'DELETE'), 'auth DELETE sync_task_hold_periods');
 
 -- ─── payment/entitlement таблицы: read-only для authenticated ──────────────
 SELECT ok(has_table_privilege('authenticated', 'public.user_entitlements',   'SELECT'), 'auth SELECT user_entitlements');
