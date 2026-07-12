@@ -1,5 +1,9 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useStore, Task } from '../store/useStore';
+import {
+  useCurrentWorkspaceTasks, useCurrentWorkspaceStatuses,
+  useCurrentWorkspaceTags, useCurrentWorkspaceTemplates,
+} from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { daysUntilDeadline, todayISO } from '../lib/utils';
 import { StatusGroup } from '../components/StatusGroup';
@@ -27,13 +31,13 @@ function writeCollapseState(s: Record<number, boolean>) {
 
 export function TasksPage() {
   const lang = useStore(s => s.language);
-  const allTasks = useStore(s => s.tasks);
-  const allStatuses = useStore(s => s.statuses);
-  const tags = useStore(s => s.tags);
+  const allTasks = useCurrentWorkspaceTasks();
+  const allStatuses = useCurrentWorkspaceStatuses();
+  const tags = useCurrentWorkspaceTags();
   const updateTask = useStore(s => s.updateTask);
   const reorderTasks = useStore(s => s.reorderTasks);
   const pushToast = useStore(s => s.pushToast);
-  const taskTemplates = useStore(s => s.taskTemplates);
+  const taskTemplates = useCurrentWorkspaceTemplates();
   const createTaskFromTemplate = useStore(s => s.createTaskFromTemplate);
   const tasksView = useStore(s => s.tasksView);
   const setTasksView = useStore(s => s.setTasksView);

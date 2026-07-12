@@ -32,6 +32,8 @@ export interface Status {
   version?: number;
   client_id?: string | null;
   updated_at?: string | null;
+  // Wave A (workspaces): к какому пространству относится строка.
+  workspace_id?: string | null;
 }
 export interface Tag {
   id: number;
@@ -44,6 +46,8 @@ export interface Tag {
   version?: number;
   client_id?: string | null;
   updated_at?: string | null;
+  // Wave A (workspaces): к какому пространству относится строка.
+  workspace_id?: string | null;
 }
 export interface Task {
   id: number;
@@ -64,6 +68,20 @@ export interface Task {
   deleted_at?: string | null;
   version?: number;
   client_id?: string | null;
+  // Wave A (workspaces): к какому пространству относится строка.
+  workspace_id?: string | null;
+}
+
+/**
+ * Wave A (workspaces): пространство. Локальное зеркало таблицы `workspaces`.
+ * `id` — серверный ws-id (`ws_<uid>` для personal, `ws_local` для local-only).
+ */
+export interface Workspace {
+  id: string;                       // = workspaces.uuid (серверный ws-id)
+  name: string;
+  kind: 'personal' | 'shared' | string;
+  owner_id: string | null;
+  sort_order: number;
 }
 
 // v0.8.13: шаблон задачи — образец, из которого одним кликом создаётся новая задача.
@@ -83,6 +101,8 @@ export interface TaskTemplate {
   deleted_at?: string | null;
   version?: number;
   client_id?: string | null;
+  // Wave A (workspaces): к какому пространству относится строка.
+  workspace_id?: string | null;
 }
 
 interface State {
@@ -90,6 +110,11 @@ interface State {
   statuses: Status[];        // all statuses incl technical (for stats)
   tags: Tag[];
   tasks: Task[];             // all tasks incl archived/deleted (full set)
+  // Wave A (workspaces): текущее пространство + список доступных пространств.
+  // Persist'ится в settings.current_workspace_id. Все страницы читают данные
+  // через ws-scoped хуки (useCurrentWorkspace*), фильтруя по currentWorkspaceId.
+  currentWorkspaceId: string | null;
+  workspaces: Workspace[];
   language: Lang;
   theme: ThemeName;
   statsEnabled: boolean;
@@ -130,6 +155,11 @@ interface State {
 
   init(): Promise<void>;
   refresh(): void;
+
+  // Wave A (workspaces): управление текущим пространством.
+  setWorkspaces(list: Workspace[]): void;
+  loadWorkspaces(): void;                 // перечитать список из локальной БД + выбрать дефолт
+  switchWorkspace(id: string): void;      // сменить текущее ws (persist + refresh + resync)
 
   setLanguage(l: Lang): void;
   setTheme(t: ThemeName): void;
@@ -196,6 +226,88 @@ interface State {
 
 let toastId = 0;
 
+// ── Wave A (workspaces): чтение пространств из локальной БД ──────────────────
+
+/** Прочитать список активных пространств из локальной таблицы `workspaces`. */
+function readWorkspacesFromDb(): Workspace[] {
+  try {
+    const rows = db.all<{
+      uuid: string | null; name: string; kind: string;
+      owner_id: string | null; sort_order: number;
+    }>(
+      `SELECT uuid, name, kind, owner_id, sort_order
+         FROM workspaces
+        WHERE uuid IS NOT NULL AND deleted_at IS NULL
+        ORDER BY sort_order, id`,
+    );
+    return rows
+      .filter(r => !!r.uuid)
+      .map(r => ({
+        id: r.uuid as string,
+        name: r.name,
+        kind: r.kind,
+        owner_id: r.owner_id ?? null,
+        sort_order: r.sort_order ?? 0,
+      }));
+  } catch {
+    // Таблица workspaces отсутствует на базе до v11 — не критично.
+    return [];
+  }
+}
+
+/** Прочитать один ключ из settings (или null). */
+function readSetting(key: string): string | null {
+  try {
+    return db.get<{ value: string }>('SELECT value FROM settings WHERE key=?', [key])?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Выбрать пространство по умолчанию: personal (settings.personal_workspace_id),
+ * иначе первое personal, иначе первое из списка, иначе null.
+ */
+function pickDefaultWorkspaceId(list: Workspace[]): string | null {
+  const personalId = readSetting('personal_workspace_id');
+  if (personalId && list.some(w => w.id === personalId)) return personalId;
+  const firstPersonal = list.find(w => w.kind === 'personal');
+  if (firstPersonal) return firstPersonal.id;
+  return list[0]?.id ?? null;
+}
+
+/**
+ * ws-id для НОВОЙ строки: текущее пространство стора, иначе persist'нутый
+ * current_workspace_id, иначе personal_workspace_id. Гарантирует, что новые
+ * задачи/статусы/теги/шаблоны не создаются с NULL workspace_id (иначе они
+ * выпадут из ws-scoped выборок и не пройдут серверный NOT NULL).
+ */
+function resolveWriteWorkspaceId(current: string | null): string | null {
+  return current || readSetting('current_workspace_id') || readSetting('personal_workspace_id');
+}
+
+/**
+ * overdue_mode ТЕКУЩЕГО пространства из workspace_settings.
+ * Приоритет: workspace_settings(ws,'overdue_mode') → глобальный settings.overdue_mode
+ * (легаси-фолбэк) → 'calendar'.
+ */
+function readOverdueModeForWs(wsId: string | null): 'calendar' | 'business' {
+  if (wsId) {
+    try {
+      const row = db.get<{ value: string | null }>(
+        `SELECT value FROM workspace_settings
+          WHERE workspace_id=? AND key='overdue_mode' AND deleted_at IS NULL`,
+        [wsId],
+      );
+      if (row?.value === 'business') return 'business';
+      if (row?.value === 'calendar') return 'calendar';
+    } catch {
+      // Таблица отсутствует (база до v11) — падаем на легаси-ключ ниже.
+    }
+  }
+  return readSetting('overdue_mode') === 'business' ? 'business' : 'calendar';
+}
+
 // v0.9.35-dev.6.10.5: отложенные (в пределах окна Undo) permanent-delete'ы.
 // Ключ — id задачи, значение — таймер. Модульный уровень: переживает
 // перемонтирование страницы Статистики, чтобы окно отмены не срывалось при
@@ -207,6 +319,8 @@ export const useStore = create<State>((set, get) => ({
   statuses: [],
   tags: [],
   tasks: [],
+  currentWorkspaceId: null,
+  workspaces: [],
   language: 'ru',
   theme: 'light',
   statsEnabled: true,
@@ -284,8 +398,27 @@ export const useStore = create<State>((set, get) => ({
       if (Array.isArray(parsed)) recentEmojis = parsed.filter((x): x is string => typeof x === 'string').slice(0, 12);
     } catch {}
     const quote = pickQuote(quoteSetFor(theme), language);
+
+    // Wave A (workspaces): список пространств + текущее пространство.
+    // Если сохранённый current_workspace_id пуст или указывает на несуществующее
+    // пространство — падаем на personal-пространство по умолчанию.
+    const workspaces = readWorkspacesFromDb();
+    const savedWsId = (map.current_workspace_id || '').trim() || null;
+    const currentWorkspaceId =
+      savedWsId && workspaces.some(w => w.id === savedWsId)
+        ? savedWsId
+        : pickDefaultWorkspaceId(workspaces);
+    // Синхронизируем persist, если дефолт отличается от сохранённого.
+    if (currentWorkspaceId && currentWorkspaceId !== savedWsId) {
+      try {
+        db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['current_workspace_id', currentWorkspaceId]);
+      } catch (e) { console.warn('[init] persist current_workspace_id failed:', e); }
+    }
+
     set({
       ready: true,
+      currentWorkspaceId,
+      workspaces,
       language,
       theme,
       statsEnabled: map.stats_enabled !== '0',
@@ -294,8 +427,10 @@ export const useStore = create<State>((set, get) => ({
       defaultTab: (map.default_tab === 'add' || !map.default_tab) ? 'tasks' : map.default_tab,
       // v0.9.0: вид страницы Задачи — список по умолчанию
       tasksView: (map.tasks_view === 'kanban' ? 'kanban' : 'list') as 'list' | 'kanban',
-      // v0.9.2 (№1): режим подсчёта просрочки — календарные дни по умолчанию
-      overdueMode: (map.overdue_mode === 'business' ? 'business' : 'calendar') as 'calendar' | 'business',
+      // v0.9.2 (№1): режим подсчёта просрочки — календарные дни по умолчанию.
+      // Wave A: берём режим ТЕКУЩЕГО пространства из workspace_settings
+      // (фолбэк — легаси settings.overdue_mode → 'calendar').
+      overdueMode: readOverdueModeForWs(currentWorkspaceId),
       // v0.9.8: автопроверка обновлений — включена по умолчанию
       autoUpdateEnabled: map.auto_update_enabled !== '0',
       // v0.9.28: автоочистка — opt-out только для новых БД. Старые БД — opt-in.
@@ -390,6 +525,59 @@ export const useStore = create<State>((set, get) => ({
     });
   },
 
+  // ── Wave A (workspaces) ──────────────────────────────────────────────────
+
+  setWorkspaces(list) {
+    set({ workspaces: list });
+    // Если текущее пространство исчезло из набора — выбираем дефолт.
+    const cur = get().currentWorkspaceId;
+    if (!cur || !list.some(w => w.id === cur)) {
+      const next = pickDefaultWorkspaceId(list);
+      if (next && next !== cur) {
+        set({ currentWorkspaceId: next, overdueMode: readOverdueModeForWs(next) });
+        try {
+          db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['current_workspace_id', next]);
+        } catch (e) { console.warn('[setWorkspaces] persist current_workspace_id failed:', e); }
+      }
+    }
+  },
+
+  loadWorkspaces() {
+    get().setWorkspaces(readWorkspacesFromDb());
+  },
+
+  switchWorkspace(id) {
+    if (!id || id === get().currentWorkspaceId) return;
+    const known = get().workspaces.some(w => w.id === id);
+    if (!known) {
+      // Пространства нет в наборе — перечитываем БД (мог появиться после pull).
+      const fresh = readWorkspacesFromDb();
+      set({ workspaces: fresh });
+      if (!fresh.some(w => w.id === id)) {
+        logger.warn('[switchWorkspace] unknown workspace id:', id);
+        return;
+      }
+    }
+    // 1. currentWorkspaceId + persist.
+    set({ currentWorkspaceId: id, overdueMode: readOverdueModeForWs(id) });
+    try {
+      db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['current_workspace_id', id]);
+    } catch (e) { console.warn('[switchWorkspace] persist failed:', e); }
+    // 2. Обновляем локальный стор под новое пространство.
+    get().refresh();
+    // 3. Дотягиваем облако для нового ws + переподписываем realtime.
+    //    Ленивый import, чтобы не тащить sync-чанк в initial bundle и избежать
+    //    циклической зависимости (sync → mappers → db → store).
+    try {
+      void import('../lib/sync').then(m => {
+        try { m.resubscribeRealtime?.(); } catch (e) { logger.warn('[switchWorkspace] resubscribe failed:', e); }
+        void m.syncNow?.().then(() => get().refresh()).catch(() => {});
+      }).catch(() => {});
+    } catch {
+      // sync-модуль недоступен (например, в тестах с моками) — не мешаем.
+    }
+  },
+
   setLanguage(l) {
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['language', l]);
     const q = pickQuote(quoteSetFor(get().theme), l);
@@ -424,6 +612,40 @@ export const useStore = create<State>((set, get) => ({
     set({ fontSize: n });
   },
   setOverdueMode(m) {
+    // Wave A: overdue_mode — свойство ТЕКУЩЕГО пространства (workspace_settings).
+    // Пишем в workspace_settings (источник истины + sync), а глобальный
+    // settings.overdue_mode обновляем как легаси-зеркало/фолбэк.
+    const wsId = get().currentWorkspaceId;
+    if (wsId) {
+      try {
+        const existing = db.get<{ uuid: string | null }>(
+          `SELECT uuid FROM workspace_settings WHERE workspace_id=? AND key='overdue_mode'`,
+          [wsId],
+        );
+        const now = new Date().toISOString();
+        if (existing) {
+          const rowUuid = existing.uuid ?? uuidv7();
+          db.run(
+            `UPDATE workspace_settings
+                SET value=?, uuid=COALESCE(uuid,?), deleted_at=NULL,
+                    updated_at=?, version=COALESCE(version,0)+1
+              WHERE workspace_id=? AND key='overdue_mode'`,
+            [m, rowUuid, now, wsId],
+          );
+          enqueueOutbox('workspace_settings', rowUuid, 'upsert');
+        } else {
+          const rowUuid = uuidv7();
+          db.run(
+            `INSERT INTO workspace_settings (uuid, workspace_id, key, value, created_at, updated_at, version, client_id)
+             VALUES (?,?, 'overdue_mode', ?, ?, ?, 1, ?)`,
+            [rowUuid, wsId, m, now, now, getClientId()],
+          );
+          enqueueOutbox('workspace_settings', rowUuid, 'upsert');
+        }
+      } catch (e) {
+        console.warn('[setOverdueMode] workspace_settings write failed:', e);
+      }
+    }
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['overdue_mode', m]);
     set({ overdueMode: m });
   },
@@ -589,11 +811,12 @@ export const useStore = create<State>((set, get) => ({
     // v0.9.35-dev.2: sync-колонки на INSERT'е.
     const rowUuid = uuidv7();
     const clientId = getClientId();
+    const wsId = resolveWriteWorkspaceId(get().currentWorkspaceId);
     const r = db.run(
-      `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, client_id, version)
-       VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,1)`,
+      `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, client_id, version, workspace_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,1,?)`,
       [p.title || '', p.comment || '', p.tag_id ?? null, p.status_id ?? 1,
-       startDate, p.deadline ?? null, finishDate, now, now, order, rowUuid, clientId]
+       startDate, p.deadline ?? null, finishDate, now, now, order, rowUuid, clientId, wsId]
     );
     enqueueOutbox('tasks', rowUuid, 'upsert');
     // Задачу могли создать сразу в статусе «Приостановлено» — открываем интервал.
@@ -750,9 +973,10 @@ export const useStore = create<State>((set, get) => ({
     const rowUuid = uuidv7();
     const clientId = getClientId();
     const now = new Date().toISOString();
+    const wsId = resolveWriteWorkspaceId(get().currentWorkspaceId);
     const r = db.run(
-      'INSERT INTO tags (name, color, sort_order, uuid, client_id, version, updated_at) VALUES (?,?,?,?,?,1,?)',
-      [name, color, order, rowUuid, clientId, now],
+      'INSERT INTO tags (name, color, sort_order, uuid, client_id, version, updated_at, workspace_id) VALUES (?,?,?,?,?,1,?,?)',
+      [name, color, order, rowUuid, clientId, now, wsId],
     );
     enqueueOutbox('tags', rowUuid, 'upsert');
     get().refresh();
@@ -803,11 +1027,12 @@ export const useStore = create<State>((set, get) => ({
     const now = new Date().toISOString();
     const rowUuid = uuidv7();
     const clientId = getClientId();
+    const wsId = resolveWriteWorkspaceId(get().currentWorkspaceId);
     const r = db.run(
       `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed,
-                             uuid, client_id, version, updated_at)
-       VALUES (?,?,?,?,0,0,0,0,?,?,1,?)`,
-      [name, color, behavior, order, rowUuid, clientId, now]
+                             uuid, client_id, version, updated_at, workspace_id)
+       VALUES (?,?,?,?,0,0,0,0,?,?,1,?,?)`,
+      [name, color, behavior, order, rowUuid, clientId, now, wsId]
     );
     enqueueOutbox('statuses', rowUuid, 'upsert');
     get().refresh();
@@ -914,11 +1139,12 @@ export const useStore = create<State>((set, get) => ({
     const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM task_templates')?.m) ?? 0;
     const rowUuid = uuidv7();
     const clientId = getClientId();
+    const wsId = resolveWriteWorkspaceId(get().currentWorkspaceId);
     const r = db.run(
       `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, created_at, updated_at,
-                                   uuid, client_id, version)
-       VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
-      [p.name, p.title ?? '', p.comment ?? '', p.status_id ?? null, p.tag_id ?? null, order, now, now, rowUuid, clientId]
+                                   uuid, client_id, version, workspace_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,1,?)`,
+      [p.name, p.title ?? '', p.comment ?? '', p.status_id ?? null, p.tag_id ?? null, order, now, now, rowUuid, clientId, wsId]
     );
     enqueueOutbox('task_templates', rowUuid, 'upsert');
     get().refresh();

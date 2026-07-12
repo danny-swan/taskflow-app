@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { useStore, Task } from '../store/useStore';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { Trash2, X, AlertTriangle, Smile, FilePlus } from 'lucide-react';
@@ -16,8 +17,8 @@ export function TaskModal({
   onClose: () => void;
 }) {
   const lang = useStore(s => s.language);
-  const statuses = useStore(s => s.statuses);
-  const tags = useStore(s => s.tags);
+  const statuses = useCurrentWorkspaceStatuses();
+  const tags = useCurrentWorkspaceTags();
   const updateTask = useStore(s => s.updateTask);
   const softDeleteTask = useStore(s => s.softDeleteTask);
   const addTag = useStore(s => s.addTag);

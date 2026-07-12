@@ -1,4 +1,5 @@
 import { Task, useStore } from '../store/useStore';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags } from '../store/workspaceScope';
 import { TagChip } from './TagChip';
 import { MarkdownComment } from './MarkdownComment';
 import { DeadlineBadge } from './TaskCard';
@@ -36,8 +37,8 @@ export function KanbanCard({
   dragging?: boolean;
 }) {
   const lang = useStore(s => s.language);
-  const statuses = useStore(s => s.statuses);
-  const tags = useStore(s => s.tags);
+  const statuses = useCurrentWorkspaceStatuses();
+  const tags = useCurrentWorkspaceTags();
   const updateTask = useStore(s => s.updateTask);
   const softDeleteTask = useStore(s => s.softDeleteTask);
   const pushToast = useStore(s => s.pushToast);

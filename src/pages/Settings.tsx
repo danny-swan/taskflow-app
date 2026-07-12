@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCurrentWorkspaceTasks, useCurrentWorkspaceTemplates } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban, History, Save, Loader2 } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
@@ -396,7 +397,7 @@ function InlineStatsToggle({ lang }: { lang: string }) {
 
 function TagsSection() {
   const lang = useStore(s => s.language);
-  const tags = useStore(s => s.tags);
+  const tags = useCurrentWorkspaceTags();
   const addTag = useStore(s => s.addTag);
   const updateTag = useStore(s => s.updateTag);
   const deleteTag = useStore(s => s.deleteTag);
@@ -453,7 +454,7 @@ function TagsSection() {
 
 function StatusesSection() {
   const lang = useStore(s => s.language);
-  const statuses = useStore(s => s.statuses);
+  const statuses = useCurrentWorkspaceStatuses();
   const addStatus = useStore(s => s.addStatus);
   const updateStatus = useStore(s => s.updateStatus);
   const deleteStatus = useStore(s => s.deleteStatus);
@@ -751,11 +752,11 @@ function normalizeImported(rows: Record<string, any>[]): ImportedTask[] {
 function IOSection() {
   const lang = useStore(s => s.language);
   const pushToast = useStore(s => s.pushToast);
-  const statuses = useStore(s => s.statuses);
-  const tags = useStore(s => s.tags);
+  const statuses = useCurrentWorkspaceStatuses();
+  const tags = useCurrentWorkspaceTags();
   const addTag = useStore(s => s.addTag);
   const addTask = useStore(s => s.addTask);
-  const tasks = useStore(s => s.tasks);
+  const tasks = useCurrentWorkspaceTasks();
   const refresh = useStore(s => s.refresh);
 
   // ─── Export state ─────────────────────────────────────────────────────────
@@ -1738,7 +1739,7 @@ function TimezoneRow({ lang }: { lang: 'ru' | 'en' }) {
  * определяется sort_order из БД + id (стабильно, предсказуемо).
  */
 function TemplatesSection({ lang }: { lang: 'ru' | 'en' }) {
-  const templates = useStore(s => s.taskTemplates);
+  const templates = useCurrentWorkspaceTemplates();
   const updateTemplate = useStore(s => s.updateTemplate);
   const deleteTemplate = useStore(s => s.deleteTemplate);
   const pushToast = useStore(s => s.pushToast);

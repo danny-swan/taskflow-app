@@ -3,6 +3,11 @@ export type Lang = 'ru' | 'en';
 const dict = {
   ru: {
     brand_sub: 'Task Manager',
+    ws_personal: 'Личные',
+    ws_shared: 'Общие',
+    ws_create: 'Создать пространство',
+    ws_create_soon: 'Доступно скоро',
+    ws_switch_aria: 'Переключить пространство',
     nav_tasks: 'Задачи',
     nav_add: 'Добавить',
     nav_calendar: 'Календарь',
@@ -197,6 +202,11 @@ const dict = {
   },
   en: {
     brand_sub: 'Task manager',
+    ws_personal: 'Personal',
+    ws_shared: 'Shared',
+    ws_create: 'Create workspace',
+    ws_create_soon: 'Coming soon',
+    ws_switch_aria: 'Switch workspace',
     nav_tasks: 'Tasks',
     nav_add: 'Add',
     nav_calendar: 'Calendar',

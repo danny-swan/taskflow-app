@@ -95,11 +95,12 @@ export function recordHoldTransition(
       );
       if (open) return false;
       const rowUuid = uuidv7();
+      // Wave A: интервал холда наследует workspace_id своей задачи.
       db.run(
         `INSERT INTO task_hold_periods
-           (task_id, started_at, ended_at, created_at, updated_at, uuid, version, client_id)
-         VALUES (?, ?, NULL, ?, ?, ?, 1, ?)`,
-        [taskId, now, now, now, rowUuid, getClientId()],
+           (task_id, started_at, ended_at, created_at, updated_at, uuid, version, client_id, workspace_id)
+         VALUES (?, ?, NULL, ?, ?, ?, 1, ?, (SELECT workspace_id FROM tasks WHERE id = ?))`,
+        [taskId, now, now, now, rowUuid, getClientId(), taskId],
       );
       enqueueOutbox('task_hold_periods', rowUuid, 'upsert');
       return true;
