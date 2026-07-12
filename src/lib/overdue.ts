@@ -66,11 +66,12 @@ export function detectOverdueEventForTask(
     const rowUuid = uuidv7();
     const clientId = getClientId();
     const now = new Date().toISOString();
+    // Wave A: overdue_event наследует workspace_id своей задачи.
     db.run(
       `INSERT INTO overdue_events (task_id, deadline_snapshot, event_date,
-                                   uuid, client_id, version, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)`,
-      [task.id, task.deadline, today, rowUuid, clientId, now],
+                                   uuid, client_id, version, updated_at, workspace_id)
+       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+      [task.id, task.deadline, today, rowUuid, clientId, now, task.workspace_id ?? null],
     );
     enqueueOutbox('overdue_events', rowUuid, 'upsert');
     return true;
@@ -110,16 +111,23 @@ export function detectOverdueEvents(
  * Возвращает Map<'YYYY-MM-DD', count>. Дни без событий отсутствуют
  * — вызывающая сторона должна сама заполнять нули для оси X.
  */
-export function overdueEventsByDate(fromDate: string, toDate: string): Map<string, number> {
+export function overdueEventsByDate(
+  fromDate: string,
+  toDate: string,
+  workspaceId?: string | null,
+): Map<string, number> {
   const map = new Map<string, number>();
   try {
     // v0.9.35-dev.1: только актуальные события (deleted_at IS NULL).
+    // Wave A: при заданном workspaceId ограничиваем текущим пространством.
+    const wsClause = workspaceId ? ' AND workspace_id = ?' : '';
+    const params = workspaceId ? [fromDate, toDate, workspaceId] : [fromDate, toDate];
     const rows = db.all<{ event_date: string; c: number }>(
       `SELECT event_date, COUNT(*) AS c FROM overdue_events
        WHERE event_date >= ? AND event_date <= ?
-         AND deleted_at IS NULL
+         AND deleted_at IS NULL${wsClause}
        GROUP BY event_date`,
-      [fromDate, toDate],
+      params,
     );
     for (const r of rows) map.set(r.event_date, Number(r.c));
   } catch (e) {

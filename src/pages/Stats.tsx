@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store/useStore';
+import {
+  useCurrentWorkspaceTasks, useCurrentWorkspaceStatuses, useCurrentWorkspaceTags,
+} from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { ChevronDown, ChevronUp, Search, Download, Eye, EyeOff, Trash2, RotateCcw } from 'lucide-react';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -34,9 +37,9 @@ const COLUMNS: ColumnDef[] = [
 
 export function StatsPage() {
   const lang = useStore(s => s.language);
-  const tasks = useStore(s => s.tasks);
-  const statuses = useStore(s => s.statuses);
-  const tags = useStore(s => s.tags);
+  const tasks = useCurrentWorkspaceTasks();
+  const statuses = useCurrentWorkspaceStatuses();
+  const tags = useCurrentWorkspaceTags();
   const pushToast = useStore(s => s.pushToast);
   const columnWidths = useStore(s => s.columnWidths);
   const setColumnWidth = useStore(s => s.setColumnWidth);

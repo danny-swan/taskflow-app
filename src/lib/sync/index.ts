@@ -38,6 +38,10 @@ import { pushAll, type PushResult } from './push';
 import { pullAll, type PullResult } from './pull';
 import { subscribeRealtime, unsubscribeRealtime } from './realtime';
 import { getEntitlement, isProOrTrial } from '../entitlements';
+
+// Wave A (workspaces): переподписка realtime при смене набора/текущего ws
+// (используется store.switchWorkspace через ленивый import '../lib/sync').
+export { resubscribeRealtime } from './realtime';
 import { setBoundUserId, getBoundUserId } from '../snapshots';
 
 /**

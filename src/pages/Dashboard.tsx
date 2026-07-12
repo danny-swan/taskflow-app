@@ -1,5 +1,9 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { useStore } from '../store/useStore';
+import {
+  useCurrentWorkspaceTasks, useCurrentWorkspaceStatuses,
+  useCurrentWorkspaceTags, useCurrentWorkspaceId,
+} from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { formatDate, formatMonthDay } from '../lib/format';
 import { overdueEventsByDate } from '../lib/overdue';
@@ -27,9 +31,10 @@ function localDayKey(d: Date): string {
 
 export function DashboardPage() {
   const lang = useStore(s => s.language);
-  const allTasks = useStore(s => s.tasks);
-  const allStatuses = useStore(s => s.statuses);
-  const tags = useStore(s => s.tags);
+  const allTasks = useCurrentWorkspaceTasks();
+  const allStatuses = useCurrentWorkspaceStatuses();
+  const tags = useCurrentWorkspaceTags();
+  const currentWorkspaceId = useCurrentWorkspaceId();
   const [period, setPeriod] = useState<Period>('week');
   const [customRange, setCustomRange] = useState<CustomRange>({
     from: (() => { const d = new Date(); d.setDate(d.getDate() - 6); return localDayKey(d); })(),
@@ -112,7 +117,7 @@ export function DashboardPage() {
       const fromKey = localDayKey(from);
       const toKey = localDayKey(to);
       // Один SQL-запрос на весь период вместо N перебираемых задач за каждый день.
-      const overdueMap = overdueEventsByDate(fromKey, toKey);
+      const overdueMap = overdueEventsByDate(fromKey, toKey, currentWorkspaceId);
       const result: { date: string; created: number; completed: number; overdue: number; isoDate: string }[] = [];
       for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
         const key = localDayKey(d);
@@ -148,7 +153,7 @@ export function DashboardPage() {
     // новое событие (например, в updateTask), useMemo пересчитается и график
     // обновится без ручного refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dashTasks, periodDays, period, dateRange, lang, archiveStatusIds, overdueTick]);
+  }, [dashTasks, periodDays, period, dateRange, lang, archiveStatusIds, overdueTick, currentWorkspaceId]);
 
   // ─── Текущий срез (не зависит от периода) ────────────────────────────────
   const snapshot = useMemo(() => {
