@@ -348,6 +348,9 @@ describe('realtime schedulePull (v0.9.35-dev.5)', () => {
   it('WATCHED_TABLES содержит все sync-таблицы', async () => {
     const { _internals } = await import('./realtime');
     expect(_internals.WATCHED_TABLES).toEqual([
+      'sync_workspaces',
+      'sync_workspace_members',
+      'sync_workspace_settings',
       'sync_tasks',
       'sync_statuses',
       'sync_tags',

@@ -22,6 +22,7 @@
 import * as db from '../db';
 import { supabase } from '../supabase';
 import { logger } from '../logger';
+import { uuidv7 } from '../uuid';
 import {
   PUSH_ORDER,
   resolveStatusIdByUuid,
@@ -29,6 +30,7 @@ import {
   resolveTaskIdByUuid,
   type TableSpec,
 } from './mappers';
+import { listWorkspaceIds } from './workspace';
 
 /**
  * v0.9.35-dev.6.10.3 — Маркер «отложить строку» (deferred by design).
@@ -46,32 +48,64 @@ export class DeferRowError extends Error {
   }
 }
 
-/** Ключ в settings для хранения last_pulled cursor per-table. */
-function lastPulledKey(cloudTable: string): string {
-  return `sync_last_pulled_${cloudTable}`;
+/**
+ * Ключ settings для last_pulled cursor.
+ *
+ * Wave A PR-2: per-ws-per-table формат `sync_last_pulled_<ws>_<cloudTable>`.
+ * Legacy-формат (до ws) — `sync_last_pulled_<cloudTable>`. Если workspaceId не
+ * передан — возвращаем legacy-ключ (обратная совместимость вызовов без ws).
+ */
+function lastPulledKey(cloudTable: string, workspaceId?: string | null): string {
+  return workspaceId
+    ? `sync_last_pulled_${workspaceId}_${cloudTable}`
+    : `sync_last_pulled_${cloudTable}`;
+}
+
+function readSetting(key: string): string | null {
+  const row = db.get<{ value: string }>('SELECT value FROM settings WHERE key=?', [key]);
+  return row?.value ?? null;
 }
 
 /**
- * Читает last_pulled cursor для таблицы из settings.
- * cursorCol определяет начальное значение (updated_at → '1970-01-01', id → zero uuid).
+ * Читает last_pulled cursor для (ws, таблица) из settings.
+ *
+ * Мягкая миграция ключа (§3.4): если нового per-ws ключа ещё нет, но есть старый
+ * `sync_last_pulled_<cloudTable>` — используем его значение как стартовое для
+ * personal-ws и сразу переписываем в новый формат (идемпотентно). Так первый
+ * pull после PR-2 не перечитывает всё заново.
  */
-function getLastPulledAt(cloudTable: string, cursorCol: 'updated_at' | 'id' = 'updated_at'): string {
-  const row = db.get<{ value: string }>(
-    'SELECT value FROM settings WHERE key=?',
-    [lastPulledKey(cloudTable)],
-  );
-  if (row?.value) return row.value;
-  return cursorCol === 'id'
+function getLastPulledAt(
+  cloudTable: string,
+  cursorCol: 'updated_at' | 'id' = 'updated_at',
+  workspaceId?: string | null,
+): string {
+  const initial = cursorCol === 'id'
     ? '00000000-0000-0000-0000-000000000000'
     : '1970-01-01T00:00:00Z';
+
+  if (!workspaceId) {
+    return readSetting(lastPulledKey(cloudTable)) ?? initial;
+  }
+
+  const newKey = lastPulledKey(cloudTable, workspaceId);
+  const newVal = readSetting(newKey);
+  if (newVal) return newVal;
+
+  // Мягкая миграция: legacy-ключ → per-ws ключ.
+  const legacyVal = readSetting(lastPulledKey(cloudTable));
+  if (legacyVal) {
+    setLastPulledAt(cloudTable, legacyVal, workspaceId);
+    return legacyVal;
+  }
+  return initial;
 }
 
-/** Обновляет last_pulled cursor в settings. */
-function setLastPulledAt(cloudTable: string, value: string): void {
+/** Обновляет last_pulled cursor в settings (per-ws при наличии workspaceId). */
+function setLastPulledAt(cloudTable: string, value: string, workspaceId?: string | null): void {
   db.run(
     `INSERT INTO settings (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    [lastPulledKey(cloudTable), value],
+    [lastPulledKey(cloudTable, workspaceId), value],
   );
 }
 
@@ -91,6 +125,7 @@ interface CloudRow {
 
 /** Применяет одну строку из облака к локальной БД. Возвращает true, если что-то изменили. */
 function applyCloudRowTasks(row: CloudRow): boolean {
+  row.workspace_id ??= null; // облако всегда шлёт ws_id; защищаемся от undefined-бинда
   const local = db.get<{ id: number; updated_at: string; version: number }>(
     'SELECT id, updated_at, version FROM tasks WHERE uuid=?',
     [row.id],
@@ -107,13 +142,13 @@ function applyCloudRowTasks(row: CloudRow): boolean {
            tag_id=?,
            start_date=?, deadline=?, finish_date=?,
            sort_order=?, archived=?,
-           updated_at=?, deleted_at=?, version=?, client_id=?
+           updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [
         row.title,
         row.comment,
-        resolveStatusIdByUuid(row.status_id),
-        resolveTagIdByUuid(row.tag_id),
+        resolveStatusIdByUuid(row.status_id, row.workspace_id),
+        resolveTagIdByUuid(row.tag_id, row.workspace_id),
         row.start_date,
         row.deadline,
         row.finish_date,
@@ -123,6 +158,7 @@ function applyCloudRowTasks(row: CloudRow): boolean {
         row.deleted_at,
         row.version,
         row.client_id,
+        row.workspace_id,
         row.id,
       ],
     );
@@ -130,7 +166,7 @@ function applyCloudRowTasks(row: CloudRow): boolean {
   }
 
   // Локальной строки нет — INSERT новую с сохранением uuid.
-  const statusIntId = resolveStatusIdByUuid(row.status_id);
+  const statusIntId = resolveStatusIdByUuid(row.status_id, row.workspace_id);
   if (statusIntId === null) {
     // v0.9.35-dev.6.10.3 — ФИКС сирот-задач (Проблема №1: всё улетало в «Важно»).
     //
@@ -155,14 +191,14 @@ function applyCloudRowTasks(row: CloudRow): boolean {
   db.run(
     `INSERT INTO tasks
       (uuid, title, comment, status_id, tag_id, start_date, deadline, finish_date,
-       sort_order, archived, created_at, updated_at, deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       sort_order, archived, created_at, updated_at, deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       row.id,
       row.title,
       row.comment,
       statusIntId,
-      resolveTagIdByUuid(row.tag_id),
+      resolveTagIdByUuid(row.tag_id, row.workspace_id),
       row.start_date,
       row.deadline,
       row.finish_date,
@@ -173,12 +209,14 @@ function applyCloudRowTasks(row: CloudRow): boolean {
       row.deleted_at,
       row.version,
       row.client_id,
+      row.workspace_id,
     ],
   );
   return true;
 }
 
 function applyCloudRowStatuses(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM statuses WHERE uuid=?',
     [row.id],
@@ -189,13 +227,13 @@ function applyCloudRowStatuses(row: CloudRow): boolean {
       `UPDATE statuses
        SET name=?, color=?, behavior=?, sort_order=?, is_seed=?, is_technical=?,
            hidden=?, default_collapsed=?,
-           updated_at=?, deleted_at=?, version=?, client_id=?
+           updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [
         row.name, row.color, row.behavior, row.sort_order,
         row.is_seed ? 1 : 0, row.is_technical ? 1 : 0,
         row.hidden ? 1 : 0, row.default_collapsed ? 1 : 0,
-        row.updated_at, row.deleted_at, row.version, row.client_id,
+        row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id,
         row.id,
       ],
     );
@@ -204,19 +242,20 @@ function applyCloudRowStatuses(row: CloudRow): boolean {
   db.run(
     `INSERT INTO statuses
       (uuid, name, color, behavior, sort_order, is_seed, is_technical,
-       hidden, default_collapsed, updated_at, deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       hidden, default_collapsed, updated_at, deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       row.id, row.name, row.color, row.behavior, row.sort_order,
       row.is_seed ? 1 : 0, row.is_technical ? 1 : 0,
       row.hidden ? 1 : 0, row.default_collapsed ? 1 : 0,
-      row.updated_at, row.deleted_at, row.version, row.client_id,
+      row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id,
     ],
   );
   return true;
 }
 
 function applyCloudRowTags(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM tags WHERE uuid=?',
     [row.id],
@@ -226,18 +265,18 @@ function applyCloudRowTags(row: CloudRow): boolean {
     db.run(
       `UPDATE tags
        SET name=?, color=?, sort_order=?,
-           updated_at=?, deleted_at=?, version=?, client_id=?
+           updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [row.name, row.color, row.sort_order,
-       row.updated_at, row.deleted_at, row.version, row.client_id, row.id],
+       row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id, row.id],
     );
     return true;
   }
   db.run(
-    `INSERT INTO tags (uuid, name, color, sort_order, updated_at, deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?)`,
+    `INSERT INTO tags (uuid, name, color, sort_order, updated_at, deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
     [row.id, row.name, row.color, row.sort_order,
-     row.updated_at, row.deleted_at, row.version, row.client_id],
+     row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id],
   );
   return true;
 }
@@ -248,6 +287,7 @@ function applyCloudRowTags(row: CloudRow): boolean {
  * остальное immutable. Если нет — INSERT (при условии что task уже локально).
  */
 function applyCloudRowOverdueEvents(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; deleted_at: string | null }>(
     'SELECT id, deleted_at FROM overdue_events WHERE uuid=?',
     [row.id],
@@ -273,8 +313,8 @@ function applyCloudRowOverdueEvents(row: CloudRow): boolean {
   db.run(
     `INSERT INTO overdue_events
       (uuid, task_id, deadline_snapshot, event_date, created_at, updated_at,
-       deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+       deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [
       row.id,
       taskId,
@@ -285,12 +325,14 @@ function applyCloudRowOverdueEvents(row: CloudRow): boolean {
       row.deleted_at,
       1,                        // version — локально всегда 1 для overdue
       row.client_id,
+      row.workspace_id,
     ],
   );
   return true;
 }
 
 function applyCloudRowTemplates(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM task_templates WHERE uuid=?',
     [row.id],
@@ -301,26 +343,26 @@ function applyCloudRowTemplates(row: CloudRow): boolean {
       `UPDATE task_templates
        SET name=?, title=?, comment=?,
            status_id=?, tag_id=?, sort_order=?,
-           updated_at=?, deleted_at=?, version=?, client_id=?
+           updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [row.name, row.title, row.comment,
-       row.status_id ? resolveStatusIdByUuid(row.status_id) : null,
-       resolveTagIdByUuid(row.tag_id),
+       row.status_id ? resolveStatusIdByUuid(row.status_id, row.workspace_id) : null,
+       resolveTagIdByUuid(row.tag_id, row.workspace_id),
        row.sort_order,
-       row.updated_at, row.deleted_at, row.version, row.client_id, row.id],
+       row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id, row.id],
     );
     return true;
   }
   db.run(
     `INSERT INTO task_templates
       (uuid, name, title, comment, status_id, tag_id, sort_order,
-       created_at, updated_at, deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+       created_at, updated_at, deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [row.id, row.name, row.title, row.comment,
-     row.status_id ? resolveStatusIdByUuid(row.status_id) : null,
-     resolveTagIdByUuid(row.tag_id),
+     row.status_id ? resolveStatusIdByUuid(row.status_id, row.workspace_id) : null,
+     resolveTagIdByUuid(row.tag_id, row.workspace_id),
      row.sort_order, row.created_at, row.updated_at, row.deleted_at,
-     row.version, row.client_id],
+     row.version, row.client_id, row.workspace_id],
   );
   return true;
 }
@@ -331,6 +373,7 @@ function applyCloudRowTemplates(row: CloudRow): boolean {
  * uuid; если задача ещё не локальна — откладываем (DeferRowError).
  */
 function applyCloudRowHoldPeriods(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM task_hold_periods WHERE uuid=?',
     [row.id],
@@ -339,10 +382,10 @@ function applyCloudRowHoldPeriods(row: CloudRow): boolean {
     if (local.updated_at >= row.updated_at) return false;
     db.run(
       `UPDATE task_hold_periods
-       SET started_at=?, ended_at=?, updated_at=?, deleted_at=?, version=?, client_id=?
+       SET started_at=?, ended_at=?, updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [row.started_at, row.ended_at, row.updated_at, row.deleted_at,
-       row.version, row.client_id, row.id],
+       row.version, row.client_id, row.workspace_id, row.id],
     );
     return true;
   }
@@ -355,8 +398,8 @@ function applyCloudRowHoldPeriods(row: CloudRow): boolean {
   db.run(
     `INSERT INTO task_hold_periods
       (uuid, task_id, started_at, ended_at, created_at, updated_at,
-       deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+       deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [
       row.id,
       taskId,
@@ -367,13 +410,108 @@ function applyCloudRowHoldPeriods(row: CloudRow): boolean {
       row.deleted_at,
       row.version,
       row.client_id,
+      row.workspace_id,
     ],
+  );
+  return true;
+}
+
+/**
+ * workspaces: собственный id (== ws_<uid>) — matched по uuid. LWW по updated_at.
+ * Локальная таблица не имеет user_id; owner_id приходит из облака.
+ */
+function applyCloudRowWorkspaces(row: CloudRow): boolean {
+  const local = db.get<{ id: number; updated_at: string }>(
+    'SELECT id, updated_at FROM workspaces WHERE uuid=?',
+    [row.id],
+  );
+  if (local) {
+    if (local.updated_at >= row.updated_at) return false;
+    db.run(
+      `UPDATE workspaces
+       SET name=?, kind=?, owner_id=?, sort_order=?,
+           updated_at=?, deleted_at=?, version=?, client_id=?
+       WHERE uuid=?`,
+      [row.name, row.kind, row.owner_id, row.sort_order,
+       row.updated_at, row.deleted_at, row.version, row.client_id, row.id],
+    );
+    return true;
+  }
+  db.run(
+    `INSERT INTO workspaces
+      (uuid, name, kind, owner_id, sort_order, created_at, updated_at, deleted_at, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [row.id, row.name, row.kind, row.owner_id, row.sort_order,
+     row.created_at, row.updated_at, row.deleted_at, row.version, row.client_id],
+  );
+  return true;
+}
+
+/** workspace_members: matched по uuid (серверный id). LWW по updated_at. */
+function applyCloudRowMembers(row: CloudRow): boolean {
+  const local = db.get<{ id: number; updated_at: string }>(
+    'SELECT id, updated_at FROM workspace_members WHERE uuid=?',
+    [row.id],
+  );
+  if (local) {
+    if (local.updated_at >= row.updated_at) return false;
+    db.run(
+      `UPDATE workspace_members
+       SET workspace_id=?, user_id=?, role=?, invited_by=?, joined_at=?,
+           updated_at=?, deleted_at=?, version=?, client_id=?
+       WHERE uuid=?`,
+      [row.workspace_id, row.user_id, row.role, row.invited_by, row.joined_at,
+       row.updated_at, row.deleted_at, row.version, row.client_id, row.id],
+    );
+    return true;
+  }
+  db.run(
+    `INSERT INTO workspace_members
+      (uuid, workspace_id, user_id, role, invited_by, joined_at,
+       created_at, updated_at, deleted_at, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    [row.id, row.workspace_id, row.user_id, row.role, row.invited_by, row.joined_at,
+     row.created_at, row.updated_at, row.deleted_at, row.version, row.client_id],
+  );
+  return true;
+}
+
+/**
+ * workspace_settings: серверный PK = (workspace_id, key), нет колонки id.
+ * Matched локально по (workspace_id, key). LWW по updated_at. Локальный uuid —
+ * генерируем при вставке (нужен для outbox/fetchLocal при обратном push'е).
+ */
+function applyCloudRowSettings(row: CloudRow): boolean {
+  const local = db.get<{ id: number; updated_at: string }>(
+    'SELECT id, updated_at FROM workspace_settings WHERE workspace_id=? AND key=?',
+    [row.workspace_id, row.key],
+  );
+  if (local) {
+    if (local.updated_at >= row.updated_at) return false;
+    db.run(
+      `UPDATE workspace_settings
+       SET value=?, updated_at=?, deleted_at=?, version=?, client_id=?
+       WHERE workspace_id=? AND key=?`,
+      [row.value, row.updated_at, row.deleted_at, row.version, row.client_id,
+       row.workspace_id, row.key],
+    );
+    return true;
+  }
+  db.run(
+    `INSERT INTO workspace_settings
+      (uuid, workspace_id, key, value, created_at, updated_at, deleted_at, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [uuidv7(), row.workspace_id, row.key, row.value,
+     row.created_at, row.updated_at, row.deleted_at, row.version, row.client_id],
   );
   return true;
 }
 
 /** Карта applier'ов по имени облачной таблицы. */
 const APPLIERS: Record<string, (row: CloudRow) => boolean> = {
+  sync_workspaces: applyCloudRowWorkspaces,
+  sync_workspace_members: applyCloudRowMembers,
+  sync_workspace_settings: applyCloudRowSettings,
   sync_tasks: applyCloudRowTasks,
   sync_statuses: applyCloudRowStatuses,
   sync_tags: applyCloudRowTags,
@@ -415,8 +553,12 @@ export interface PullResult {
 
 /**
  * Пуллит одну таблицу. Обновляет last_pulled_at на max(updated_at).
+ *
+ * Скоуп: таблицы с user_id фильтруются по user_id; таблицы без него
+ * (sync_workspace_settings) — по workspace_id IN (<мои ws>). Курсор хранится
+ * per-ws (ключ по первому/personal ws — в Wave A он один).
  */
-async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
+async function pullTable(userId: string, spec: TableSpec, workspaceIds: string[]): Promise<PullResult> {
   const result: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
   const applier = APPLIERS[spec.cloud];
   if (!applier) {
@@ -425,15 +567,19 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
   }
 
   const cursorCol = cursorColumnFor(spec.cloud);
-  const lastPulled = getLastPulledAt(spec.cloud, cursorCol);
+  const cursorWs = workspaceIds[0] ?? null;
+  const lastPulled = getLastPulledAt(spec.cloud, cursorCol, cursorWs);
   try {
-    const { data, error } = await supabase
-      .from(spec.cloud)
-      .select('*')
-      .eq('user_id', userId)
+    // Скоуп-фильтр первым (как раньше .eq('user_id')): таблицы без user_id
+    // (sync_workspace_settings) фильтруем по workspace_id IN (<мои ws>).
+    let scoped = spec.pullScope === 'workspace_id'
+      ? supabase.from(spec.cloud).select('*').in('workspace_id', workspaceIds)
+      : supabase.from(spec.cloud).select('*').eq('user_id', userId);
+    const query = scoped
       .gt(cursorCol, lastPulled)
       .order(cursorCol, { ascending: true })
       .limit(PULL_BATCH_SIZE);
+    const { data, error } = await query;
     if (error) throw new Error(error.message);
     if (!data || data.length === 0) return result;
 
@@ -472,7 +618,7 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
 
     // Сохраняем прогресс. Если applied+skipped == батч, возможно есть ещё —
     // orchestrator позовёт нас снова.
-    setLastPulledAt(spec.cloud, maxCursor);
+    setLastPulledAt(spec.cloud, maxCursor, cursorWs);
     logger.info(
       `[sync/pull] ${spec.cloud}: +${result.applied} applied, ${result.skipped} skipped, ${result.deferred} deferred`,
     );
@@ -492,9 +638,10 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
  */
 export async function pullAll(userId: string): Promise<PullResult> {
   const total: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
+  const workspaceIds = listWorkspaceIds(userId);
   for (const spec of PUSH_ORDER) {
     for (let i = 0; i < 5; i++) {
-      const r = await pullTable(userId, spec);
+      const r = await pullTable(userId, spec, workspaceIds);
       total.applied += r.applied;
       total.skipped += r.skipped;
       total.deferred += r.deferred;
@@ -516,6 +663,10 @@ export const _internals = {
   applyCloudRowTemplates,
   applyCloudRowOverdueEvents,
   applyCloudRowHoldPeriods,
+  applyCloudRowWorkspaces,
+  applyCloudRowMembers,
+  applyCloudRowSettings,
+  lastPulledKey,
   cursorColumnFor,
   initialCursorValue,
   lastPulledCursorKey,

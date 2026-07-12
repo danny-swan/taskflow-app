@@ -215,7 +215,7 @@ export async function pushBatch(userId: string, clientId: string): Promise<PushR
     try {
       const { error } = await supabase
         .from(g.spec.cloud)
-        .upsert(payloads, { onConflict: 'id' });
+        .upsert(payloads, { onConflict: g.spec.onConflict ?? 'id' });
       if (error) throw new Error(error.message);
       markSuccess(validIds);
       result.pushed += validIds.length;

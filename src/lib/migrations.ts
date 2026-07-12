@@ -809,6 +809,63 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+
+  // ================================================================
+  // v12 — Outbox-backfill workspace-сущностей (Wave A, PR-2 «Sync»).
+  //
+  // v11 СПЕЦИАЛЬНО не клала ws-строки в sync_outbox: v9-тесты рассчитывают,
+  // что миграции workspaces не трогают их счётчики outbox. Теперь, когда sync
+  // ws-сущностей реализован (мапперы/pull/push/realtime), нужно поставить на
+  // push уже созданные v11 строки personal-пространства, owner-членства и
+  // перенесённой настройки overdue_mode — иначе они никогда не уедут в облако
+  // на базах, где v11 уже отработала до появления PR-2.
+  //
+  // Кладём ТОЛЬКО реальные (не local-only) строки: placeholder-id `ws_local` /
+  // `wsm_local` пушить нельзя (сервер их отвергнет по RLS/owner). Для local-only
+  // баз push произойдёт после привязки аккаунта — reconcilePersonalWorkspace()
+  // переименует ws_local → ws_<uid> и сам поставит их в outbox.
+  //
+  // ON CONFLICT DO NOTHING: серверный backfill 0027 создаёт те же
+  // детерминированные id, push использует upsert — повторная постановка
+  // безопасна и не плодит дублей в outbox (UNIQUE(entity_table, entity_uuid)).
+  // Идемпотентно: повторный прогон ничего не ломает.
+  // ================================================================
+  {
+    version: 12,
+    description: 'Outbox-backfill workspace-сущностей для первого sync (Wave A PR-2)',
+    up: async ({ exec, select }) => {
+      const enqueue = async (entityTable: string, uuid: string) => {
+        await exec(
+          `INSERT INTO sync_outbox
+             (entity_table, entity_uuid, op, queued_at, attempt_count, last_attempt_at, last_error)
+           VALUES (?, ?, 'upsert', datetime('now'), 0, NULL, NULL)
+           ON CONFLICT(entity_table, entity_uuid) DO NOTHING`,
+          [entityTable, uuid],
+        );
+      };
+
+      // Пространства (кроме local-only placeholder'а).
+      const wsRows = await select<{ uuid: string | null }>(
+        `SELECT uuid FROM workspaces
+          WHERE uuid IS NOT NULL AND uuid <> 'ws_local' AND deleted_at IS NULL`,
+      );
+      for (const r of wsRows) if (r.uuid) await enqueue('workspaces', r.uuid);
+
+      // Членство (кроме local-only placeholder'а).
+      const memberRows = await select<{ uuid: string | null }>(
+        `SELECT uuid FROM workspace_members
+          WHERE uuid IS NOT NULL AND uuid <> 'wsm_local' AND deleted_at IS NULL`,
+      );
+      for (const r of memberRows) if (r.uuid) await enqueue('workspace_members', r.uuid);
+
+      // Настройки пространств, привязанных к реальному ws (не ws_local).
+      const settingRows = await select<{ uuid: string | null }>(
+        `SELECT uuid FROM workspace_settings
+          WHERE uuid IS NOT NULL AND workspace_id <> 'ws_local' AND deleted_at IS NULL`,
+      );
+      for (const r of settingRows) if (r.uuid) await enqueue('workspace_settings', r.uuid);
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */
