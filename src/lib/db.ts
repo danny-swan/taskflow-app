@@ -437,8 +437,23 @@ function migrate(d: Database) {
   }
 }
 
+// Wave A (workspaces): id personal-пространства для штампа seed-строк.
+// v11-миграция пишет settings.personal_workspace_id ДО seed(); читаем его,
+// чтобы засеянные статусы/теги/welcome-задача получили workspace_id и попадали
+// в ws-scoped выборки UI (иначе список пуст — регрессия Wave A PR-3).
+function readSeedWsId(d: Database): string | null {
+  try {
+    const stmt = d.prepare(`SELECT value FROM settings WHERE key='personal_workspace_id' LIMIT 1`);
+    let v: string | null = null;
+    if (stmt.step()) v = (((stmt.getAsObject() as any).value as string) ?? '').trim() || null;
+    stmt.free();
+    return v ?? 'ws_local';
+  } catch { return 'ws_local'; }
+}
+
 function seed(d: Database) {
   const now = new Date().toISOString();
+  const wsId = readSeedWsId(d);
 
   // v0.9.35-dev.6.10.0: читаем client_id (проставлен миграцией v5/v9).
   const cidStmt = d.prepare(`SELECT value FROM settings WHERE key='client_id' LIMIT 1`);
@@ -457,9 +472,9 @@ function seed(d: Database) {
     d.run(
       `INSERT INTO statuses
          (uuid, name, color, behavior, sort_order, is_seed, is_technical,
-          hidden, default_collapsed, updated_at, version, client_id)
-       VALUES (?,?,?,?,?,1,?,?,?,?,1,?)`,
-      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId]
+          hidden, default_collapsed, updated_at, version, client_id, workspace_id)
+       VALUES (?,?,?,?,?,1,?,?,?,?,1,?,?)`,
+      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId, wsId]
     );
   });
 
@@ -469,9 +484,9 @@ function seed(d: Database) {
     const uuid = uuidv7();
     tagUuids.push(uuid);
     d.run(
-      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id)
-       VALUES (?,?,?,?,?,1,?)`,
-      [uuid, t.name, t.color, i, now, clientId]
+      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id, workspace_id)
+       VALUES (?,?,?,?,?,1,?,?)`,
+      [uuid, t.name, t.color, i, now, clientId, wsId]
     );
   });
 
@@ -504,13 +519,13 @@ function seed(d: Database) {
   d.run(
     `INSERT INTO tasks
        (uuid, title, comment, tag_id, status_id, start_date, deadline, finish_date,
-        created_at, updated_at, sort_order, archived, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?)`,
+        created_at, updated_at, sort_order, archived, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?)`,
     [
       taskUuid,
       'Добро пожаловать в TaskFlow',
       'Нажмите ✓ справа, чтобы выполнить задачу, или иконка корзины 🗑 в правом верхнем углу — чтобы удалить.',
-      tagId, statusId, todayStr, deadlineStr, null, now, now, 0, clientId,
+      tagId, statusId, todayStr, deadlineStr, null, now, now, 0, clientId, wsId,
     ]
   );
 
@@ -738,6 +753,20 @@ export async function ensureSeededIfEmpty(): Promise<boolean> {
     }
   } catch (e) { console.warn('[ensureSeededIfEmpty] read client_id:', e); }
 
+  // Wave A: personal workspace id для штампа seed-строк (аналогично seed()).
+  let seedWsId: string = 'ws_local';
+  try {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      const rows: any[] = await d.select(`SELECT value FROM settings WHERE key='personal_workspace_id'`);
+      seedWsId = (String(rows[0]?.value ?? '').trim()) || 'ws_local';
+    } else if (webDb) {
+      const stmt = webDb.prepare(`SELECT value FROM settings WHERE key='personal_workspace_id' LIMIT 1`);
+      if (stmt.step()) seedWsId = ((((stmt.getAsObject() as any).value as string) ?? '').trim()) || 'ws_local';
+      stmt.free();
+    }
+  } catch (e) { console.warn('[ensureSeededIfEmpty] read personal_workspace_id:', e); }
+
   // Статусы. ВАЖНО: генерируем ОДИН uuid на статус и пишем его в оба зеркала,
   // чтобы web и Tauri ссылались на одинаковые uuid (иначе рассинхрон в sync).
   const statusUuids: string[] = [];
@@ -748,9 +777,9 @@ export async function ensureSeededIfEmpty(): Promise<boolean> {
     await execBoth(
       `INSERT INTO statuses
          (uuid, name, color, behavior, sort_order, is_seed, is_technical,
-          hidden, default_collapsed, updated_at, version, client_id)
-       VALUES (?,?,?,?,?,1,?,?,?,?,1,?)`,
-      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId]
+          hidden, default_collapsed, updated_at, version, client_id, workspace_id)
+       VALUES (?,?,?,?,?,1,?,?,?,?,1,?,?)`,
+      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId, seedWsId]
     );
   }
 
@@ -761,9 +790,9 @@ export async function ensureSeededIfEmpty(): Promise<boolean> {
     const uuid = uuidv7();
     tagUuids.push(uuid);
     await execBoth(
-      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id)
-       VALUES (?,?,?,?,?,1,?)`,
-      [uuid, t.name, t.color, i, now, clientId]
+      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id, workspace_id)
+       VALUES (?,?,?,?,?,1,?,?)`,
+      [uuid, t.name, t.color, i, now, clientId, seedWsId]
     );
   }
 
@@ -1100,6 +1129,13 @@ export async function applyBackup(
   // состояние из облака (баг: «снимок восстановлен, а задача не вернулась»).
   const nowIso = new Date().toISOString();
   const clientId = get<{ value: string }>(`SELECT value FROM settings WHERE key='client_id'`)?.value ?? null;
+  // Wave A: бэкапы (легаси-формат) не несут workspace_id — штампуем
+  // восстановленные строки текущим personal-пространством, иначе они выпадают
+  // из ws-scoped выборок UI (регрессия Wave A PR-3: импорт → пустой список).
+  const importWsId =
+    get<{ value: string }>(`SELECT value FROM settings WHERE key='current_workspace_id'`)?.value
+    ?? get<{ value: string }>(`SELECT value FROM settings WHERE key='personal_workspace_id'`)?.value
+    ?? 'ws_local';
   const restoredUuids: { table: 'statuses' | 'tags' | 'tasks' | 'task_templates'; uuid: string }[] = [];
 
   // Helper to do the run in both Tauri and web modes
@@ -1134,9 +1170,9 @@ export async function applyBackup(
       const uuid = typeof s.uuid === 'string' && s.uuid ? s.uuid : uuidv7();
       const version = typeof s.version === 'number' ? s.version + 1 : 1;
       await sync(
-        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed, uuid, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed, uuid, updated_at, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [name, s.color ?? '#888', s.behavior ?? 'middle', s.sort_order ?? 0, s.is_seed ?? 0, s.is_technical ?? 0, s.hidden ?? 0, s.default_collapsed ?? 0,
-         uuid, nowIso, s.deleted_at ?? null, version, s.client_id ?? clientId]
+         uuid, nowIso, s.deleted_at ?? null, version, s.client_id ?? clientId, importWsId]
       );
       counts.statuses++;
       restoredUuids.push({ table: 'statuses', uuid });
@@ -1154,8 +1190,8 @@ export async function applyBackup(
       const uuid = typeof t.uuid === 'string' && t.uuid ? t.uuid : uuidv7();
       const version = typeof t.version === 'number' ? t.version + 1 : 1;
       await sync(
-        `INSERT INTO tags (name, color, sort_order, uuid, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?)`,
-        [name, t.color ?? '#888', t.sort_order ?? 0, uuid, nowIso, t.deleted_at ?? null, version, t.client_id ?? clientId]
+        `INSERT INTO tags (name, color, sort_order, uuid, updated_at, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+        [name, t.color ?? '#888', t.sort_order ?? 0, uuid, nowIso, t.deleted_at ?? null, version, t.client_id ?? clientId, importWsId]
       );
       counts.tags++;
       restoredUuids.push({ table: 'tags', uuid });
@@ -1211,7 +1247,7 @@ export async function applyBackup(
       const uuid = typeof t.uuid === 'string' && t.uuid ? t.uuid : uuidv7();
       const version = typeof t.version === 'number' ? t.version + 1 : 1;
       await sync(
-        `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           title,
           t.comment ?? '',
@@ -1228,6 +1264,7 @@ export async function applyBackup(
           t.deleted_at ?? null,
           version,
           t.client_id ?? clientId,
+          importWsId,
         ]
       );
       counts.tasks++;
@@ -1272,8 +1309,8 @@ export async function applyBackup(
         const uuid = typeof tpl.uuid === 'string' && tpl.uuid ? tpl.uuid : uuidv7();
         const version = typeof tpl.version === 'number' ? tpl.version + 1 : 1;
         await sync(
-          `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, uuid, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-          [name, String(tpl.title ?? ''), String(tpl.comment ?? ''), statusId, tagId, tpl.sort_order ?? 0, uuid, nowIso, tpl.deleted_at ?? null, version, tpl.client_id ?? clientId]
+          `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, uuid, updated_at, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [name, String(tpl.title ?? ''), String(tpl.comment ?? ''), statusId, tagId, tpl.sort_order ?? 0, uuid, nowIso, tpl.deleted_at ?? null, version, tpl.client_id ?? clientId, importWsId]
         );
         counts.templates++;
         restoredUuids.push({ table: 'task_templates', uuid });
