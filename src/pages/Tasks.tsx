@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { useStore, Task } from '../store/useStore';
 import {
   useCurrentWorkspaceTasks, useCurrentWorkspaceStatuses,
-  useCurrentWorkspaceTags, useCurrentWorkspaceTemplates,
+  useCurrentWorkspaceTags, useCurrentWorkspaceTemplates, useCanEdit,
 } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { daysUntilDeadline, todayISO } from '../lib/utils';
@@ -42,6 +42,7 @@ export function TasksPage() {
   const tasksView = useStore(s => s.tasksView);
   const setTasksView = useStore(s => s.setTasksView);
   const overdueMode = useStore(s => s.overdueMode); // v0.9.2 (№1)
+  const canEdit = useCanEdit(); // Wave A PR-4: viewer — read-only
 
   const techIds = useMemo(() => new Set(allStatuses.filter(s => s.is_technical === 1).map(s => s.id)), [allStatuses]);
 
@@ -364,7 +365,9 @@ export function TasksPage() {
             </div>
             {/* v0.8.13: split-кнопка «+ Новая задача» │ ▾. Основная часть
                 открывает пустую модалку (поведение как раньше), стрелка — меню со списком
-                шаблонов. Если шаблонов нет — меню прячется, остаётся обычная кнопка. */}
+                шаблонов. Если шаблонов нет — меню прячется, остаётся обычная кнопка.
+                Wave A PR-4: для viewer (read-only) кнопка создания скрыта целиком. */}
+            {canEdit && (
             <div
               ref={templatesMenuRef}
               className="relative inline-flex items-stretch"
@@ -429,6 +432,7 @@ export function TasksPage() {
                 </>
               )}
             </div>
+            )}
           </div>
         </div>
       </div>

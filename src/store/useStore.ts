@@ -84,6 +84,20 @@ export interface Workspace {
   sort_order: number;
 }
 
+/**
+ * Wave A (workspaces): участник пространства. Локальное зеркало таблицы
+ * `workspace_members`. `id` — серверный uuid строки членства; `user_id` —
+ * uuid пользователя; `role` — owner/editor/viewer.
+ */
+export interface WorkspaceMember {
+  id: string;                       // = workspace_members.uuid (серверный id)
+  workspace_id: string;
+  user_id: string | null;
+  role: 'owner' | 'editor' | 'viewer' | string;
+  invited_by: string | null;
+  joined_at: string | null;
+}
+
 // v0.8.13: шаблон задачи — образец, из которого одним кликом создаётся новая задача.
 // Хранится в отдельной таблице task_templates (миграция v2).
 export interface TaskTemplate {
@@ -115,6 +129,11 @@ interface State {
   // через ws-scoped хуки (useCurrentWorkspace*), фильтруя по currentWorkspaceId.
   currentWorkspaceId: string | null;
   workspaces: Workspace[];
+  // Wave A (workspaces, PR-4): участники всех известных пространств + uuid
+  // привязанного пользователя (settings.bound_user_id). Нужны ролевым хукам
+  // (useCurrentWorkspaceRole) и вкладке «Участники».
+  workspaceMembers: WorkspaceMember[];
+  boundUserId: string | null;
   language: Lang;
   theme: ThemeName;
   statsEnabled: boolean;
@@ -159,7 +178,19 @@ interface State {
   // Wave A (workspaces): управление текущим пространством.
   setWorkspaces(list: Workspace[]): void;
   loadWorkspaces(): void;                 // перечитать список из локальной БД + выбрать дефолт
+  loadWorkspaceMembers(): void;           // перечитать участников из локальной БД
   switchWorkspace(id: string): void;      // сменить текущее ws (persist + refresh + resync)
+
+  // Wave A (workspaces, PR-4): CRUD пространств. Все — локальная запись в SQLite
+  // + enqueueOutbox для последующего push'а в облако.
+  createWorkspace(name: string, kind: 'personal' | 'shared'): string; // → id нового ws
+  renameWorkspace(id: string, name: string): void;                     // owner-only (UI-гейт)
+  deleteWorkspace(id: string): void;                                   // soft-delete + switch на personal
+
+  // Управление участниками текущего (shared) пространства.
+  addWorkspaceMember(userId: string, role: 'editor' | 'viewer'): void;
+  updateWorkspaceMemberRole(memberId: string, role: 'owner' | 'editor' | 'viewer'): void;
+  removeWorkspaceMember(memberId: string): void;
 
   setLanguage(l: Lang): void;
   setTheme(t: ThemeName): void;
@@ -255,6 +286,34 @@ function readWorkspacesFromDb(): Workspace[] {
   }
 }
 
+/** Прочитать участников всех пространств из локальной таблицы `workspace_members`. */
+function readMembersFromDb(): WorkspaceMember[] {
+  try {
+    const rows = db.all<{
+      uuid: string | null; workspace_id: string; user_id: string | null;
+      role: string; invited_by: string | null; joined_at: string | null;
+    }>(
+      `SELECT uuid, workspace_id, user_id, role, invited_by, joined_at
+         FROM workspace_members
+        WHERE deleted_at IS NULL
+        ORDER BY joined_at, id`,
+    );
+    return rows
+      .filter(r => !!r.uuid)
+      .map(r => ({
+        id: r.uuid as string,
+        workspace_id: r.workspace_id,
+        user_id: r.user_id ?? null,
+        role: r.role,
+        invited_by: r.invited_by ?? null,
+        joined_at: r.joined_at ?? null,
+      }));
+  } catch {
+    // Таблицы нет на базе до v11 — не критично.
+    return [];
+  }
+}
+
 /** Прочитать один ключ из settings (или null). */
 function readSetting(key: string): string | null {
   try {
@@ -321,6 +380,8 @@ export const useStore = create<State>((set, get) => ({
   tasks: [],
   currentWorkspaceId: null,
   workspaces: [],
+  workspaceMembers: [],
+  boundUserId: null,
   language: 'ru',
   theme: 'light',
   statsEnabled: true,
@@ -403,6 +464,8 @@ export const useStore = create<State>((set, get) => ({
     // Если сохранённый current_workspace_id пуст или указывает на несуществующее
     // пространство — падаем на personal-пространство по умолчанию.
     const workspaces = readWorkspacesFromDb();
+    const workspaceMembers = readMembersFromDb();
+    const boundUserId = (map.bound_user_id || '').trim() || null;
     const savedWsId = (map.current_workspace_id || '').trim() || null;
     const currentWorkspaceId =
       savedWsId && workspaces.some(w => w.id === savedWsId)
@@ -419,6 +482,8 @@ export const useStore = create<State>((set, get) => ({
       ready: true,
       currentWorkspaceId,
       workspaces,
+      workspaceMembers,
+      boundUserId,
       language,
       theme,
       statsEnabled: map.stats_enabled !== '0',
@@ -544,6 +609,125 @@ export const useStore = create<State>((set, get) => ({
 
   loadWorkspaces() {
     get().setWorkspaces(readWorkspacesFromDb());
+  },
+
+  loadWorkspaceMembers() {
+    set({ workspaceMembers: readMembersFromDb() });
+  },
+
+  createWorkspace(name, kind) {
+    const clean = name.trim().slice(0, 60);
+    const now = new Date().toISOString();
+    const clientId = getClientId();
+    const boundUserId = get().boundUserId ?? readSetting('bound_user_id');
+    // Уникальный серверный id пространства (== workspaces.uuid). Personal-ws
+    // имеет детерминированный ws_<uid>; для новых просто ws_<uuid-hex>.
+    const wsUuid = 'ws_' + uuidv7().replace(/-/g, '');
+    const order =
+      (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM workspaces')?.m) ?? 0;
+    db.run(
+      `INSERT INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,?,?,1,?)`,
+      [wsUuid, clean, kind, boundUserId, order, now, now, clientId],
+    );
+    enqueueOutbox('workspaces', wsUuid, 'upsert');
+    // owner-membership создателя.
+    const memberUuid = uuidv7();
+    db.run(
+      `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, invited_by, joined_at, created_at, updated_at, version, client_id)
+       VALUES (?,?,?,'owner',?,?,?,?,1,?)`,
+      [memberUuid, wsUuid, boundUserId, boundUserId, now, now, now, clientId],
+    );
+    enqueueOutbox('workspace_members', memberUuid, 'upsert');
+    get().loadWorkspaces();
+    get().loadWorkspaceMembers();
+    get().switchWorkspace(wsUuid);
+    return wsUuid;
+  },
+
+  renameWorkspace(id, name) {
+    const clean = name.trim().slice(0, 60);
+    if (!clean) return;
+    const now = new Date().toISOString();
+    db.run(
+      `UPDATE workspaces SET name=?, updated_at=?, version=COALESCE(version,0)+1 WHERE uuid=?`,
+      [clean, now, id],
+    );
+    enqueueOutbox('workspaces', id, 'upsert');
+    get().loadWorkspaces();
+  },
+
+  deleteWorkspace(id) {
+    const ws = get().workspaces.find(w => w.id === id);
+    // Personal-ws неудаляемо (дублирует серверный guard block_personal_workspace_delete).
+    if (ws?.kind === 'personal') {
+      logger.warn('[deleteWorkspace] отказ: personal-пространство нельзя удалить');
+      return;
+    }
+    const now = new Date().toISOString();
+    db.run(
+      `UPDATE workspaces SET deleted_at=?, updated_at=?, version=COALESCE(version,0)+1 WHERE uuid=?`,
+      [now, now, id],
+    );
+    enqueueOutbox('workspaces', id, 'delete');
+    get().loadWorkspaces();
+    // После удаления — переключаемся на personal (или дефолт).
+    const fresh = readWorkspacesFromDb();
+    const target = pickDefaultWorkspaceId(fresh);
+    if (get().currentWorkspaceId === id && target) {
+      get().switchWorkspace(target);
+    }
+  },
+
+  addWorkspaceMember(userId, role) {
+    const wsId = get().currentWorkspaceId;
+    if (!wsId) return;
+    const now = new Date().toISOString();
+    const clientId = getClientId();
+    const boundUserId = get().boundUserId ?? readSetting('bound_user_id');
+    // Уже есть живой член с этим user_id → просто обновляем роль (реактивация).
+    const existing = db.get<{ uuid: string | null }>(
+      `SELECT uuid FROM workspace_members WHERE workspace_id=? AND user_id=?`,
+      [wsId, userId],
+    );
+    if (existing?.uuid) {
+      db.run(
+        `UPDATE workspace_members
+            SET role=?, deleted_at=NULL, updated_at=?, version=COALESCE(version,0)+1
+          WHERE uuid=?`,
+        [role, now, existing.uuid],
+      );
+      enqueueOutbox('workspace_members', existing.uuid, 'upsert');
+    } else {
+      const memberUuid = uuidv7();
+      db.run(
+        `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, invited_by, joined_at, created_at, updated_at, version, client_id)
+         VALUES (?,?,?,?,?,?,?,?,1,?)`,
+        [memberUuid, wsId, userId, role, boundUserId, now, now, now, clientId],
+      );
+      enqueueOutbox('workspace_members', memberUuid, 'upsert');
+    }
+    get().loadWorkspaceMembers();
+  },
+
+  updateWorkspaceMemberRole(memberId, role) {
+    const now = new Date().toISOString();
+    db.run(
+      `UPDATE workspace_members SET role=?, updated_at=?, version=COALESCE(version,0)+1 WHERE uuid=?`,
+      [role, now, memberId],
+    );
+    enqueueOutbox('workspace_members', memberId, 'upsert');
+    get().loadWorkspaceMembers();
+  },
+
+  removeWorkspaceMember(memberId) {
+    const now = new Date().toISOString();
+    db.run(
+      `UPDATE workspace_members SET deleted_at=?, updated_at=?, version=COALESCE(version,0)+1 WHERE uuid=?`,
+      [now, now, memberId],
+    );
+    enqueueOutbox('workspace_members', memberId, 'delete');
+    get().loadWorkspaceMembers();
   },
 
   switchWorkspace(id) {

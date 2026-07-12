@@ -16,6 +16,8 @@
 import { useMemo } from 'react';
 import { useStore, type Task, type Status, type Tag, type TaskTemplate, type Workspace } from './useStore';
 
+export type WorkspaceRole = 'owner' | 'editor' | 'viewer';
+
 type WsScoped = { workspace_id?: string | null };
 
 let _warnedNullWs = false;
@@ -86,4 +88,44 @@ export function useCurrentWorkspaceTemplates(): TaskTemplate[] {
   const templates = useStore(s => s.taskTemplates);
   const wsId = useStore(s => s.currentWorkspaceId);
   return useMemo(() => filterByWorkspace(templates, wsId), [templates, wsId]);
+}
+
+/**
+ * Роль текущего пользователя в ТЕКУЩЕМ пространстве (Wave A, PR-4).
+ *
+ * Ищет живую строку членства в локальном зеркале `workspace_members` по
+ * (currentWorkspaceId, bound_user_id). Особые случаи:
+ *   • personal-ws → всегда 'owner' (владелец — сам пользователь);
+ *   • ws_local (local-only, ещё не привязан) → 'owner';
+ *   • ws не выбран / членство не найдено → null.
+ *
+ * Это UX-слой: сервер (RLS в 0027) — источник истины для записи.
+ */
+export function useCurrentWorkspaceRole(): WorkspaceRole | null {
+  const wsId = useStore(s => s.currentWorkspaceId);
+  const workspaces = useStore(s => s.workspaces);
+  const members = useStore(s => s.workspaceMembers);
+  const boundUserId = useStore(s => s.boundUserId);
+  return useMemo(() => {
+    if (!wsId) return null;
+    // local-only пространство — пользователь всегда владелец.
+    if (wsId === 'ws_local') return 'owner';
+    const ws = workspaces.find(w => w.id === wsId);
+    if (ws?.kind === 'personal') return 'owner';
+    const mine = members.find(m => m.workspace_id === wsId && m.user_id === boundUserId);
+    const role = mine?.role;
+    if (role === 'owner' || role === 'editor' || role === 'viewer') return role;
+    return null;
+  }, [wsId, workspaces, members, boundUserId]);
+}
+
+/**
+ * Можно ли РЕДАКТИРОВАТЬ данные текущего пространства.
+ * viewer — строго read-only (false). owner/editor — true. null (роль неизвестна,
+ * напр. пространство ещё не загрузилось) трактуем как true, чтобы не блокировать
+ * личное пространство до подхвата членства (worst-case сервер всё равно отсечёт).
+ */
+export function useCanEdit(): boolean {
+  const role = useCurrentWorkspaceRole();
+  return role !== 'viewer';
 }

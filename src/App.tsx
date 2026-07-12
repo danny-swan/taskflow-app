@@ -30,6 +30,7 @@ const DashboardPage = lazy(() => import('./pages/Dashboard').then(m => ({ defaul
 const CalendarPage = lazy(() => import('./pages/Calendar').then(m => ({ default: m.CalendarPage })));
 const StatsPage = lazy(() => import('./pages/Stats').then(m => ({ default: m.StatsPage })));
 const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })));
+const WorkspaceSettingsPage = lazy(() => import('./pages/WorkspaceSettings').then(m => ({ default: m.WorkspaceSettingsPage })));
 const HelpPage = lazy(() => import('./pages/Help').then(m => ({ default: m.HelpPage })));
 // v0.9.35-dev.6.4: страница подписки для оплаты через ЮKassa.
 const CheckoutPage = lazy(() => import('./pages/Checkout').then(m => ({ default: m.CheckoutPage })));
@@ -277,6 +278,7 @@ function App() {
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/stats" element={statsEnabled ? <StatsPage /> : <Navigate to="/tasks" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/workspace-settings" element={<WorkspaceSettingsPage />} />
               <Route path="/help" element={<HelpPage />} />
               {/* v0.9.35-dev.6.4: Checkout — открытая страница оплаты подписки. */}
               <Route path="/checkout" element={<CheckoutPage />} />

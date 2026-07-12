@@ -395,7 +395,7 @@ function InlineStatsToggle({ lang }: { lang: string }) {
   );
 }
 
-function TagsSection() {
+export function TagsSection() {
   const lang = useStore(s => s.language);
   const tags = useCurrentWorkspaceTags();
   const addTag = useStore(s => s.addTag);
@@ -452,7 +452,7 @@ function TagsSection() {
   );
 }
 
-function StatusesSection() {
+export function StatusesSection() {
   const lang = useStore(s => s.language);
   const statuses = useCurrentWorkspaceStatuses();
   const addStatus = useStore(s => s.addStatus);
