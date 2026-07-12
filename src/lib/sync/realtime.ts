@@ -18,9 +18,16 @@
  * burst из 5-10 событий (batch push с другого устройства обычно занимает
  * секунду-две), но при этом пользователь видит изменения почти мгновенно.
  *
- * RLS фильтр: подписываемся с `filter: 'user_id=eq.<userId>'`, чтобы сервер
- * не слал нам события чужих пользователей (это ещё и требование Postgres
- * publication — без фильтра клиент не получит ничего из-за RLS).
+ * RLS фильтр (Wave A): подписываемся по пространствам юзера —
+ * `filter: 'workspace_id=in.(<ws1>,<ws2>,…)'`. Это ловит строки ВСЕХ
+ * пространств, к которым принадлежит юзер (в Wave A ровно одно personal-ws),
+ * и остаётся корректным для shared-ws в следующих волнах. Список ws-id берём
+ * из listWorkspaceIds(userId). При изменении набора пространств нужно
+ * переподписаться (resubscribeRealtime) — набор фильтров пересоберётся.
+ *
+ * Замечание про workspace_settings: сервер шлёт события и по этой таблице,
+ * фильтр по workspace_id работает и там (у неё нет user_id-колонки, поэтому
+ * фильтр по пространству — единственный корректный вариант).
  *
  * Важно про client_id: чтобы не гонять зайцем pull после собственного push
  * (мы только что запушили → сервер шлёт нам обратно наш же INSERT), мы
@@ -33,9 +40,13 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../supabase';
 import { logger } from '../logger';
 import { pullAll } from './pull';
+import { listWorkspaceIds } from './workspace';
 
 /** Таблицы, за которыми следим. Должны быть в publication supabase_realtime. */
 const WATCHED_TABLES = [
+  'sync_workspaces',
+  'sync_workspace_members',
+  'sync_workspace_settings',
   'sync_tasks',
   'sync_statuses',
   'sync_tags',
@@ -46,7 +57,22 @@ const WATCHED_TABLES = [
 
 const REALTIME_PULL_DEBOUNCE_MS = 600;
 
+/**
+ * Колонка-скоуп для realtime-фильтра. У самой sync_workspaces id пространства
+ * лежит в PK `id`, у всех остальных таблиц — в `workspace_id`.
+ */
+function scopeColumn(table: string): 'id' | 'workspace_id' {
+  return table === 'sync_workspaces' ? 'id' : 'workspace_id';
+}
+
+/** Значение фильтра `col=in.(a,b,c)` из списка ws-id. */
+function inFilter(col: string, wsIds: string[]): string {
+  return `${col}=in.(${wsIds.join(',')})`;
+}
+
 let channel: RealtimeChannel | null = null;
+/** userId текущей подписки — нужен для resubscribe при смене набора ws. */
+let subscribedUserId: string | null = null;
 let pullTimer: ReturnType<typeof setTimeout> | null = null;
 let pullInFlight = false;
 /** Если во время pull-а прилетело новое событие — сделаем ещё один pull после. */
@@ -107,6 +133,7 @@ export function subscribeRealtime(userId: string): () => void {
   // Idempotent: если канал уже есть — снимаем.
   unsubscribeRealtime();
 
+  const wsIds = listWorkspaceIds(userId);
   const ch = supabase.channel(`sync-realtime-${userId}`);
 
   for (const table of WATCHED_TABLES) {
@@ -116,7 +143,7 @@ export function subscribeRealtime(userId: string): () => void {
         event: '*',
         schema: 'public',
         table,
-        filter: `user_id=eq.${userId}`,
+        filter: inFilter(scopeColumn(table), wsIds),
       },
       (_payload: unknown) => {
         // Не смотрим payload — просто триггерим pull.
@@ -127,14 +154,27 @@ export function subscribeRealtime(userId: string): () => void {
 
   ch.subscribe(status => {
     if (status === 'SUBSCRIBED') {
-      logger.info(`[sync/realtime] subscribed for user ${userId.slice(0, 8)}…`);
+      logger.info(
+        `[sync/realtime] subscribed for user ${userId.slice(0, 8)}… (${wsIds.length} ws)`,
+      );
     } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
       logger.warn(`[sync/realtime] channel status: ${status}`);
     }
   });
 
   channel = ch;
+  subscribedUserId = userId;
   return unsubscribeRealtime;
+}
+
+/**
+ * Переподписаться при изменении набора пространств юзера (создание/удаление ws).
+ * В Wave A набор ws статичен (одно personal-ws), но код готов к списку: при
+ * добавлении/удалении пространства вызовите это, чтобы пересобрать фильтры.
+ * No-op, если подписки ещё нет.
+ */
+export function resubscribeRealtime(): void {
+  if (subscribedUserId) subscribeRealtime(subscribedUserId);
 }
 
 /** Снять подписку и отменить отложенный pull. */
@@ -148,6 +188,7 @@ export function unsubscribeRealtime(): void {
     supabase.removeChannel(channel).catch(e => logger.warn('[sync/realtime] removeChannel failed:', e));
     channel = null;
   }
+  subscribedUserId = null;
 }
 
 /** Экспорт для тестов. */
