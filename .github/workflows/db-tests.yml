@@ -137,4 +137,5 @@ jobs:
             supabase/tests/05_wave4_test.sql \
             supabase/tests/06_wave4_rate_limit_test.sql \
             supabase/tests/07_task_hold_periods_test.sql \
-            supabase/tests/08_profile_test.sql
+            supabase/tests/08_profile_test.sql \
+            supabase/tests/09_workspaces_test.sql
