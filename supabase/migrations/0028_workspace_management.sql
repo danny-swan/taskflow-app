@@ -144,6 +144,12 @@ language plpgsql
 set search_path = public, pg_catalog
 as $$
 begin
+  -- Пропускаем системные каскады (удаление auth.users тянет за собой ws
+  -- через owner_id FK) и вызовы service_role/pgTAP-сетапов, где auth.uid() = NULL.
+  -- Гейт предназначен только для явных пользовательских операций с личным ws.
+  if (select auth.uid()) is null then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
   if tg_op = 'DELETE' and old.kind = 'personal' then
     raise exception 'Личное пространство нельзя удалить.'
       using errcode = 'check_violation';
@@ -160,7 +166,8 @@ end;
 $$;
 
 comment on function public.block_personal_workspace_delete() is
-  'Guard: запрещает soft-delete (UPDATE deleted_at) и DELETE личного пространства (kind=personal).';
+  'Guard: запрещает soft-delete (UPDATE deleted_at) и DELETE личного пространства (kind=personal). '
+  'Не вмешивается в системные каскады (auth.uid() IS NULL): удаление аккаунта auth.users через owner_id FK → ON DELETE CASCADE сносит personal-ws корректно.';
 
 drop trigger if exists block_personal_workspace_delete on public.sync_workspaces;
 create trigger block_personal_workspace_delete

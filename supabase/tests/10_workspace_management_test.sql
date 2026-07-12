@@ -16,7 +16,7 @@
 -- Стиль — как 09_workspaces_test.sql. Выполняется на vanilla Postgres 15 (CI).
 
 BEGIN;
-SELECT plan(24);
+SELECT plan(25);
 
 -- ─── 1. RPC find_user_by_public_id: структура ───────────────────────────────
 SELECT has_function(
@@ -255,6 +255,20 @@ SELECT isnt(
   (SELECT deleted_at FROM public.sync_workspaces WHERE id = 'ws-shd-10'),
   NULL,
   'shared-ws помечено deleted_at после soft-delete owner''ом'
+);
+
+-- ─── 5. Каскад auth.users → personal-ws (гайд не блокирует системные каскады) ──
+do $$
+declare u_cas uuid := 'e1111111-1111-1111-1111-111111111111'::uuid;
+begin
+  insert into auth.users (id, email) values (u_cas, 'cascade@test') on conflict do nothing;
+  insert into public.sync_workspaces (id, user_id, owner_id, name, kind)
+    values ('ws-cas-10', u_cas, u_cas, 'CascadePersonal', 'personal')
+    on conflict do nothing;
+end$$;
+SELECT lives_ok(
+  $$ DELETE FROM auth.users WHERE id = 'e1111111-1111-1111-1111-111111111111' $$,
+  'удаление auth.users каскадно сносит personal-ws (guard не мешает системным каскадам)'
 );
 
 SELECT * FROM finish();
