@@ -1,12 +1,13 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
-import { useWorkspaces, useCurrentWorkspace } from '../store/workspaceScope';
+import { useWorkspaces, useCurrentWorkspace, useCanEdit } from '../store/workspaceScope';
+import { CreateWorkspaceModal } from './CreateWorkspaceModal';
 import { tr } from '../lib/i18n';
 import { usePendingSyncCount } from '../lib/pendingSync';
 import {
   ListChecks, Plus, LayoutDashboard, BarChart3, Settings, HelpCircle,
   Sun, Moon, Sparkles, Leaf, Palette, ChevronDown, CalendarDays, Cloud, X, Clock,
-  Check, Users, User as UserIcon, ChevronsUpDown,
+  Check, Users, User as UserIcon, ChevronsUpDown, Settings2,
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../lib/auth';
@@ -182,8 +183,10 @@ function WorkspaceSwitcher() {
   const workspaces = useWorkspaces();
   const current = useCurrentWorkspace();
   const switchWorkspace = useStore(s => s.switchWorkspace);
+  const canEdit = useCanEdit();
 
   const [open, setOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -249,17 +252,28 @@ function WorkspaceSwitcher() {
           <div className="border-t border-border-soft mt-1 pt-1">
             <button
               type="button"
-              disabled
-              title={tr(lang, 'ws_create_soon')}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] text-faint cursor-not-allowed"
+              onClick={() => { setOpen(false); setCreateOpen(true); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] text-text hover:bg-surface-alt"
             >
               <Plus size={14} className="shrink-0" />
               <span className="flex-1">{tr(lang, 'ws_create')}</span>
-              <span className="text-[10px] uppercase tracking-wide">{tr(lang, 'ws_create_soon')}</span>
             </button>
+            {/* Настройки пространства — только editor+ (viewer не видит). */}
+            {canEdit && (
+              <NavLink
+                to="/workspace-settings"
+                onClick={() => setOpen(false)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] text-muted hover:bg-surface-alt hover:text-text"
+              >
+                <Settings2 size={13} className="shrink-0" />
+                <span className="flex-1">{tr(lang, 'ws_nav_settings')}</span>
+              </NavLink>
+            )}
           </div>
         </div>
       )}
+
+      <CreateWorkspaceModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   );
 }
