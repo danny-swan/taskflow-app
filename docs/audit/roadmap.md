@@ -137,6 +137,17 @@ GitHub Releases/теги останавливались на `v0.9.35-dev.6.4.3`
 - B1/B2 (фронт-фиксы) — уедут на прод только с релизом десктопа (v1.0.2 ещё не собран).
 - F6 (Холд) — миграция `0025` НЕ применена на прод (требует отдельного захода через Supabase-коннектор — идемпотентна, содержит бэкфилл).
 
+### v1.0.3 — базовая кастомизация профиля (12.07.2026)
+
+> Первый шаг к профилям: публичный ID `TF-XXXXXX` + профильные поля (никнейм/аватар/bio). Модель аккаунтов и данных не менялась. Серверная миграция `0026_profile_customization` — ✅ ПРИМЕНЕНА НА ПРОД 12.07.2026 (подробности — в блоке «Post-v1.0.2» раздела 7 и Appendix А, строка 0026).
+
+| Событие | Коммит / ссылка | Комментарий |
+|---|---|---|
+| PR #73 — `feat(profile): базовая кастомизация профиля (public ID + профильные поля)` | [PR #73](https://github.com/danny-swan/taskflow-app/pull/73), squash `7db27a6` | Новые колонки `profiles`: `public_user_id` (UNIQUE NOT NULL, `TF-XXXXXX`), `nickname` (≤32), `avatar_variant` (1..8), `bio` (≤160). Функции генерации ID + guard-триггер неизменяемости + DEFAULT `public_user_id`. UI — блок профиля в Настройки→Аккаунт (`Avatar.tsx`, `ProfileBlock.tsx`, `profile.ts`). `profiles` НЕ в sync. +1207/−1, 292 vitest, pgTAP `08_profile_test.sql` `plan(24)` — весь набор зелёный (поправлена pgTAP-регрессия через DEFAULT + assert в `04`) |
+| Релиз десктопа v1.0.3 | [тег v1.0.3](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.3), коммит `a3d11a5`, [CI run 29194889212](https://github.com/danny-swan/taskflow-app/actions/runs/29194889212) | Собраны Windows (NSIS + MSI RU/EN + portable) и macOS (universal dmg), `latest.json` (`version: 1.0.3`) — v1.0.0–1.0.2 юзеры получат обновление через auto-updater. 292/292 vitest, E2E Playwright зелёные. Версия синхронизирована из тега CI-ом |
+
+**Применение на прод:** серверная миграция `0026` (вкл. DEFAULT на `public_user_id`) — ✅ применена через Supabase-коннектор, бэкфилл 4/4 профилей, guard проверен. Клиент уехал на прод-юзеров с v1.0.3.
+
 ---
 
 ## 2. Карта архитектуры и интеграций — "что с чем связано"
