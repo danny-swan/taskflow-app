@@ -137,7 +137,13 @@ export function TaskCard({
   };
 
   const onCardClick = (e: React.MouseEvent) => {
-    if (editingTitle || editingComment || confirmDelete) return;
+    // v1.0.2 (fix): reopenOpen тоже блокирует открытие модалки. ConfirmDialog
+    // рендерится через createPortal, но React прокидывает события по дереву
+    // компонентов, а не по DOM — поэтому клик по кнопкам диалога «Вернуть»/
+    // «Отмена» всплывал сюда и открывал попап детального редактирования со
+    // старым снимком задачи (статус «Выполнено»), затирая только что применённый
+    // статус при сохранении. Гасим так же, как confirmDelete.
+    if (editingTitle || editingComment || confirmDelete || reopenOpen) return;
     onOpenModal();
   };
 
