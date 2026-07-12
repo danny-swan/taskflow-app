@@ -124,6 +124,13 @@ comment on function public.assign_public_user_id() is
 alter function public.gen_public_user_id()      set search_path = public, pg_temp;
 alter function public.assign_public_user_id()   set search_path = public, pg_temp;
 
+-- DEFAULT на public_user_id: прямой INSERT без явного значения (в т.ч. pgTAP-
+-- тесты, вставляющие в profiles напрямую) автоматически получает уникальный ID.
+-- Ставим ПОСЛЕ создания assign_public_user_id() и ПЕРЕД SET NOT NULL.
+-- Идемпотентно: ALTER ... SET DEFAULT просто переустанавливает выражение.
+alter table public.profiles
+  alter column public_user_id set default public.assign_public_user_id();
+
 -- ─── 3. handle_new_user: проставляем public_user_id при регистрации ─────────
 create or replace function public.handle_new_user()
 returns trigger as $$
