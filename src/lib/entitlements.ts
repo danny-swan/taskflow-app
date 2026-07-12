@@ -512,6 +512,9 @@ export function unsubscribeEntitlement(): void {
 
 // ─── React hook ───────────────────────────────────────────────────────────────
 
+/** Статус гидрации entitlement для текущего userId. */
+export type EntitlementStatus = 'loading' | 'loaded' | 'error';
+
 /**
  * Хук с realtime-обновлением. Стратегия:
  *   1. При mount: сразу отдаём Entitlement, собранный из кэша (быстрый первый рендер,
@@ -520,40 +523,53 @@ export function unsubscribeEntitlement(): void {
  *   3. Подписываемся на realtime; при апруве заявки админом — refetch.
  *
  * Если userId/email == null — считаем free.
+ *
+ * v1.0.1 (fix/admin-first-click-redirect): `loading` вычисляется СИНХРОННО на
+ * рендере, а не через отдельный useState, обновляемый в эффекте. Раньше был
+ * race: `useAuth()` резолвит сессию асинхронно, поэтому на первом рендере
+ * AdminPage `userId === null` → `loading` инициализировался как `false`. Когда
+ * сессия подтягивалась, `userId` становился ненулевым, но `loading` оставался
+ * `false` ещё один коммит (пока эффект не вызовет `setLoading(true)`). В этот
+ * момент route-guard в AdminPage видел `!entLoading && !isAdmin` и делал
+ * ложный redirect на /tasks. Теперь `loading` = «данные ещё не резолвнуты для
+ * текущего userId», что известно уже на рендере и лага нет.
  */
 export function useEntitlement(
   userId: string | null,
   userEmail: string | null,
-): { entitlement: Entitlement; loading: boolean; refetch: () => void } {
-  // Оптимистичный старт: кэш (или free если кэша нет).
-  const [entitlement, setEntitlement] = useState<Entitlement>(() =>
-    resolveEntitlement(readCachedRow(), userEmail),
-  );
-  const [loading, setLoading] = useState<boolean>(!!userId);
+): { entitlement: Entitlement; loading: boolean; status: EntitlementStatus; refetch: () => void } {
+  // Единый снапшот: какой Entitlement и для какого userId уже резолвнут из БД.
+  // resolvedFor === undefined означает «fetch для текущего userId ещё не
+  // завершался» (в т.ч. на самом первом рендере). Оптимистично отдаём кэш.
+  const [state, setState] = useState<{
+    entitlement: Entitlement;
+    resolvedFor: string | null | undefined;
+    outcome: 'loaded' | 'error';
+  }>(() => ({
+    entitlement: resolveEntitlement(readCachedRow(), userEmail),
+    resolvedFor: undefined,
+    outcome: 'loaded',
+  }));
   const [refetchTick, setRefetchTick] = useState(0);
 
   useEffect(() => {
     if (!userId) {
-      setEntitlement(resolveEntitlement(null, userEmail));
-      setLoading(false);
+      setState({ entitlement: resolveEntitlement(null, userEmail), resolvedFor: null, outcome: 'loaded' });
       return;
     }
 
     let mounted = true;
-    setLoading(true);
 
     (async () => {
       try {
         const row = await fetchEntitlementRow(userId);
         if (!mounted) return;
         writeCachedRow(row);
-        setEntitlement(resolveEntitlement(row, userEmail));
+        setState({ entitlement: resolveEntitlement(row, userEmail), resolvedFor: userId, outcome: 'loaded' });
       } catch (e) {
         logger.warn('[entitlements] hook fetch failed, using cache:', e);
         if (!mounted) return;
-        setEntitlement(resolveEntitlement(readCachedRow(), userEmail));
-      } finally {
-        if (mounted) setLoading(false);
+        setState({ entitlement: resolveEntitlement(readCachedRow(), userEmail), resolvedFor: userId, outcome: 'error' });
       }
     })();
 
@@ -570,9 +586,16 @@ export function useEntitlement(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, userEmail, refetchTick]);
 
+  // Синхронный вывод статуса: если есть userId, но резолвнутые данные относятся
+  // к другому (или ещё ни к какому) userId — мы ещё грузимся. Это верно уже на
+  // том рендере, где userId впервые стал ненулевым, поэтому guard не мигает.
+  const status: EntitlementStatus =
+    userId != null && state.resolvedFor !== userId ? 'loading' : state.outcome;
+
   return {
-    entitlement,
-    loading,
+    entitlement: state.entitlement,
+    loading: status === 'loading',
+    status,
     refetch: () => setRefetchTick(t => t + 1),
   };
 }
