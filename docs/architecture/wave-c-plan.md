@@ -159,3 +159,111 @@ PR-b-05).
   («Неотвеченных приглашений: {count}» / «{count} pending invites»). Плейсхолдер
   подставляется через `.replace('{count}', …)` — тот же single-brace паттерн,
   что и у `ws_my_invites_expires_in`.
+
+---
+
+## 3. PR-c-03: Historical audit log (журнал изменений задачи)
+
+### Что делаем
+
+Историю значимых изменений задачи в **shared**-пространстве: сворачиваемая секция
+«История изменений» внизу модалки задачи (`TaskModal`). По записи на событие —
+аватар автора, локализованный текст действия, относительное время. По умолчанию
+свёрнута, пагинация «Показать ещё» по 20 записей. Для personal-пространств секция
+не рендерится вовсе.
+
+### Почему серверный триггер, а не клиентский INSERT
+
+Журнал должен быть **надёжным и неподделываемым**: клиент не может пропустить,
+переписать или подделать запись. Поэтому лог пишет исключительно серверный
+`SECURITY DEFINER`-триггер `log_task_activity()` на `sync_tasks` (миграция 0034),
+а не клиентский код:
+
+- **Триггерная фильтрация только по shared.** Функция логирует изменение лишь
+  когда пространство задачи `kind='shared'` (personal — пропуск). Гейт на сервере,
+  клиент не участвует.
+- **Immutable append-only.** RLS даёт членам пространства только `SELECT` (через
+  `has_workspace_role(..., 'viewer')`); `INSERT/UPDATE/DELETE` для роли
+  `authenticated` запрещены deny-политиками. Пишет строки лишь сама триггер-функция
+  (обходит insert-deny за счёт `SECURITY DEFINER`). Клиент журнал **только читает**.
+- **FK только на workspace_id (CASCADE), не на task_id.** Задачу можно
+  soft-delete/hard-delete, но её история должна пережить это (лог самодостаточен:
+  хранит task uuid, автора и payload). Каскад по workspace_id чистит журнал при
+  удалении пространства.
+
+### Приоритет событий (одно изменение = одна запись)
+
+Триггер на `UPDATE`/`INSERT` определяет **один** тип события по цепочке
+приоритетов (сверху вниз, первое совпадение выигрывает): `deleted` → `restored`
+→ `status_changed` → `deadline_changed` → `tag_added`/`tag_removed` →
+`title_changed` → `description_changed`; `INSERT` → `created`. Так «переставил
+статус и заодно поправил заголовок» не плодит две строки — фиксируется наиболее
+значимое действие.
+
+### Клиентская интеграция (pull-only)
+
+- **Realtime.** `sync_task_activity_log` добавлена в `WATCHED_TABLES`
+  (`realtime.ts`) — новые записи прилетают debounced-пуллом, как остальные
+  sync-таблицы.
+- **Pull.** Отдельный `PULL_ORDER = [...PUSH_ORDER, ACTIVITY_LOG_SPEC]`
+  (`mappers.ts`): лог тянется, но **никогда не пушится** (`toCloud` кидает —
+  спека pull-only, в outbox не попадает; `getSpec` ищет только в `PUSH_ORDER`).
+  Аппликатор `applyCloudRowActivityLog` (`pull.ts`) — INSERT-only, immutable:
+  если строка с таким uuid уже есть, пропускает (лог не переписывается). Курсор
+  пагинации пула — `created_at` (append-only, `updated_at` отсутствует).
+- **Локальное зеркало.** Миграция SQLite v13 (`migrations.ts`) создаёт
+  `task_activity_log` (int id + серверный uuid + task uuid как строка,
+  workspace_id, user_id, kind, payload TEXT, created_at) + индексы
+  `(task_id, created_at DESC)` и `(workspace_id, created_at DESC)`.
+
+### Приватность авторства
+
+Как в `MembersTab`/Presence: own-row RLS на `profiles` не даёт клиенту читать
+чужие ники по uuid (нет RPC uuid→profile). Автор резолвится так: это я
+(`boundUserId`) → «вы»; онлайн-участник (`usePresenceStore`) → ник или публичный
+`TF-XXXXXX` + его аватар; иначе (офлайн/историческое действие) → короткий id
+(первые 8 символов uuid). **Email не показывается никогда.**
+
+### Архитектура
+
+- `src/store/useTaskActivityStore.ts` — Zustand-стор поверх локального зеркала.
+  Пагинация: страница `PAGE_SIZE=20`, сортировка `created_at DESC`; для «есть ли
+  ещё» выбираем `limit+1` строку и обрезаем. Хук `useTaskActivity(taskUuid)`
+  грузит первую страницу на смену задачи, отдаёт `{ records, hasMore, loadMore }`.
+  `taskUuid=null` (задача без uuid — ещё не синхронизирована) → пустой результат,
+  запросов нет. Ошибка `db.all` (нет таблицы) → пустой журнал без исключения.
+- `src/components/TaskActivityLog.tsx` — сворачиваемая секция. Свёрнута по
+  умолчанию; в свёрнутом виде хук получает `null` (данные не грузятся). Локальный
+  `relativeTime` (только что / Nм / Nч / Nд / абсолютная дата старше недели), без
+  внешних зависимостей. Рендерится вызывающим (`TaskModal`) **только** для
+  shared-пространства.
+
+### Сознательно вне scope
+
+- **Клиентский INSERT в лог.** Пишет только серверный триггер — см. выше.
+- **UPDATE/DELETE-политики (кроме deny).** Журнал immutable.
+- **Diff-детализация payload в UI.** Показываем тип события и автора; развёрнутый
+  «было → стало» — отдельная история (payload уже пишется в БД, UI можно
+  расширить позже).
+- **Лог personal-задач.** Гейт `kind='shared'` на триггере.
+
+### Тесты
+
+- `useTaskActivityStore.test.ts` — чтение/парсинг payload, фильтр по task_id,
+  пагинация (PAGE_SIZE + loadMore + hasMore), DESC-сортировка, битый payload → `{}`,
+  ошибка db → пустой журнал, `clear`.
+- `TaskActivityLog.test.tsx` — свёрнут по умолчанию, разворот и пустое состояние,
+  резолв автора (вы / presence-ник / короткий id), «Показать ещё» ↔ `loadMore`.
+- `supabase/tests/17_task_activity_log_test.sql` — pgTAP: схема/FK/CHECK, RLS
+  (select членам, deny insert/update/delete), триггер (логирует shared, пропускает
+  personal, приоритет событий), realtime-публикация.
+
+### i18n
+
+- `ws_activity_log_title` / `ws_activity_log_empty` / `ws_activity_log_load_more`
+  (заголовок / пусто / «Показать ещё»), `ws_activity_you` («вы»), и по ключу на
+  каждый тип события: `ws_activity_created`, `ws_activity_status_changed`,
+  `ws_activity_deadline_changed`, `ws_activity_title_changed`,
+  `ws_activity_description_changed`, `ws_activity_deleted`, `ws_activity_restored`,
+  `ws_activity_tag_added`, `ws_activity_tag_removed` (ru+en). Тексты без
+  плейсхолдеров — `tr()` без интерполяции.

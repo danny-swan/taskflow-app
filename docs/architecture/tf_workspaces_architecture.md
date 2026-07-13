@@ -380,7 +380,39 @@ Pro:
 - Кросс-workspace поиск / «все мои задачи».
 - Кастомные роли и pipeline статусов между ws.
 - Экспорт пространства.
-- Presence, per-field merge для совместного редактирования, если LWW окажется недостаточным.
+- Presence (PR-c-01, доставлено), per-field merge для совместного редактирования,
+  если LWW окажется недостаточным.
+- Historical audit log задач (PR-c-03, доставлено) — см. ниже.
+
+#### Модель данных: `sync_task_activity_log` (PR-c-03)
+
+Первая **pull-only** sync-сущность и первый серверно-пишущий журнал в проекте.
+Отличия от 6 базовых sync-таблиц (которые клиент и читает, и пишет через outbox):
+
+- **Таблица** `sync_task_activity_log` (миграция 0034): `id uuid PK`, `task_id uuid`
+  (**без FK** — переживает удаление задачи), `workspace_id text NOT NULL`
+  (**FK → sync_workspaces CASCADE**), `user_id uuid`, `kind text` (CHECK на 9
+  значений: created/status_changed/deadline_changed/title_changed/
+  description_changed/deleted/restored/tag_added/tag_removed), `payload jsonb`,
+  `created_at timestamptz`. Индексы по `(task_id, created_at DESC)` и
+  `(workspace_id, created_at DESC)`.
+- **Immutable append-only.** RLS: `SELECT` членам пространства через
+  `has_workspace_role(workspace_id, auth.uid(), 'viewer')`; `INSERT/UPDATE/DELETE`
+  для `authenticated` — deny. Пишет только `SECURITY DEFINER`-триггер
+  `log_task_activity()` (`trg_log_task_activity` на `sync_tasks`), обходя
+  insert-deny. Гейт **только для `kind='shared'`** пространств — personal не
+  логируется.
+- **Приоритет событий** (одно изменение = одна запись): deleted → restored →
+  status_changed → deadline_changed → tag_* → title_changed → description_changed;
+  INSERT → created.
+- **Клиент — pull-only.** Отдельный `PULL_ORDER = [...PUSH_ORDER, ACTIVITY_LOG_SPEC]`;
+  спека `toCloud` кидает (в outbox/push не попадает). Аппликатор INSERT-only
+  (существующий uuid — пропуск). Курсор пула — `created_at` (нет `updated_at`).
+  Локальное зеркало — SQLite v13 (`task_activity_log`). Realtime — таблица в
+  `WATCHED_TABLES`.
+- **UI** — сворачиваемая секция «История изменений» в `TaskModal`, только для
+  shared; автор резолвится как в Presence/MembersTab (я/presence-ник/короткий id,
+  **никогда email**).
 
 ### Что делать НЕ надо в этих волнах
 - Не вводить «проекты внутри пространства» — избыточно, добавит третий уровень без ясной пользы.

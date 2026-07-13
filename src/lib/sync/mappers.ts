@@ -616,6 +616,33 @@ export function settingToCloudPayload(
   };
 }
 
+// ─── task_activity_log ──────────────────────────────────────────────────────
+//
+// Исторический журнал изменений задач в shared-пространствах (миграция 0034,
+// Wave C). ПУЛЛ-ONLY: строки создаёт только серверный триггер log_task_activity;
+// клиент их читает, но НИКОГДА не пушит (toCloud кидает). В outbox не попадает,
+// поэтому в PUSH_ORDER его нет — только в PULL_ORDER.
+//
+// Особенности:
+//   * Иммутабельный append-only — нет updated_at/version/deleted_at.
+//   * pull-курсор идёт по created_at (см. cursorColumnFor в pull.ts).
+//   * task_id хранится как серверный uuid задачи (без резолюции в int) — UI
+//     фильтрует записи по tasks.uuid.
+//   * payload (jsonb в облаке) в локальной SQLite-зеркалке хранится как TEXT
+//     (JSON-строка).
+
+/** Локальная строка зеркала журнала активности (SQLite). */
+export interface LocalActivityLogRow {
+  id: number;
+  uuid: string;                  // = серверный sync_task_activity_log.id
+  task_id: string;               // серверный uuid задачи
+  workspace_id: string;
+  user_id: string;
+  kind: string;
+  payload: string;               // JSON-строка
+  created_at: string;
+}
+
 /**
  * Табличная информация для push цикла — как читать локальную строку и
  * конвертировать её в payload. Порядок в PUSH_ORDER важен: сначала parent'ы
@@ -707,6 +734,21 @@ export const WORKSPACE_SETTINGS_SPEC: TableSpec<LocalSettingRow, CloudSettingPay
 };
 
 /**
+ * ПУЛЛ-ONLY spec журнала активности. В PUSH_ORDER НЕ входит (клиент не пушит):
+ * fetchLocal читает локальное зеркало, toCloud кидает — на случай, если строка
+ * по ошибке попадёт в push-цикл, лучше упасть, чем молча отправить лог.
+ */
+export const ACTIVITY_LOG_SPEC: TableSpec<LocalActivityLogRow, never> = {
+  outbox: 'task_activity_log',
+  cloud: 'sync_task_activity_log',
+  fetchLocal: (uuid) => db.get<LocalActivityLogRow>('SELECT * FROM task_activity_log WHERE uuid=?', [uuid]),
+  toCloud: () => {
+    throw new Error('sync_task_activity_log is pull-only (пишет только серверный триггер)');
+  },
+  pullScope: 'workspace_id',   // таблица без user_id-скоупа клиента → по ws
+};
+
+/**
  * Порядок push'а: parent'ы первыми, чтобы ссылки на облаке разрешились.
  * workspaces → workspace_members → workspace_settings → statuses → tags →
  * tasks → task_templates → overdue_events → task_hold_periods.
@@ -724,6 +766,15 @@ export const PUSH_ORDER: TableSpec[] = [
   TEMPLATES_SPEC,
   OVERDUE_EVENTS_SPEC,
   HOLD_PERIODS_SPEC,
+];
+
+/**
+ * Порядок pull'а: всё из PUSH_ORDER плюс пулл-only журнал активности в конце
+ * (после tasks — записи ссылаются на task.uuid, который к этому моменту локален).
+ */
+export const PULL_ORDER: TableSpec[] = [
+  ...PUSH_ORDER,
+  ACTIVITY_LOG_SPEC,
 ];
 
 /** Возвращает spec по имени outbox таблицы. */

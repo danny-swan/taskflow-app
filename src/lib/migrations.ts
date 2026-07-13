@@ -866,6 +866,55 @@ export const MIGRATIONS: Migration[] = [
       for (const r of settingRows) if (r.uuid) await enqueue('workspace_settings', r.uuid);
     },
   },
+
+  // ================================================================
+  // v13 — task_activity_log: локальное зеркало журнала активности задач
+  //        (Wave C, PR-c-03; серверная миграция 0034).
+  //
+  // ПУЛЛ-ONLY: строки создаёт исключительно серверный триггер log_task_activity
+  // в shared-пространствах; клиент их только читает (см. pull.ts / mappers.ts —
+  // ACTIVITY_LOG_SPEC не входит в PUSH_ORDER, toCloud кидает). Поэтому здесь НЕ
+  // кладём ничего в sync_outbox и не делаем backfill — таблица наполняется
+  // только через pull.
+  //
+  // Контракт колонок повторяет серверный (0034), но под SQLite:
+  //   * id INTEGER PK AUTOINCREMENT + uuid TEXT UNIQUE (= серверный
+  //     sync_task_activity_log.id) — как у прочих sync-зеркал;
+  //   * task_id TEXT — серверный uuid задачи (без резолюции в int; UI фильтрует
+  //     по tasks.uuid);
+  //   * payload TEXT — JSON-строка (в облаке jsonb);
+  //   * нет updated_at/version/deleted_at — журнал иммутабелен, курсор pull идёт
+  //     по created_at.
+  //
+  // Идемпотентно: CREATE ... IF NOT EXISTS.
+  // ================================================================
+  {
+    version: 13,
+    description: 'task_activity_log: локальное зеркало журнала активности задач (Wave C PR-c-03)',
+    up: async ({ exec }) => {
+      await exec(`
+        CREATE TABLE IF NOT EXISTS task_activity_log (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          uuid          TEXT,                     -- = серверный sync_task_activity_log.id
+          task_id       TEXT    NOT NULL,         -- серверный uuid задачи
+          workspace_id  TEXT    NOT NULL,
+          user_id       TEXT    NOT NULL,         -- uuid автора действия
+          kind          TEXT    NOT NULL,
+          payload       TEXT    NOT NULL DEFAULT '{}',  -- JSON-строка
+          created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_task_activity_log_uuid ON task_activity_log(uuid) WHERE uuid IS NOT NULL`,
+      );
+      await exec(
+        `CREATE INDEX IF NOT EXISTS idx_task_activity_log_task ON task_activity_log(task_id, created_at DESC)`,
+      );
+      await exec(
+        `CREATE INDEX IF NOT EXISTS idx_task_activity_log_ws ON task_activity_log(workspace_id, created_at DESC)`,
+      );
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */
