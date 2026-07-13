@@ -55,11 +55,16 @@ SELECT fk_ok('public', 'sync_workspace_settings','workspace_id', 'public', 'sync
 -- pgTAP этой версии не имеет col_has_fk_delete_action → проверяем каталог.
 -- confdeltype='c' = CASCADE; condeferrable=true = DEFERRABLE. Имя FK
 -- предсказуемое <table>_workspace_id_fkey (задано 0030).
+-- ПРИМ.: sync_workspace_invites (0032) добавила 9-й workspace_id→sync_workspaces
+-- FK (тоже CASCADE, но НЕ deferrable — серверная таблица, не участвует в sync-
+-- батчах). Инвариант 0030 — про 8 клиентских workspace-таблиц, поэтому явно
+-- исключаем invites из счётчика, чтобы ассерт оставался точным «ровно 8».
 SELECT is(
   (SELECT count(*)::int FROM pg_constraint
      WHERE contype = 'f'
        AND conname LIKE '%\_workspace\_id\_fkey'
        AND confrelid = 'public.sync_workspaces'::regclass
+       AND conrelid <> 'public.sync_workspace_invites'::regclass
        AND confdeltype = 'c'),
   8, 'B1: все 8 workspace_id FK имеют ON DELETE CASCADE (confdeltype=c)'
 );
@@ -68,6 +73,7 @@ SELECT is(
      WHERE contype = 'f'
        AND conname LIKE '%\_workspace\_id\_fkey'
        AND confrelid = 'public.sync_workspaces'::regclass
+       AND conrelid <> 'public.sync_workspace_invites'::regclass
        AND condeferrable IS TRUE),
   8, 'B2: все 8 workspace_id FK — DEFERRABLE (INITIALLY IMMEDIATE)'
 );

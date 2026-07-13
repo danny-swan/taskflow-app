@@ -60,6 +60,23 @@
 
 **Тесты:** pgTAP `14_workspace_rls_roles_test.sql` (plan 103) — трёхролевая матрица (owner/editor/viewer) внутри одного shared-ws + outsider + last-owner. `sync_overdue_events` исключён из UPDATE-подматрицы: у таблицы pre-existing триггер `trg_set_updated_at` (0005), обращающийся к `NEW.updated_at`, при отсутствии такой колонки (0002) — любой UPDATE падает независимо от RLS (append-only де-факто). Это pre-existing quirk, вне scope PR-b-02.
 
+### §4.3-факт — реализация в PR-b-03 (миграция `0032_workspace_invites.sql`)
+
+**Что сделано:** API приглашений в shared-пространства (backend-only, без UI).
+
+- **Обратный лукап `lookup_user_by_public_id(text) → uuid`** (`STABLE SECURITY DEFINER`, `search_path = public, pg_catalog`). В 0026 `public_user_id` (формат `TF-XXXXXX`) живёт в `public.profiles` (UNIQUE), forward-сторону читает клиент (`src/lib/profile.ts`), а обратной функции не было. Заводим минимальную: по TF-ID отдаёт internal `auth.uid()` (`profiles.id == auth.users.id`) или NULL. `EXECUTE` отозван у `anon/authenticated/public` — функция вызывается только внутри `invite_to_workspace`, не как самостоятельный REST-RPC.
+- **Таблица `sync_workspace_invites`** — серверная (НЕ sync-таблица клиента, не участвует в outbox/pull): `id` (`inv_<hex>`), `workspace_id` (FK `sync_workspaces` `ON DELETE CASCADE`), `inviter_user_id` (FK `auth.users` `ON DELETE CASCADE`), `target_public_user_id text`, `target_user_id` (FK `auth.users` `ON DELETE SET NULL`), `role ∈ (editor, viewer)`, `status ∈ (pending, accepted, rejected, expired, cancelled)`, `expires_at` (default `now()+7d`), `created_at/updated_at/accepted_at`. Частичный UNIQUE `(workspace_id, target_user_id) WHERE status='pending'` (идемпотентность), плюс индексы для listInvites приглашённого и owner'а. `set_updated_at`-триггер (0005).
+- **RLS:** `enable`. `invites_select_ws_role` — приглашённый видит свои инвайты (`target_user_id = auth.uid()`) ИЛИ owner видит все инвайты своего ws (`has_workspace_role(..., 'owner')`). `invites_insert_deny` / `invites_update_deny` / `invites_delete_deny` — `USING/ WITH CHECK false`: любая мутация только через SECURITY DEFINER RPC. `authenticated` получает GRANT только `SELECT` (I/U/D не выдаём — прямой DML падает 42501 ещё на уровне привилегий).
+- **4 клиентских RPC + 1 сервисный** (все `SECURITY DEFINER`, `SET search_path = public`, `EXECUTE` для `authenticated`): `invite_to_workspace(ws, target_public_id, role)` (owner-only; role editor/viewer; target существует/не self/не участник/**на платном тарифе**; идемпотентно возвращает существующий pending), `accept_invite(invite_id)` (target-only, pending, не истёк, **re-check тарифного лимита shared принимающего** → атомарно invite→accepted + INSERT членства), `reject_invite(invite_id)` (target→rejected), `cancel_invite(invite_id)` (owner→cancelled). Плюс `expire_invites()` (cron-friendly, `EXECUTE` только `service_role`).
+
+**РАСХОЖДЕНИЯ С ПЛАНОМ:**
+- Добавлена **не заявленная в плане** helper-функция `lookup_user_by_public_id` — обратный лукап отсутствовал в 0026, а приглашение по публичному TF-ID без него невозможно. Область видимости максимально сужена (revoke execute у всех, вызов только из `invite_to_workspace`).
+- Статус `cancelled` добавлен к заявленным в §4 `pending/accepted/rejected/expired` (owner отзывает свой pending-инвайт) — естественное дополнение жизненного цикла.
+- `accept_invite` считает **активные членства принимающего** (`sync_workspace_members`) против `get_workspace_limit(uid,'shared')` (0029): free = 0 → free физически не может принять инвайт (двойная защита: pre-check на invite + re-check на accept). Слот shared занимает каждый участник, не только owner.
+- FK: `inviter_user_id` → `ON DELETE CASCADE` (инвайты пропавшего пригласителя не нужны), `target_user_id` → `ON DELETE SET NULL` (nullable, если приглашённый удалён). Это добавило **9-й** `workspace_id→sync_workspaces` FK с CASCADE; инвариант 0030 в `13_workspace_id_integrity_test.sql` про **8 клиентских** workspace-таблиц — счётчик B1/B2 явно исключает `sync_workspace_invites` (серверная таблица, FK не DEFERRABLE), чтобы ассерт «ровно 8» остался точным.
+
+**Тесты:** pgTAP `15_workspace_invites_test.sql` (plan 48) — группы A (схема/грант/RLS-enabled), B (invite: happy + owner-only/role/self/member/free-target/идемпотентность), C (accept: happy + лимит/not-target/re-status/expired/cancelled/no-auth), D (reject), E (cancel: owner-only), F (RLS видимость + прямой DML deny), G (FK CASCADE по workspace и inviter). Добавлен в CI-список `db-tests.yml`. Общий CI-прогон: **492** pgTAP-теста (14 файлов) зелёные.
+
 ---
 
 ## 4. Разбивка Wave B на PR
