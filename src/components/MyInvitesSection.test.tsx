@@ -54,18 +54,21 @@ describe('MyInvitesSection', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('без входящих → ничего не рендерит, но грузит список', () => {
+  it('без входящих → ничего не рендерит (пин отсутствует), но грузит список', () => {
     setup({ bound: 'me', pending: [] });
     const { container } = render(<MyInvitesSection />);
     expect(container.firstChild).toBeNull();
+    expect(screen.queryByTestId('invite-pin')).toBeNull();
     expect(loadMyPending).toHaveBeenCalled();
   });
 
-  it('рендерит pending со счётчиком и нейтральным именем', () => {
+  it('рендерит pending со счётчиком, пином и нейтральным именем', () => {
     setup({ bound: 'me', pending: [inv('i1'), inv('i2')] });
     render(<MyInvitesSection />);
     expect(screen.getAllByText('Приглашение в общее пространство')).toHaveLength(2);
-    expect(screen.getByText('2')).toBeTruthy();
+    const pin = screen.getByTestId('invite-pin');
+    expect(pin.textContent).toBe('2');
+    expect(pin.getAttribute('aria-label')).toBe('Неотвеченных приглашений: 2');
   });
 
   it('accept → switchWorkspace + тост принятия', async () => {
