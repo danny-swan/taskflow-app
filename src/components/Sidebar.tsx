@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { useWorkspaces, useCurrentWorkspace, useCanEdit } from '../store/workspaceScope';
 import { CreateWorkspaceModal } from './CreateWorkspaceModal';
+import { MyInvitesSection } from './MyInvitesSection';
 import { tr } from '../lib/i18n';
 import { usePendingSyncCount } from '../lib/pendingSync';
 import { isWorkspaceLimitError } from '../lib/workspaceLimits';
@@ -66,6 +67,9 @@ export function Sidebar() {
 
       {/* Wave A (PR-3): переключатель пространств. */}
       <WorkspaceSwitcher />
+
+      {/* Wave B (PR-b-04): входящие приглашения в общие пространства. */}
+      <MyInvitesSection />
 
       {/* v0.9.35-dev.6: баннер статуса подписки (trial / free-CTA / expired). */}
       <SubscriptionBanner />
