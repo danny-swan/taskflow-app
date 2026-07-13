@@ -285,6 +285,8 @@ const dict = {
     support_show_qr: 'Показать QR',
     support_hide_qr: 'Скрыть QR',
     support_disclaimer: '⚠ Если захотите перевести криптой, то не забывайте, что перевод строго на указанную валюту в указанной сети на соответствующий адрес. Отправка USDT TRC-20 на ERC-20-адрес (или наоборот), TON на Ethereum-адрес и т.п. — приведёт к БЕЗВОЗВРАТНОЙ потере средств. Всегда сверяйте сеть перед отправкой. Спасибо и хорошего Вам дня!',
+    // Wave C PR-c-01 — presence «кто онлайн».
+    ws_presence_aria: 'Сейчас онлайн в пространстве',
   },
   en: {
     brand_sub: 'Task manager',
@@ -570,6 +572,8 @@ const dict = {
     support_show_qr: 'Show QR',
     support_hide_qr: 'Hide QR',
     support_disclaimer: '⚠ If you’d like to send crypto, just a heads-up: please send only the specified currency, on the specified network, to the matching address. Sending USDT TRC-20 to an ERC-20 address (or vice versa), TON to an Ethereum address, etc. — will result in a PERMANENT loss of funds. Always double-check the network before sending. Thanks, and have a great day!',
+    // Wave C PR-c-01 — presence "who's online".
+    ws_presence_aria: 'Currently online in this workspace',
   },
 } as const;
 
