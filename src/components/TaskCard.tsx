@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Task, useStore } from '../store/useStore';
-import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags } from '../store/workspaceScope';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCanEdit } from '../store/workspaceScope';
 import { TagChip } from './TagChip';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { Check, Undo2, Maximize2, Trash2, GripVertical, CheckSquare } from 'lucide-react';
@@ -19,6 +19,7 @@ export function TaskCard({
   dragging?: boolean;
 }) {
   const lang = useStore(s => s.language);
+  const canEdit = useCanEdit(); // Wave C PR-c-05: viewer — read-only
   const statuses = useCurrentWorkspaceStatuses();
   const tags = useCurrentWorkspaceTags();
   const updateTask = useStore(s => s.updateTask);
@@ -174,18 +175,20 @@ export function TaskCard({
         }}
       />
 
-      {/* Delete button — top right corner, appears on hover */}
-      <button
-        type="button"
-        onClick={onDeleteClick}
-        onMouseDown={stopBubble}
-        onPointerDown={(e) => e.stopPropagation()}
-        title={tr(lang, 'delete_task_q')}
-        aria-label={tr(lang, 'delete')}
-        className="absolute top-1.5 right-1.5 w-6 h-6 rounded flex items-center justify-center text-muted opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-[var(--status-important)] transition-opacity z-10"
-      >
-        <Trash2 size={12} />
-      </button>
+      {/* Delete button — top right corner, appears on hover (скрыт у viewer) */}
+      {canEdit && (
+        <button
+          type="button"
+          onClick={onDeleteClick}
+          onMouseDown={stopBubble}
+          onPointerDown={(e) => e.stopPropagation()}
+          title={tr(lang, 'delete_task_q')}
+          aria-label={tr(lang, 'delete')}
+          className="absolute top-1.5 right-1.5 w-6 h-6 rounded flex items-center justify-center text-muted opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-[var(--status-important)] transition-opacity z-10"
+        >
+          <Trash2 size={12} />
+        </button>
+      )}
 
       {/* Task 7: Delete confirmation overlay — buttons centered, medium size, NOT full-width */}
       {confirmDelete && (
@@ -219,11 +222,14 @@ export function TaskCard({
 
           {!editingTitle ? (
             <div
-              className="block w-full text-[13.5px] font-semibold text-text leading-snug inline-edit-target cursor-text rounded px-2 -mx-2 py-1 -my-1 hover:bg-surface-alt/40"
-              onMouseDown={stopBubble}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => { e.stopPropagation(); setEditingTitle(true); }}
-              title={lang === 'ru' ? 'Нажмите, чтобы изменить' : 'Click to edit'}
+              className={
+                'block w-full text-[13.5px] font-semibold text-text leading-snug inline-edit-target rounded px-2 -mx-2 py-1 -my-1 ' +
+                (canEdit ? 'cursor-text hover:bg-surface-alt/40' : '')
+              }
+              onMouseDown={canEdit ? stopBubble : undefined}
+              onPointerDown={canEdit ? ((e) => e.stopPropagation()) : undefined}
+              onClick={canEdit ? ((e) => { e.stopPropagation(); setEditingTitle(true); }) : undefined}
+              title={canEdit ? (lang === 'ru' ? 'Нажмите, чтобы изменить' : 'Click to edit') : undefined}
               style={{ wordBreak: 'break-word' }}
             >
               {task.title}
@@ -249,21 +255,24 @@ export function TaskCard({
           {!editingComment ? (
             task.comment ? (
               <div
-                className="block w-full text-[12px] text-muted mt-1 inline-edit-target inline-edit-comment cursor-text rounded px-2 -mx-2 py-0.5 hover:bg-surface-alt/40"
-                onMouseDown={stopBubble}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); setEditingComment(true); }}
-                title={lang === 'ru' ? 'Нажмите, чтобы изменить' : 'Click to edit'}
+                className={
+                  'block w-full text-[12px] text-muted mt-1 inline-edit-target inline-edit-comment rounded px-2 -mx-2 py-0.5 ' +
+                  (canEdit ? 'cursor-text hover:bg-surface-alt/40' : '')
+                }
+                onMouseDown={canEdit ? stopBubble : undefined}
+                onPointerDown={canEdit ? ((e) => e.stopPropagation()) : undefined}
+                onClick={canEdit ? ((e) => { e.stopPropagation(); setEditingComment(true); }) : undefined}
+                title={canEdit ? (lang === 'ru' ? 'Нажмите, чтобы изменить' : 'Click to edit') : undefined}
               >
                 {/* v0.8.13: рендер комментария поддерживает markdown-чекбоксы.
                     Если в тексте нет «- [ ]» / «- [x]», MarkdownComment рендерит
                     его как обычный whitespace-pre-wrap блок — поведение не меняется. */}
                 <MarkdownComment
                   text={task.comment}
-                  onToggle={(idx) => {
+                  onToggle={canEdit ? ((idx) => {
                     const next = toggleCheckbox(task.comment || '', idx);
                     if (next !== task.comment) updateTask(task.id, { comment: next });
-                  }}
+                  }) : undefined}
                 />
               </div>
             ) : null
@@ -324,32 +333,37 @@ export function TaskCard({
             <Maximize2 size={12} />
           </button>
           {/* v0.8.6: drag handle — единственный элемент с dnd-kit listeners. НЕ гасим pointerdown,
-              иначе dnd-kit не увидит начало drag-жеста. Остальная карточка обрабатывает click в модалку. */}
-          <button
-            type="button"
-            {...handleProps}
-            title={lang === 'ru' ? 'Перетащить' : 'Drag'}
-            aria-label={lang === 'ru' ? 'Перетащить' : 'Drag'}
-            className="w-7 h-7 rounded-md flex items-center justify-center text-zinc-400 opacity-0 group-hover:opacity-100 hover:bg-surface-alt cursor-grab active:cursor-grabbing transition-opacity touch-none select-none"
-          >
-            <GripVertical size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={onToggleDone}
-            onMouseDown={stopBubble}
-            onPointerDown={(e) => e.stopPropagation()}
-            title={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
-            aria-label={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
-            className={
-              'w-7 h-7 rounded-full flex items-center justify-center border transition-colors ' +
-              (isDone
-                ? 'border-border-soft text-muted hover:bg-surface-alt'
-                : 'border-border-soft text-muted hover:border-[var(--status-done)] hover:text-[var(--status-done)]')
-            }
-          >
-            {isDone ? <Undo2 size={13} /> : <Check size={14} />}
-          </button>
+              иначе dnd-kit не увидит начало drag-жеста. Остальная карточка обрабатывает click в модалку.
+              Wave C PR-c-05: у viewer ручка и кнопка «Готово» скрыты (read-only). */}
+          {canEdit && (
+            <button
+              type="button"
+              {...handleProps}
+              title={lang === 'ru' ? 'Перетащить' : 'Drag'}
+              aria-label={lang === 'ru' ? 'Перетащить' : 'Drag'}
+              className="w-7 h-7 rounded-md flex items-center justify-center text-zinc-400 opacity-0 group-hover:opacity-100 hover:bg-surface-alt cursor-grab active:cursor-grabbing transition-opacity touch-none select-none"
+            >
+              <GripVertical size={14} />
+            </button>
+          )}
+          {canEdit && (
+            <button
+              type="button"
+              onClick={onToggleDone}
+              onMouseDown={stopBubble}
+              onPointerDown={(e) => e.stopPropagation()}
+              title={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
+              aria-label={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
+              className={
+                'w-7 h-7 rounded-full flex items-center justify-center border transition-colors ' +
+                (isDone
+                  ? 'border-border-soft text-muted hover:bg-surface-alt'
+                  : 'border-border-soft text-muted hover:border-[var(--status-done)] hover:text-[var(--status-done)]')
+              }
+            >
+              {isDone ? <Undo2 size={13} /> : <Check size={14} />}
+            </button>
+          )}
         </div>
       </div>
 

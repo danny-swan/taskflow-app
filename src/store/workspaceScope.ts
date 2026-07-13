@@ -159,3 +159,12 @@ export function useCanEdit(): boolean {
   const role = useCurrentWorkspaceRole();
   return role !== 'viewer';
 }
+
+/**
+ * Является ли текущий пользователь viewer'ом в текущем пространстве.
+ * Строгое дополнение к {@link useCanEdit}: true только при role === 'viewer'.
+ * Используется UI-слоем (PR-c-05) для read-only tooltip'ов и disabled-кнопок.
+ */
+export function useIsViewer(): boolean {
+  return useCurrentWorkspaceRole() === 'viewer';
+}
