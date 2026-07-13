@@ -8,7 +8,7 @@
 --   2) workspace_id NOT NULL во всех шести sync-таблицах;
 --   3) дефолты kind='personal' / role='owner' + RLS включён на новых таблицах;
 --   4) has_workspace_role: семантика viewer < editor < owner + не-член;
---   5) kind='shared' отклоняется триггером (INSERT и UPDATE);
+--   5) kind='shared' допустим на уровне схемы (INSERT и UPDATE) после 0030;
 --   6) backfill: personal-пространство + owner-членство + workspace_id, с
 --      детерминированным id ws_<uid> и идемпотентностью;
 --   7) RLS-изоляция: юзер видит только строки своего пространства (эквивалент
@@ -111,16 +111,20 @@ SELECT ok(NOT public.has_workspace_role('ws-role-09', '93333333-3333-3333-3333-3
 SELECT ok(NOT public.has_workspace_role('ws-role-09', '94444444-4444-4444-4444-444444444444'::uuid, 'viewer'),
           'не-член не проходит даже как viewer');
 
--- ─── 8. kind='shared' отклоняется триггером (check_violation = 23514) ────────
-SELECT throws_ok(
+-- ─── 8. kind='shared' теперь допустим на уровне схемы (0030 снял guard) ───────
+-- Wave A блокировал shared триггером block_shared_workspaces (23514). Миграция
+-- 0030 (Wave B, PR-b-01) сняла триггер: kind='shared' проходит на уровне схемы
+-- (продуктово shared всё ещё закрыт — нет UI/invitations, для free упирается в
+-- тарифный лимит 0). Здесь superuser (auth.uid() NULL) → лимит/RLS не мешают.
+SELECT lives_ok(
   $$ INSERT INTO public.sync_workspaces (id, user_id, owner_id, name, kind)
        VALUES ('ws-shared-09', '91111111-1111-1111-1111-111111111111'::uuid,
                '91111111-1111-1111-1111-111111111111'::uuid, 'Shared', 'shared') $$,
-  '23514', NULL, 'INSERT kind=shared отклонён (Wave A)'
+  'INSERT kind=shared теперь проходит (guard block_shared_workspaces снят 0030)'
 );
-SELECT throws_ok(
+SELECT lives_ok(
   $$ UPDATE public.sync_workspaces SET kind = 'shared' WHERE id = 'ws-role-09' $$,
-  '23514', NULL, 'UPDATE personal→shared отклонён (Wave A)'
+  'UPDATE personal→shared теперь проходит (guard снят 0030)'
 );
 
 -- ─── 9. Backfill: легаси-юзер без пространства ──────────────────────────────

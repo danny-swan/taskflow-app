@@ -10,8 +10,9 @@
 --   3) поведение лимита на INSERT (гейт auth.uid() = owner_id):
 --      • free с 1 personal → создание 2-го успех, 3-й падает (workspace_limit_exceeded);
 --      • paid с 6 → создание 7-го успех, 8-й падает;
---   4) регрессия PR-1: kind='shared' у free и paid всё ещё отклоняется
---      check-constraint'ом / block_shared_workspaces (23514), НЕ лимитом.
+--   4) после 0030 guard block_shared_workspaces снят: kind='shared' у free и paid
+--      отклоняется теперь тарифным лимитом (P0001 workspace_limit_exceeded), а не
+--      check-constraint'ом 23514 (free shared лимит=0; paid уже упёрся в 7).
 --
 -- Гейт триггера срабатывает только когда auth.uid() = NEW.owner_id (клиент
 -- создаёт своё пространство). Поэтому предзаполнение «уже N штук» делаем как
@@ -106,13 +107,14 @@ SELECT throws_ok(
   'P0001', 'workspace_limit_exceeded',
   'free: создание 3-го personal (лимит 2 достигнут) — отклонено'
 );
--- shared у free — отклонено check-constraint'ом / block_shared_workspaces (не лимитом).
+-- shared у free — теперь отклонено тарифным лимитом (0030 снял guard; лимит shared=0).
+-- Раньше падало 23514 (block_shared_workspaces), теперь P0001 workspace_limit_exceeded.
 SELECT throws_ok(
   $$ INSERT INTO public.sync_workspaces (id, user_id, owner_id, name, kind)
        VALUES ('wsf-sh', 'f1111111-1111-1111-1111-111111111111'::uuid,
                'f1111111-1111-1111-1111-111111111111'::uuid, 'Free Shared', 'shared') $$,
-  '23514', NULL,
-  'free: kind=shared отклонён check-constraint (регрессия PR-1)'
+  'P0001', 'workspace_limit_exceeded',
+  'free: kind=shared отклонён тарифным лимитом shared=0 (0030 снял guard)'
 );
 RESET ROLE;
 
@@ -147,13 +149,14 @@ SELECT throws_ok(
   'P0001', 'workspace_limit_exceeded',
   'paid: создание 8-го (лимит 7 достигнут) — отклонено'
 );
--- shared у paid — тоже отклонено check-constraint'ом (Wave A shared закрыт для всех).
+-- shared у paid — теперь отклонено тарифным лимитом (0030 снял guard). Счётчик
+-- суммарный по всем kind: у paid уже 7 пространств = лимит 7 → P0001 (не 23514).
 SELECT throws_ok(
   $$ INSERT INTO public.sync_workspaces (id, user_id, owner_id, name, kind)
        VALUES ('wsp-sh', 'f2222222-2222-2222-2222-222222222222'::uuid,
                'f2222222-2222-2222-2222-222222222222'::uuid, 'Paid Shared', 'shared') $$,
-  '23514', NULL,
-  'paid: kind=shared отклонён check-constraint (регрессия PR-1)'
+  'P0001', 'workspace_limit_exceeded',
+  'paid: kind=shared отклонён тарифным лимитом (7 из 7 занято; 0030 снял guard)'
 );
 RESET ROLE;
 
