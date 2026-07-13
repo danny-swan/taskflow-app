@@ -115,6 +115,26 @@
 
 ---
 
+### §4.6-факт — реализация в PR-b-06 (`feat/ws-b-06-hardening`)
+
+**Что сделано:** финальный regression-hardening. Чисто backend/тестовый PR (UI-компоненты не тронуты).
+
+- **Фикс quirk'а `sync_overdue_events` (миграция `0033`):** любой `UPDATE` строки падал с `record "new" has no field "updated_at"`. Причина: `set_updated_at()` (0005) выполняет `NEW.updated_at = now()`, а триггер `trg_set_updated_at` был ОШИБОЧНО навешен 0005 (строки 45-48) на `sync_overdue_events` — append-only таблицу, у которой по дизайну (0002 §8) НЕТ ни `updated_at`, ни `version`.
+  - **Выбран Вариант B (снять триггер), а не Вариант A (добавить колонку).** `sync_overdue_events` — принципиально append-only лог: клиентский sync-слой это фиксирует (`mappers.ts` `CloudOverdueEventPayload` без `updated_at/version`; `pull.ts` — курсор по `id`, не по `updated_at`; LWW идёт по монотонному uuidv7-`id`). Добавление `updated_at` рассинхронизировало бы облачную схему с клиентскими типами и семантикой курсора без пользы. Правильный фикс — убрать триггер, которого там быть не должно.
+  - **Это была ЖИВАЯ прод-проблема, не только тестовый артефакт:** push-слой (`push.ts`) отправляет и upsert, и soft-delete через `.upsert(onConflict:'id')`; повторный push/soft-delete уже существующего в облаке overdue-события превращался в `UPDATE-on-conflict` и падал на этом же триггере. `0033` идемпотентна (`DROP TRIGGER IF EXISTS`), на прод не применяется до релиза эпика.
+- **pgTAP `14` (RLS роли):** снято исключение `sync_overdue_events` из UPDATE-подматрицы. Добавлены 3 теста (viewer no-op / editor / owner UPDATE по `event_date`), `plan(103)→plan(106)`. Теперь матрица полная: 3 роли × 6 sync-таблиц × 4 операции без пропусков.
+- **pgTAP `16` (новый, `16_workspace_regression_test.sql`, `plan(19)`):** пересечения инвариантов, не покрытые поштучно в 11-15:
+  - **A (8):** hard-delete shared-ws каскадит ВЕСЬ граф разом (дети в двух sync-таблицах + members + invites + settings → 0), соседний ws другого владельца не тронут.
+  - **B (4):** owner делает self-leave при наличии второго owner'а; созданный им pending-инвайт выживает (`inviter_user_id` FK → `auth.users`, не members), а ex-owner мгновенно теряет SELECT-видимость данных ws (RLS следует за членством).
+  - **C (3):** `target_user_id ON DELETE SET NULL` не ломает инвайт (строка выживает, `target_user_id` обнулён, owner всё ещё может `cancel_invite`).
+  - **D (2):** free-регрессия side-by-side — free нельзя ни пригласить (invite-path, зеркалит 15/B4), ни принять инвайт (accept-path, лимит shared=0).
+  - **E (2):** shared-пространство занимает слот в общем пуле владельца (микс 3 personal + 4 shared = 7 → 8-е любого kind → `P0001`).
+- **CI:** `16_workspace_regression_test.sql` добавлен в pg_prove-список `.github/workflows/db-tests.yml`.
+
+**РАСХОЖДЕНИЯ С ПЛАНОМ:** нет. Дедупликация: editor/viewer invite-denial (план п.3) уже покрыты 15/B9-B10 — не дублировались; invite-path free-denial уже в 15/B4 — в `16`/D оставлен рядом с accept-path'ом только ради явной side-by-side пары, как просил бриф.
+
+---
+
 ## 4. Разбивка Wave B на PR
 
 Строгая последовательность подветок; каждая ответвляется от предыдущей после мержа в `feat/workspaces`.
@@ -144,3 +164,25 @@
 - Presence-индикатор в UI для shared (кто сейчас смотрит workspace) — вне scope Wave B, отложено.
 - Notifications на инвайты — пока UI-only, без email/push (вне scope Wave B).
 - Historical audit log (кто что менял) — вне scope MVP.
+
+---
+
+## 7. Wave B — ИТОГ
+
+Wave B завершена. Все шесть под-PR реализованы в ветке `feat/workspaces`; `main` не тронут (единый merge-PR `feat/workspaces → main` — после решения релизить эпик).
+
+| PR | Ветка | Суть | DDL |
+|----|-------|------|-----|
+| b-01 | `feat/ws-b-01-integrity` | FK+CASCADE на 8 таблиц; снят `block_shared_workspaces` | `0030` |
+| b-02 | `feat/ws-b-02-rls-roles` | Ролевые RLS-политики (owner/editor/viewer) на 6 sync-таблиц + members/settings | `0031` |
+| b-03 | `feat/ws-b-03-invites` | Таблица `sync_workspace_invites` + 4 RPC (invite/accept/reject/cancel) + `expire_invites` | `0032` |
+| b-04 | `feat/ws-b-04-ui-invites` | UI вкладки «Участники» + `MyInvitesSection` (приглашение по TF-ID, роли, leave) | 0 |
+| b-05 | `feat/ws-b-05-navigation` | UX-раздел «Личные / Общие» + role-badge в `WorkspaceSwitcher` | 0 |
+| b-06 | `feat/ws-b-06-hardening` | Фикс quirk'а `sync_overdue_events` (`0033`); regression pgTAP `14`(+3)/`16`(нов.) | `0033` |
+| doc | — | Обновление `wave-b-plan.md` / `roadmap.md` (закрытие Wave B) | 0 |
+
+**Финальные тесты:**
+- **pgTAP (CI-список, 15 файлов): 514 тестов, все зелёные.** Прибавка Wave B к базе: `12`(45) + `13`(31) + `14`(106) + `15`(48) + `16`(19). Файл `14` вырос 103→106 (снято исключение `sync_overdue_events` в UPDATE), `16` — новый.
+- **Vitest** и **`tsc -b` + `vite build`** — зелёные (клиентский код Wave B не менялся в b-06).
+
+**Ключевое из b-06:** обнаружен и починен ЖИВОЙ прод-баг (не только тестовый) — ошибочный `trg_set_updated_at` на append-only `sync_overdue_events` ронял любой `UPDATE`/повторный push/soft-delete. Снят миграцией `0033` (Вариант B), т.к. таблица append-only по дизайну и на клиенте, и в облаке.

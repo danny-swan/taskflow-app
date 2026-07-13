@@ -5,11 +5,11 @@
 --
 -- Проверяет фактическое поведение политик <table>_<op>_ws_role в реальном
 -- shared-пространстве с тремя ролями (owner/editor/viewer) + outsider:
---   • базовая матрица 3 роли × 6 sync-таблиц × операции (SELECT/INSERT/
---     UPDATE/DELETE) = 69 тестов. Исключение: sync_overdue_events —
---     append-only (триггер trg_set_updated_at из 0005 обращается к NEW.updated_at,
---     а колонки нет — миграция 0002; любой UPDATE падает независимо от RLS),
---     поэтому UPDATE для него не проверяется (3 роли × 5 UPDATE + прочие);
+--   • полная матрица 3 роли × 6 sync-таблиц × операции (SELECT/INSERT/
+--     UPDATE/DELETE). sync_overdue_events теперь ВКЛЮЧЁН и в UPDATE-подматрицу:
+--     ошибочный триггер trg_set_updated_at (0005) снят миграцией 0033, поэтому
+--     UPDATE больше не падает на несуществующей колонке updated_at и RLS-политика
+--     update_own_ws_role проверяется по ролям как для остальных таблиц;
 --   • sync_workspace_members: SELECT всем, INSERT/UPDATE/DELETE — owner,
 --     editor/viewer denied; self-leave (не-owner удаляет свою строку);
 --   • sync_workspace_settings: SELECT всем, запись — только owner;
@@ -28,7 +28,7 @@
 -- Стиль — как 09/12/13. Выполняется на vanilla Postgres 15 (CI).
 
 BEGIN;
-SELECT plan(103);
+SELECT plan(106);
 
 -- ============================================================================
 -- SETUP (superuser: auth.uid() IS NULL → guards/limits/RLS не мешают наливу)
@@ -133,11 +133,15 @@ UPDATE public.sync_statuses          SET name='hack'          WHERE id='s_updv';
 UPDATE public.sync_tags              SET name='hack'          WHERE id='g_updv';
 UPDATE public.sync_task_templates    SET name='hack'          WHERE id='p_updv';
 UPDATE public.sync_task_hold_periods SET ended_at='2030-09-09' WHERE id='h_updv';
+-- sync_overdue_events: UPDATE-триггер снят в 0033, поэтому оператор не падает —
+-- RLS USING (viewer не имеет editor+) молча отсекает строку → no-op.
+UPDATE public.sync_overdue_events    SET event_date='2030-09-09' WHERE id='o_updv';
 SELECT is((SELECT title      FROM public.sync_tasks             WHERE id='t_updv'),'keepv','V: viewer UPDATE sync_tasks no-op');
 SELECT is((SELECT name       FROM public.sync_statuses          WHERE id='s_updv'),'keepv','V: viewer UPDATE sync_statuses no-op');
 SELECT is((SELECT name       FROM public.sync_tags              WHERE id='g_updv'),'keepv','V: viewer UPDATE sync_tags no-op');
 SELECT is((SELECT name       FROM public.sync_task_templates    WHERE id='p_updv'),'keepv','V: viewer UPDATE sync_task_templates no-op');
 SELECT is((SELECT ended_at   FROM public.sync_task_hold_periods WHERE id='h_updv'),NULL::timestamptz,'V: viewer UPDATE sync_task_hold_periods no-op');
+SELECT is((SELECT event_date FROM public.sync_overdue_events    WHERE id='o_updv'),'2026-05-05'::date,'V: viewer UPDATE sync_overdue_events no-op');
 
 -- DELETE (no-op: строка на месте)
 DELETE FROM public.sync_tasks             WHERE id='t_delv';
@@ -181,11 +185,13 @@ UPDATE public.sync_statuses          SET name='byE'          WHERE id='s_upd';
 UPDATE public.sync_tags              SET name='byE'          WHERE id='g_upd';
 UPDATE public.sync_task_templates    SET name='byE'          WHERE id='p_upd';
 UPDATE public.sync_task_hold_periods SET ended_at='2030-02-02 00:00:00+00' WHERE id='h_upd';
+UPDATE public.sync_overdue_events    SET event_date='2030-02-02' WHERE id='o_upd';
 SELECT is((SELECT title      FROM public.sync_tasks             WHERE id='t_upd'),'byE','E: editor UPDATE sync_tasks');
 SELECT is((SELECT name       FROM public.sync_statuses          WHERE id='s_upd'),'byE','E: editor UPDATE sync_statuses');
 SELECT is((SELECT name       FROM public.sync_tags              WHERE id='g_upd'),'byE','E: editor UPDATE sync_tags');
 SELECT is((SELECT name       FROM public.sync_task_templates    WHERE id='p_upd'),'byE','E: editor UPDATE sync_task_templates');
 SELECT is((SELECT ended_at   FROM public.sync_task_hold_periods WHERE id='h_upd'),'2030-02-02 00:00:00+00'::timestamptz,'E: editor UPDATE sync_task_hold_periods');
+SELECT is((SELECT event_date FROM public.sync_overdue_events    WHERE id='o_upd'),'2030-02-02'::date,'E: editor UPDATE sync_overdue_events');
 
 DELETE FROM public.sync_tasks             WHERE id='t_dele';
 DELETE FROM public.sync_statuses          WHERE id='s_dele';
@@ -228,11 +234,13 @@ UPDATE public.sync_statuses          SET name='byO'          WHERE id='s_upd';
 UPDATE public.sync_tags              SET name='byO'          WHERE id='g_upd';
 UPDATE public.sync_task_templates    SET name='byO'          WHERE id='p_upd';
 UPDATE public.sync_task_hold_periods SET ended_at='2030-03-03 00:00:00+00' WHERE id='h_upd';
+UPDATE public.sync_overdue_events    SET event_date='2030-03-03' WHERE id='o_upd';
 SELECT is((SELECT title      FROM public.sync_tasks             WHERE id='t_upd'),'byO','O: owner UPDATE sync_tasks');
 SELECT is((SELECT name       FROM public.sync_statuses          WHERE id='s_upd'),'byO','O: owner UPDATE sync_statuses');
 SELECT is((SELECT name       FROM public.sync_tags              WHERE id='g_upd'),'byO','O: owner UPDATE sync_tags');
 SELECT is((SELECT name       FROM public.sync_task_templates    WHERE id='p_upd'),'byO','O: owner UPDATE sync_task_templates');
 SELECT is((SELECT ended_at   FROM public.sync_task_hold_periods WHERE id='h_upd'),'2030-03-03 00:00:00+00'::timestamptz,'O: owner UPDATE sync_task_hold_periods');
+SELECT is((SELECT event_date FROM public.sync_overdue_events    WHERE id='o_upd'),'2030-03-03'::date,'O: owner UPDATE sync_overdue_events');
 
 DELETE FROM public.sync_tasks             WHERE id='t_delo';
 DELETE FROM public.sync_statuses          WHERE id='s_delo';
