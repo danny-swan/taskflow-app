@@ -285,6 +285,27 @@ create trigger enforce_workspace_limit
 
 **Результаты прогонов (локально):** vitest 349/349, `tsc --noEmit` чисто, `npm run build` OK, pgTAP CI-список (01–09 + 11) 265/265. Прогон на PostgreSQL 18 в песочнице; CI — vanilla Postgres 15.
 
+### 3.9-факт Реализация (PR-6, `feat/ws-a-06-hardening`)
+
+> Финальный regression-hardening Wave A. Продуктовых изменений НЕТ — только новый pgTAP-файл + регистрация в CI + доки. Задача: жёстко зафиксировать инварианты фундамента (0027–0029) тестами, чтобы Wave B (открытие shared) стартовал с уверенной базы.
+
+**Тесты:** `supabase/tests/12_workspaces_regression_test.sql` (`plan(45)`) — добавлен в `.github/workflows/db-tests.yml`. Три группы, дополняют 09/11 без дублирования:
+- **A (18) — двусторонняя RLS-изоляция между пространствами ДВУХ юзеров:** `has_workspace_role` не-член vs owner; юзер A не видит чужое ws / членство / строки во всех 6 sync-таблицах; UPDATE/DELETE чужих строк отсекаются (USING), INSERT с чужим `workspace_id` в tasks/statuses/members падает `42501` (WITH CHECK); зеркальная проверка для B; ни одна атака ничего не изменила.
+- **B (12) — фактическое поведение при удалении пространства:** soft-delete (`deleted_at`) помечает ws, дочерние строки остаются; hard `DELETE` проходит и ОСИРОТЛЯЕТ дочерние строки/members/settings (нет FK-каскада); удаление одного ws не задело второе ws того же юзера.
+- **C (15) — integrity `workspace_id`/`owner_id`:** `workspace_id` проиндексирован во всех 6 таблицах (`has_index`); `sync_tasks.workspace_id` имеет 0 FK-констрейнтов (каталог); INSERT с несуществующим `workspace_id` под superuser проходит (следствие отсутствия FK); `owner_id`/`user_id` NOT NULL + FK на `auth.users` ON DELETE CASCADE (удаление аккаунта каскадит на personal-ws); backfill sanity; RLS WITH CHECK блокирует перенос своей задачи в чужой `workspace_id` (`42501`).
+
+**Два зафиксированных архитектурных инварианта Wave A** (осознанный дизайн PR-1, теперь под тестами — не баги):
+1. **`workspace_id` — plain `text` БЕЗ FK** на `sync_workspaces(id)` во всех 6 sync-таблицах и в members/settings. Целостность держится только на RLS (`has_workspace_role` в USING + WITH CHECK), не на FK. **Причина:** offline-first sync — id генерируются на клиенте (SQLite, текстовые UUID) и приезжают порознь через outbox, жёсткий FK ломал бы порядок вставки при push. **Для Wave B:** рассмотреть настоящий FK либо периодический orphan-cleanup.
+2. **НЕТ `ON DELETE CASCADE` на `workspace_id`.** Продукт использует soft-delete (`deleted_at`); hard `DELETE` пространства осиротит дочерние строки. **Причина:** тот же offline-first дизайн + soft-delete как штатный путь. **Для Wave B:** при открытии shared каскадить явно — либо в приложении (обратный `PUSH_ORDER`), либо схемным `ON DELETE CASCADE`, если появится FK.
+
+**Положительная находка:** RLS UPDATE-политика через WITH CHECK строже ожидания — не даёт «увести» свою строку в чужой `workspace_id` (тест C15, `42501`). Это лучше, чем требовал план.
+
+**Пред-существующая находка (TODO, вне scope PR-6):** файл `10_workspace_management_test.sql` (PR-4) НЕ зарегистрирован в CI и «красный» и на PG18, и на PG15 (soft-delete shared-ws конфликтует с UPDATE-guard'ом `block_shared_workspaces`). Не чинил и не включал в CI (чужой красный тест). Рекомендация: отдельный тикет — soft-delete shared должен временно `DISABLE` guard (как это уже сделано для INSERT), после чего включить 10 в `db-tests.yml`.
+
+**Почему без нового ADR:** PR-6 не разворачивает архитектурную развилку — он лишь фиксирует тестами уже принятые в PR-1 решения (0027). Инварианты «`text` без FK» и «нет каскада» — следствие ADR-контекста offline-first sync, а не новый выбор. Новый ADR оправдан, когда Wave B решит ввести FK/каскад (там появится альтернатива и trade-off).
+
+**Результаты прогонов (локально):** pgTAP CI-список (01–09 + 11 + 12) **11 файлов / 310 тестов PASS** (файл 12 отдельно 45/45); vitest 349/349; `tsc --noEmit` чисто; `npm run build` OK. Прогон на PostgreSQL 18 в песочнице; CI — vanilla Postgres 15 (файл 12 использует только PG15-совместимые ассершены).
+
 ---
 
 ## 4. Риски Wave A и тестирование
@@ -311,7 +332,7 @@ create trigger enforce_workspace_limit
 3. **`feat/ws-a-03-store-ui`** — currentWorkspaceId, переключатель в шапке, ws-scoped хуки, фильтры на всех страницах.
 4. **`feat/ws-a-04-settings`** — per-workspace настройки, overdue_mode → workspace_settings, создание/удаление ws.
 5. **`feat/ws-a-05-limits`** — тарифные лимиты (триггер + UX). ✅ Реализовано, закоммичено локально в ветке `feat/ws-a-05-limits` (на момент фиксации не запушено, PR не открыт). Детали — см. §3.8-факт.
-6. **`feat/ws-a-06-hardening`** — регрессия, полный pgTAP-набор, ручной чек-лист, доки.
+6. **`feat/ws-a-06-hardening`** — регрессия, полный pgTAP-набор, ручной чек-лист, доки. ✅ Реализовано, закоммичено локально в ветке `feat/ws-a-06-hardening` (на момент фиксации не запушено, PR не открыт). Детали — см. §3.9-факт.
 
 После стабилизации всех шести — единый merge-PR `feat/workspaces → main`, затем desktop-релиз (v1.1.0).
 
