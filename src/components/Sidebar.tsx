@@ -1,15 +1,13 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
-import { useWorkspaces, useCurrentWorkspace, useCanEdit } from '../store/workspaceScope';
-import { CreateWorkspaceModal } from './CreateWorkspaceModal';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { MyInvitesSection } from './MyInvitesSection';
 import { tr } from '../lib/i18n';
 import { usePendingSyncCount } from '../lib/pendingSync';
 import { isWorkspaceLimitError } from '../lib/workspaceLimits';
 import {
-  ListChecks, Plus, LayoutDashboard, BarChart3, Settings, HelpCircle,
+  ListChecks, LayoutDashboard, BarChart3, Settings, HelpCircle,
   Sun, Moon, Sparkles, Leaf, Palette, ChevronDown, CalendarDays, Cloud, X, Clock,
-  Check, Users, User as UserIcon, ChevronsUpDown, Settings2,
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../lib/auth';
@@ -169,117 +167,6 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
-  );
-}
-
-/**
- * WorkspaceSwitcher — переключатель пространств (Wave A, PR-3 «Store + UI»).
- *
- * Показывает текущее пространство и выпадающий список доступных, сгруппированный
- * по «Личные» / «Общие». В Wave A существуют только личные пространства, поэтому
- * блок «Общие» рендерится ТОЛЬКО если реально есть shared-ws (никаких пустых
- * «мёртвых» секций). Кнопка «+ Создать пространство» задизейблена с тултипом
- * «Доступно скоро» — само создание появится в PR-4.
- *
- * Дизайн повторяет паттерн дропдауна темы (surface + border + shadow, scale-in).
- */
-function WorkspaceSwitcher() {
-  const lang = useStore(s => s.language);
-  const workspaces = useWorkspaces();
-  const current = useCurrentWorkspace();
-  const switchWorkspace = useStore(s => s.switchWorkspace);
-  const canEdit = useCanEdit();
-
-  const [open, setOpen] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const fn = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    setTimeout(() => document.addEventListener('mousedown', fn), 0);
-    return () => document.removeEventListener('mousedown', fn);
-  }, [open]);
-
-  // Wave A: только личные пространства реально существуют. Группируем по kind.
-  const personal = workspaces.filter(w => w.kind === 'personal');
-  const shared = workspaces.filter(w => w.kind !== 'personal');
-
-  // Если пространств нет вовсе (например, локальный режим до init) — не рисуем.
-  if (workspaces.length === 0) return null;
-
-  const currentIsShared = current?.kind && current.kind !== 'personal';
-  const CurrentIcon = currentIsShared ? Users : UserIcon;
-  const label = current?.name ?? (lang === 'ru' ? 'Пространство' : 'Workspace');
-
-  const renderGroup = (title: string, list: typeof workspaces, Icon: typeof UserIcon) =>
-    list.length > 0 && (
-      <div className="py-1">
-        <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-faint">{title}</div>
-        {list.map(w => (
-          <button
-            key={w.id}
-            onClick={() => { switchWorkspace(w.id); setOpen(false); }}
-            className={
-              'w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-alt text-[13px] ' +
-              (w.id === current?.id ? 'text-accent' : 'text-text')
-            }
-          >
-            <Icon size={14} className="shrink-0" />
-            <span className="flex-1 truncate">{w.name}</span>
-            {w.id === current?.id && <Check size={13} className="shrink-0" />}
-          </button>
-        ))}
-      </div>
-    );
-
-  return (
-    <div ref={ref} className="relative px-3 pb-2">
-      <button
-        onClick={() => setOpen(o => !o)}
-        aria-label={tr(lang, 'ws_switch_aria')}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md border border-border-soft hover:bg-surface-alt transition-colors"
-      >
-        <CurrentIcon size={14} className="text-muted shrink-0" />
-        <span className="flex-1 min-w-0 truncate text-[13px] font-medium text-left">{label}</span>
-        <ChevronsUpDown size={13} className="text-muted shrink-0" />
-      </button>
-
-      {open && (
-        <div
-          role="listbox"
-          className="absolute left-3 right-3 mt-1 bg-surface border border-border rounded-lg shadow-xl py-1 z-30 scale-in max-h-[50vh] overflow-y-auto"
-        >
-          {renderGroup(tr(lang, 'ws_personal'), personal, UserIcon)}
-          {renderGroup(tr(lang, 'ws_shared'), shared, Users)}
-
-          <div className="border-t border-border-soft mt-1 pt-1">
-            <button
-              type="button"
-              onClick={() => { setOpen(false); setCreateOpen(true); }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] text-text hover:bg-surface-alt"
-            >
-              <Plus size={14} className="shrink-0" />
-              <span className="flex-1">{tr(lang, 'ws_create')}</span>
-            </button>
-            {/* Настройки пространства — только editor+ (viewer не видит). */}
-            {canEdit && (
-              <NavLink
-                to="/workspace-settings"
-                onClick={() => setOpen(false)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] text-muted hover:bg-surface-alt hover:text-text"
-              >
-                <Settings2 size={13} className="shrink-0" />
-                <span className="flex-1">{tr(lang, 'ws_nav_settings')}</span>
-              </NavLink>
-            )}
-          </div>
-        </div>
-      )}
-
-      <CreateWorkspaceModal open={createOpen} onClose={() => setCreateOpen(false)} />
-    </div>
   );
 }
 

@@ -120,6 +120,36 @@ export function useCurrentWorkspaceRole(): WorkspaceRole | null {
 }
 
 /**
+ * Роль текущего пользователя в КАЖДОМ доступном пространстве (Wave B, PR-b-05).
+ *
+ * Возвращает карту `{ [workspaceId]: WorkspaceRole | null }` для рендера
+ * role-badge в переключателе. Логика на пространство совпадает с
+ * {@link useCurrentWorkspaceRole}:
+ *   • personal-ws → 'owner';
+ *   • ws_local → 'owner';
+ *   • shared → строка членства (currentUser) в локальном зеркале;
+ *   • членство не найдено → null (badge не рисуем).
+ */
+export function useWorkspaceRoles(): Record<string, WorkspaceRole | null> {
+  const workspaces = useStore(s => s.workspaces);
+  const members = useStore(s => s.workspaceMembers);
+  const boundUserId = useStore(s => s.boundUserId);
+  return useMemo(() => {
+    const out: Record<string, WorkspaceRole | null> = {};
+    for (const ws of workspaces) {
+      if (ws.id === 'ws_local' || ws.kind === 'personal') {
+        out[ws.id] = 'owner';
+        continue;
+      }
+      const mine = members.find(m => m.workspace_id === ws.id && m.user_id === boundUserId);
+      const role = mine?.role;
+      out[ws.id] = role === 'owner' || role === 'editor' || role === 'viewer' ? role : null;
+    }
+    return out;
+  }, [workspaces, members, boundUserId]);
+}
+
+/**
  * Можно ли РЕДАКТИРОВАТЬ данные текущего пространства.
  * viewer — строго read-only (false). owner/editor — true. null (роль неизвестна,
  * напр. пространство ещё не загрузилось) трактуем как true, чтобы не блокировать
