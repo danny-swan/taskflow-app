@@ -86,6 +86,8 @@ const dict = {
     ws_my_invites_rejected: 'Приглашение отклонено',
     ws_my_invites_limit_exceeded: 'Достигнут лимит рабочих пространств. Освободите слот, чтобы принять это приглашение.',
     ws_my_invites_error: 'Не удалось выполнить действие. Попробуйте позже.',
+    // Wave C PR-c-02 — пин непринятых приглашений.
+    ws_invite_pin_aria: 'Неотвеченных приглашений: {count}',
     // Wave B PR-b-05 — переключатель пространств: секции «Личные/Общие», role-badge, пустое состояние.
     ws_switcher_section_personal: 'Личные',
     ws_switcher_section_shared: 'Общие',
@@ -373,6 +375,8 @@ const dict = {
     ws_my_invites_rejected: 'Invitation declined',
     ws_my_invites_limit_exceeded: 'You have reached the workspace limit. Free up a slot to accept this invitation.',
     ws_my_invites_error: 'Action failed. Please try again later.',
+    // Wave C PR-c-02 — pending invites pin.
+    ws_invite_pin_aria: '{count} pending invites',
     // Wave B PR-b-05 — workspace switcher: Personal/Shared sections, role badge, empty state.
     ws_switcher_section_personal: 'Personal',
     ws_switcher_section_shared: 'Shared',

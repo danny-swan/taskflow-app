@@ -17,6 +17,7 @@ import { useEffect, useState } from 'react';
 import { Mail, Check, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useInvitesStore } from '../store/useInvitesStore';
+import { InvitePinBadge } from './InvitePinBadge';
 import { tr } from '../lib/i18n';
 import { InviteRpcError, type WorkspaceInvite } from '../lib/invites';
 
@@ -87,11 +88,11 @@ export function MyInvitesSection() {
   return (
     <div className="px-3 pb-2" data-testid="my-invites">
       <div className="flex items-center gap-1.5 px-1 mb-1">
-        <Mail size={13} className="text-accent" />
-        <span className="text-[11px] uppercase tracking-wider text-faint flex-1">{tr(lang, 'ws_my_invites_title')}</span>
-        <span className="min-w-[16px] h-[16px] px-1 rounded-full bg-accent text-white text-[10px] font-semibold flex items-center justify-center tabular">
-          {myPending.length}
+        <span className="relative inline-flex">
+          <Mail size={13} className="text-accent" />
+          <InvitePinBadge count={myPending.length} />
         </span>
+        <span className="text-[11px] uppercase tracking-wider text-faint flex-1">{tr(lang, 'ws_my_invites_title')}</span>
       </div>
 
       <div className="flex flex-col gap-1.5">
