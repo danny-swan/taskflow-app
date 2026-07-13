@@ -14,7 +14,7 @@ import { useCurrentWorkspace, useCurrentWorkspaceRole } from '../store/workspace
 import { tr } from '../lib/i18n';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { StatusesSection, TagsSection } from './Settings';
-import { WorkspaceMembers } from '../components/WorkspaceMembers';
+import { MembersTab } from '../components/MembersTab';
 
 type Tab = 'statuses' | 'tags' | 'deadlines' | 'members';
 
@@ -115,7 +115,7 @@ export function WorkspaceSettingsPage() {
             {activeTab === 'statuses' && <StatusesSection />}
             {activeTab === 'tags' && <TagsSection />}
             {activeTab === 'deadlines' && <DeadlinesSection />}
-            {activeTab === 'members' && isShared && <WorkspaceMembers />}
+            {activeTab === 'members' && isShared && <MembersTab />}
           </div>
 
           {isOwner && (

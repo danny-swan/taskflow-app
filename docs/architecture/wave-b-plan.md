@@ -77,6 +77,25 @@
 
 **Тесты:** pgTAP `15_workspace_invites_test.sql` (plan 48) — группы A (схема/грант/RLS-enabled), B (invite: happy + owner-only/role/self/member/free-target/идемпотентность), C (accept: happy + лимит/not-target/re-status/expired/cancelled/no-auth), D (reject), E (cancel: owner-only), F (RLS видимость + прямой DML deny), G (FK CASCADE по workspace и inviter). Добавлен в CI-список `db-tests.yml`. Общий CI-прогон: **492** pgTAP-теста (14 файлов) зелёные.
 
+### §4.4-факт — реализация в PR-b-04 (`feat/ws-b-04-ui-invites`)
+
+**Что сделано:** клиентский UI приглашений поверх RPC из 0032 (0 DDL, backend не тронут).
+
+- **Сервисный слой `src/lib/invites.ts`** — тонкие обёртки над 4 RPC (`invite_to_workspace` / `accept_invite` / `reject_invite` / `cancel_invite`) + два SELECT-списка (`listMyPendingInvites` мои входящие, `listWorkspaceInvites` pending пространства для owner). PostgREST-ошибка (SQLSTATE `code` + текст) мапится в типизированный `InviteRpcError` c `InviteErrorCode`, чтобы UI показывал переведённое сообщение по коду, а не сырой текст из БД. TF-ID нормализуется (`trim().toUpperCase()`).
+- **Стор `src/store/useInvitesStore.ts`** — ОТДЕЛЬНЫЙ zustand-стор (не часть оффлайн-first `useStore`): инвайты живут только на сервере (`sync_workspace_invites` вне SQLite-зеркала/outbox). После `accept` дёргается `syncNow()` (lazy import) + перечитываются `workspaces`/`workspaceMembers` из локальной БД, чтобы новое членство/пространство подтянулось.
+- **`MembersTab.tsx`** (заменил Wave-A `WorkspaceMembers.tsx`, прямой add по TF-ID теперь закрыт RLS) — вкладка «Участники» в `WorkspaceSettings`. Ролевой гейт: owner видит «Пригласить» (`InviteMemberModal`), promote/demote/remove и секцию «Приглашения» (pending + «Отозвать»); editor/viewer — только список ролей + «Покинуть пространство».
+- **`InviteMemberModal.tsx`** — ввод TF-ID (валидация `PUBLIC_ID_RE`) + селектор роли (editor/viewer, default editor). Все коды ошибок RPC отображаются переведённым текстом (`inviteErrorKey`).
+- **`MyInvitesSection.tsx`** — секция «Мои приглашения» в сайдбаре (после `WorkspaceSwitcher`), гейт по `boundUserId` + бейдж-счётчик. Accept защищён лимит-гардом (`limit_exceeded` → тарифный тост, без переключения), при успехе — `switchWorkspace`. Имя пространства с бэкенда приглашённому недоступно (ещё не член ws) → нейтральный заголовок «Приглашение в общее пространство» (approach 5.b, без backend-правок).
+- **i18n:** добавлены ключи `ws_members_*` / `ws_invites_*` / `ws_invite_*` / `ws_my_invites_*` в `ru` и `en`.
+
+**РАСХОЖДЕНИЯ С ПЛАНОМ:**
+- **Кнопки повышения/понижения роли реализованы как отдельные иконки-действия** (стрелка вверх «Сделать редактором» / вниз «Сделать наблюдателем»), а не как `select` (как в Wave-A `WorkspaceMembers`) — чище отражает ролевой гейт «только owner».
+- **Экран «Мои приглашения» реализован как секция сайдбара, а не отдельный роут** — приглашения актуальны в любом контексте, сайдбар-бейдж заметнее и не требует нового пункта навигации.
+- **E2E happy-path помечен `test.fixme`** (`e2e/workspace-invites.spec.ts`): локальный харнесс (`?e2e=1`, sql.js, БЕЗ бэкенда, один free-юзер) физически не может проиграть приглашение (инвайты только серверные, нужны 2 пользователя + реальный Supabase + shared-ws). Хак с прямой записью фикстуры сознательно не написан. Оставлен smoke-тест «нет входящих → секция скрыта». В этом окружении даже baseline-спеки (`workspace-management`) не поднимают app-shell — Playwright-прогон невозможен в песочнице; продукт покрыт unit/RTL.
+- **Осиротевшие i18n-ключи Wave A** (`ws_members_add` / `ws_members_tfid_placeholder` / `ws_members_added` / `ws_members_not_found`) оставлены в словаре (безвредны, `findUserByPublicId` ещё используется профилем) — удаление вне scope.
+
+**Тесты (клиент, `npm test`):** `src/lib/invites.test.ts` (22) — контракт RPC + маппинг всех кодов ошибок; `InviteMemberModal.test.tsx` (14), `MembersTab.test.tsx` (9), `MyInvitesSection.test.tsx` (6) — ролевые гейты, валидация, accept/reject/limit-гард, перевод ошибок.
+
 ---
 
 ## 4. Разбивка Wave B на PR
