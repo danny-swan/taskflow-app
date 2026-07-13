@@ -18,3 +18,4 @@ ADR — это запись одного значимого архитектур
 | 0002 | get_users_emails — внутренний admin-гейт вместо REVOKE от authenticated (N15) | accepted | 0002-get-users-emails-internal-admin-gate.md |
 | 0003 | renewal idempotency-guard — сверка GET /v3/payments до создания платежа автопродления (N10) | accepted | 0003-renewal-idempotency-guard.md |
 | 0004 | rate limiting — table-based счётчик в Postgres на публичных эндпоинтах (N13) | accepted | 0004-rate-limiting-table-based.md |
+| 0005 | shared workspaces — роли/инвайты по TF-ID + `workspace_id` text→uuid + FK + ON DELETE CASCADE (Wave B) | accepted | 0005-shared-workspaces.md |
