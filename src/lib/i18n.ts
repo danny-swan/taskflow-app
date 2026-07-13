@@ -312,6 +312,8 @@ const dict = {
     ws_history_load_more: 'Показать ещё',
     ws_history_empty: 'Нет записей истории',
     ws_history_task_deleted: '(удалена)',
+    // Wave C PR-c-05 — read-only UI polish для роли viewer.
+    ws_viewer_readonly_tooltip: 'Только просмотр. Обратитесь к владельцу или редактору.',
   },
   en: {
     brand_sub: 'Task manager',
@@ -624,6 +626,8 @@ const dict = {
     ws_history_load_more: 'Show more',
     ws_history_empty: 'No history entries',
     ws_history_task_deleted: '(deleted)',
+    // Wave C PR-c-05 — read-only UI polish for the viewer role.
+    ws_viewer_readonly_tooltip: 'Read-only. Ask an owner or editor for changes.',
   },
 } as const;
 

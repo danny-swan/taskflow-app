@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { useStore, Task } from '../store/useStore';
-import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags } from '../store/workspaceScope';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCanEdit } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { Trash2, X, AlertTriangle, Smile, FilePlus } from 'lucide-react';
@@ -18,6 +18,7 @@ export function TaskModal({
   onClose: () => void;
 }) {
   const lang = useStore(s => s.language);
+  const canEdit = useCanEdit(); // Wave C PR-c-05: viewer — read-only модалка
   const workspaces = useStore(s => s.workspaces);
   const currentWorkspaceId = useStore(s => s.currentWorkspaceId);
   const statuses = useCurrentWorkspaceStatuses();
@@ -152,8 +153,10 @@ export function TaskModal({
             <Field label={tr(lang, 'status')}>
               <select
                 value={draft.status_id}
+                disabled={!canEdit}
+                title={!canEdit ? tr(lang, 'ws_viewer_readonly_tooltip') : undefined}
                 onChange={(e) => setDraft({ ...draft, status_id: parseInt(e.target.value, 10) })}
-                className="w-full bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+                className={'w-full bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] ' + (!canEdit ? 'opacity-60 cursor-not-allowed' : '')}
               >
                 {statuses.filter(s => s.is_technical !== 1).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
@@ -163,17 +166,21 @@ export function TaskModal({
                 <div className="flex gap-1.5">
                   <select
                     value={draft.tag_id ?? ''}
+                    disabled={!canEdit}
+                    title={!canEdit ? tr(lang, 'ws_viewer_readonly_tooltip') : undefined}
                     onChange={(e) => setDraft({ ...draft, tag_id: e.target.value ? parseInt(e.target.value, 10) : null })}
-                    className="flex-1 bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+                    className={'flex-1 bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] ' + (!canEdit ? 'opacity-60 cursor-not-allowed' : '')}
                   >
                     <option value="">—</option>
                     {tags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                   </select>
-                  <button
-                    type="button"
-                    onClick={() => setShowNewTag(true)}
-                    className="px-2 text-[13px] border border-border-soft rounded hover:bg-surface-alt"
-                  >+</button>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => setShowNewTag(true)}
+                      className="px-2 text-[13px] border border-border-soft rounded hover:bg-surface-alt"
+                    >+</button>
+                  )}
                 </div>
               ) : (
                 <div className="flex gap-1.5">
@@ -204,12 +211,14 @@ export function TaskModal({
             label={tr(lang, 'title')}
             onEmojiClick={titleEmoji.emojiButtonProps.onClick}
             emojiRef={titleEmoji.buttonRef}
+            readOnly={!canEdit}
           >
             <AutoGrowTextarea
               ref={titleRef}
               value={draft.title}
+              disabled={!canEdit}
               onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-              className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13.5px] font-semibold"
+              className={'bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13.5px] font-semibold ' + (!canEdit ? 'opacity-60 cursor-not-allowed' : '')}
               rows={1}
             />
           </FieldWithEmoji>
@@ -218,6 +227,7 @@ export function TaskModal({
             label={tr(lang, 'comment')}
             onEmojiClick={commentEmoji.emojiButtonProps.onClick}
             emojiRef={commentEmoji.buttonRef}
+            readOnly={!canEdit}
             extraToolbar={
               <div className="flex items-center gap-1">
                 <button
@@ -253,8 +263,9 @@ export function TaskModal({
             <AutoGrowTextarea
               ref={commentRef}
               value={draft.comment || ''}
+              disabled={!canEdit}
               onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
-              className="bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px]"
+              className={'bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] ' + (!canEdit ? 'opacity-60 cursor-not-allowed' : '')}
               style={{ maxHeight: '50vh', overflowY: 'auto' }}
               rows={3}
             />
@@ -264,12 +275,14 @@ export function TaskModal({
             <Field label={tr(lang, 'start')}>
               <DatePicker
                 value={draft.start_date || null}
+                disabled={!canEdit}
                 onChange={(v) => setDraft({ ...draft, start_date: v })}
               />
             </Field>
             <Field label={tr(lang, 'deadline')}>
               <DatePicker
                 value={draft.deadline || null}
+                disabled={!canEdit}
                 onChange={(v) => setDraft({ ...draft, deadline: v })}
               />
             </Field>
@@ -293,31 +306,38 @@ export function TaskModal({
         </div>
 
         <div className="px-5 py-3 border-t border-border-soft flex items-center justify-between flex-wrap gap-2">
+          {/* Wave C PR-c-05: у viewer действия записи скрыты, остаётся «Закрыть». */}
           <div className="flex items-center gap-3">
-            <button
-              onClick={remove}
-              className="flex items-center gap-1.5 text-[13px] text-[var(--status-important)] hover:underline"
-            >
-              <Trash2 size={14} /> {tr(lang, 'delete')}
-            </button>
+            {canEdit && (
+              <button
+                onClick={remove}
+                className="flex items-center gap-1.5 text-[13px] text-[var(--status-important)] hover:underline"
+              >
+                <Trash2 size={14} /> {tr(lang, 'delete')}
+              </button>
+            )}
             {/* v0.8.13: кнопка сохранения текущей задачи как шаблона — важно: не закрывает модалку. */}
-            <button
-              onClick={saveAsTemplate}
-              title={lang === 'ru' ? 'Сохранить текущие поля как шаблон для будущих задач' : 'Save current fields as a reusable template'}
-              className="flex items-center gap-1.5 text-[13px] text-muted hover:text-text hover:underline"
-            >
-              <FilePlus size={14} /> {lang === 'ru' ? 'Сохранить как шаблон' : 'Save as template'}
-            </button>
+            {canEdit && (
+              <button
+                onClick={saveAsTemplate}
+                title={lang === 'ru' ? 'Сохранить текущие поля как шаблон для будущих задач' : 'Save current fields as a reusable template'}
+                className="flex items-center gap-1.5 text-[13px] text-muted hover:text-text hover:underline"
+              >
+                <FilePlus size={14} /> {lang === 'ru' ? 'Сохранить как шаблон' : 'Save as template'}
+              </button>
+            )}
           </div>
           <div className="flex gap-2">
             <button
               onClick={onClose}
               className="px-3.5 py-1.5 text-[13px] border border-border-soft rounded-md hover:bg-surface-alt"
-            >{tr(lang, 'cancel')}</button>
-            <button
-              onClick={save}
-              className="px-3.5 py-1.5 text-[13px] bg-accent hover:bg-accent-hover text-white rounded-md font-medium"
-            >{tr(lang, 'save')}</button>
+            >{canEdit ? tr(lang, 'cancel') : (lang === 'ru' ? 'Закрыть' : 'Close')}</button>
+            {canEdit && (
+              <button
+                onClick={save}
+                className="px-3.5 py-1.5 text-[13px] bg-accent hover:bg-accent-hover text-white rounded-md font-medium"
+              >{tr(lang, 'save')}</button>
+            )}
           </div>
         </div>
 
@@ -378,6 +398,7 @@ function FieldWithEmoji({
   onEmojiClick,
   emojiRef,
   extraToolbar,
+  readOnly,
 }: {
   label: string;
   children: React.ReactNode;
@@ -385,23 +406,27 @@ function FieldWithEmoji({
   emojiRef: React.Ref<HTMLButtonElement>;
   /** v0.8.14: дополнительные кнопки слева от emoji — например, «вставить чекбокс» */
   extraToolbar?: React.ReactNode;
+  /** Wave C PR-c-05: у viewer инструменты редактирования (emoji, чекбоксы) скрыты. */
+  readOnly?: boolean;
 }) {
   return (
     <div className="block mb-3.5">
       <div className="flex items-center justify-between mb-1 gap-2">
         <div className="text-[11px] text-muted uppercase tracking-wider">{label}</div>
-        <div className="flex items-center gap-1.5">
-          {extraToolbar}
-          <button
-            ref={emojiRef}
-            type="button"
-            onClick={onEmojiClick}
-            className="text-muted hover:text-text p-0.5 rounded transition-colors"
-            title="Emoji"
-          >
-            <Smile size={14} />
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="flex items-center gap-1.5">
+            {extraToolbar}
+            <button
+              ref={emojiRef}
+              type="button"
+              onClick={onEmojiClick}
+              className="text-muted hover:text-text p-0.5 rounded transition-colors"
+              title="Emoji"
+            >
+              <Smile size={14} />
+            </button>
+          </div>
+        )}
       </div>
       {children}
     </div>

@@ -17,7 +17,8 @@ export function MarkdownComment({
   className,
 }: {
   text: string;
-  onToggle: (index: number) => void;
+  /** Wave C PR-c-05: у viewer чекбоксы read-only — onToggle не передаётся. */
+  onToggle?: (index: number) => void;
   className?: string;
 }) {
   const tokens = parseComment(text);
@@ -45,19 +46,26 @@ export function MarkdownComment({
         return (
           <label
             key={i}
-            className="flex items-start gap-1.5 cursor-pointer select-none py-[1px]"
+            className={
+              'flex items-start gap-1.5 select-none py-[1px] ' +
+              (onToggle ? 'cursor-pointer' : 'cursor-default')
+            }
             onMouseDown={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
-              onToggle(t.index);
+              onToggle?.(t.index);
             }}
           >
             <input
               type="checkbox"
               checked={t.checked}
               readOnly
-              className="mt-[3px] shrink-0 cursor-pointer accent-[var(--accent,#6366f1)]"
+              disabled={!onToggle}
+              className={
+                'mt-[3px] shrink-0 accent-[var(--accent,#6366f1)] ' +
+                (onToggle ? 'cursor-pointer' : 'cursor-default')
+              }
               tabIndex={-1}
             />
             <span

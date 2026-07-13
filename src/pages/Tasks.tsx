@@ -382,8 +382,16 @@ export function TasksPage() {
             {/* v0.8.13: split-кнопка «+ Новая задача» │ ▾. Основная часть
                 открывает пустую модалку (поведение как раньше), стрелка — меню со списком
                 шаблонов. Если шаблонов нет — меню прячется, остаётся обычная кнопка.
-                Wave A PR-4: для viewer (read-only) кнопка создания скрыта целиком. */}
-            {canEdit && (
+                Wave C PR-c-05: для viewer (read-only) показываем кнопку
+                задизейбленной с tooltip «Только просмотр», а не прячем. */}
+            {!canEdit ? (
+              <button
+                type="button"
+                disabled
+                title={tr(lang, 'ws_viewer_readonly_tooltip')}
+                className="px-3 py-1.5 text-[13px] bg-accent text-white font-medium rounded-md opacity-50 cursor-not-allowed"
+              >{tr(lang, 'new_task')}</button>
+            ) : (
             <div
               ref={templatesMenuRef}
               className="relative inline-flex items-stretch"

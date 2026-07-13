@@ -1,5 +1,5 @@
 import { Task, useStore } from '../store/useStore';
-import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags } from '../store/workspaceScope';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCanEdit } from '../store/workspaceScope';
 import { TagChip } from './TagChip';
 import { MarkdownComment } from './MarkdownComment';
 import { DeadlineBadge } from './TaskCard';
@@ -37,6 +37,7 @@ export function KanbanCard({
   dragging?: boolean;
 }) {
   const lang = useStore(s => s.language);
+  const canEdit = useCanEdit(); // Wave C PR-c-05: viewer — read-only
   const statuses = useCurrentWorkspaceStatuses();
   const tags = useCurrentWorkspaceTags();
   const updateTask = useStore(s => s.updateTask);
@@ -199,10 +200,10 @@ export function KanbanCard({
           >
             <MarkdownComment
               text={task.comment}
-              onToggle={(idx) => {
+              onToggle={canEdit ? ((idx) => {
                 const next = toggleCheckbox(task.comment || '', idx);
                 if (next !== task.comment) updateTask(task.id, { comment: next });
-              }}
+              }) : undefined}
             />
           </div>
         )}
@@ -225,45 +226,49 @@ export function KanbanCard({
             >
               <Maximize2 size={11} />
             </button>
-            {/* Drag-handle */}
-            <button
-              type="button"
-              {...(dragHandleProps ?? {})}
-              title={lang === 'ru' ? 'Перетащить' : 'Drag'}
-              aria-label={lang === 'ru' ? 'Перетащить' : 'Drag'}
-              className="w-6 h-6 rounded flex items-center justify-center text-zinc-400 hover:bg-surface-alt cursor-grab active:cursor-grabbing touch-none select-none"
-            >
-              <GripVertical size={12} />
-            </button>
-            {/* Done / Reopen */}
-            <button
-              type="button"
-              onClick={onToggleDone}
-              onMouseDown={stopBubble}
-              onPointerDown={(e) => e.stopPropagation()}
-              title={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
-              aria-label={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
-              className={
-                'w-6 h-6 rounded-full flex items-center justify-center border transition-colors ' +
-                (isDone
-                  ? 'border-border-soft text-muted hover:bg-surface-alt'
-                  : 'border-border-soft text-muted hover:border-[var(--status-done)] hover:text-[var(--status-done)]')
-              }
-            >
-              {isDone ? <Undo2 size={11} /> : <Check size={12} />}
-            </button>
-            {/* Delete */}
-            <button
-              type="button"
-              onClick={onDeleteClick}
-              onMouseDown={stopBubble}
-              onPointerDown={(e) => e.stopPropagation()}
-              title={tr(lang, 'delete_task_q')}
-              aria-label={tr(lang, 'delete')}
-              className="w-6 h-6 rounded flex items-center justify-center text-muted hover:text-[var(--status-important)] hover:bg-surface-alt"
-            >
-              <Trash2 size={11} />
-            </button>
+            {/* Drag-handle / Done / Delete — скрыты у viewer (Wave C PR-c-05, read-only) */}
+            {canEdit && (
+              <button
+                type="button"
+                {...(dragHandleProps ?? {})}
+                title={lang === 'ru' ? 'Перетащить' : 'Drag'}
+                aria-label={lang === 'ru' ? 'Перетащить' : 'Drag'}
+                className="w-6 h-6 rounded flex items-center justify-center text-zinc-400 hover:bg-surface-alt cursor-grab active:cursor-grabbing touch-none select-none"
+              >
+                <GripVertical size={12} />
+              </button>
+            )}
+            {canEdit && (
+              <button
+                type="button"
+                onClick={onToggleDone}
+                onMouseDown={stopBubble}
+                onPointerDown={(e) => e.stopPropagation()}
+                title={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
+                aria-label={isDone ? tr(lang, 'mark_reopen') : tr(lang, 'mark_done')}
+                className={
+                  'w-6 h-6 rounded-full flex items-center justify-center border transition-colors ' +
+                  (isDone
+                    ? 'border-border-soft text-muted hover:bg-surface-alt'
+                    : 'border-border-soft text-muted hover:border-[var(--status-done)] hover:text-[var(--status-done)]')
+                }
+              >
+                {isDone ? <Undo2 size={11} /> : <Check size={12} />}
+              </button>
+            )}
+            {canEdit && (
+              <button
+                type="button"
+                onClick={onDeleteClick}
+                onMouseDown={stopBubble}
+                onPointerDown={(e) => e.stopPropagation()}
+                title={tr(lang, 'delete_task_q')}
+                aria-label={tr(lang, 'delete')}
+                className="w-6 h-6 rounded flex items-center justify-center text-muted hover:text-[var(--status-important)] hover:bg-surface-alt"
+              >
+                <Trash2 size={11} />
+              </button>
+            )}
           </div>
         </div>
       </div>

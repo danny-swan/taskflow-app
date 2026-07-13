@@ -29,7 +29,7 @@ vi.mock('../lib/logger', () => ({
 }));
 
 import { useStore, type Workspace, type WorkspaceMember } from './useStore';
-import { useCurrentWorkspaceRole, useCanEdit } from './workspaceScope';
+import { useCurrentWorkspaceRole, useCanEdit, useIsViewer } from './workspaceScope';
 
 const ws = (id: string, kind: string): Workspace =>
   ({ id, name: id, kind, owner_id: null, sort_order: 0 });
@@ -120,5 +120,39 @@ describe('useCanEdit', () => {
       currentWorkspaceId: 'ws_s',
     });
     expect(renderHook(() => useCanEdit()).result.current).toBe(true);
+  });
+});
+
+describe('useIsViewer (Wave C PR-c-05)', () => {
+  it('viewer → true', () => {
+    useStore.setState({
+      workspaces: [ws('ws_s', 'shared')],
+      workspaceMembers: [member('ws_s', UID, 'viewer')],
+      currentWorkspaceId: 'ws_s',
+    });
+    expect(renderHook(() => useIsViewer()).result.current).toBe(true);
+  });
+
+  it('editor → false', () => {
+    useStore.setState({
+      workspaces: [ws('ws_s', 'shared')],
+      workspaceMembers: [member('ws_s', UID, 'editor')],
+      currentWorkspaceId: 'ws_s',
+    });
+    expect(renderHook(() => useIsViewer()).result.current).toBe(false);
+  });
+
+  it('owner (personal) → false', () => {
+    useStore.setState({ workspaces: [ws('ws_p', 'personal')], currentWorkspaceId: 'ws_p' });
+    expect(renderHook(() => useIsViewer()).result.current).toBe(false);
+  });
+
+  it('роль неизвестна (null) → false', () => {
+    useStore.setState({
+      workspaces: [ws('ws_s', 'shared')],
+      workspaceMembers: [],
+      currentWorkspaceId: 'ws_s',
+    });
+    expect(renderHook(() => useIsViewer()).result.current).toBe(false);
   });
 });
