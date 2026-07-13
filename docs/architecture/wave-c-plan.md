@@ -267,3 +267,86 @@ PR-b-05).
   `ws_activity_description_changed`, `ws_activity_deleted`, `ws_activity_restored`,
   `ws_activity_tag_added`, `ws_activity_tag_removed` (ru+en). Тексты без
   плейсхолдеров — `tr()` без интерполяции.
+
+## 4. PR-c-04: Workspace history tab (общий лог пространства)
+
+### Что делаем
+
+Новая вкладка «**История**» в `WorkspaceSettings` (после «Участники»): общий журнал
+активности по **всему** пространству. Данные — то же локальное зеркало
+`task_activity_log` (PR-c-03), но выборка workspace-scoped, а не по одной задаче.
+**0 backend/DDL** — только клиент; журнал по-прежнему пишет лишь серверный триггер.
+
+### Почему вкладка, а не модалка
+
+Лог пространства — «фоновый» справочный экран, который открывают редко и
+осознанно (расследовать «кто и когда поменял»), а не быстрый peek. Модалка поверх
+доски провоцировала бы к нему как к оперативному инструменту, конфликтовала бы с
+модалкой задачи (лог ссылается на задачу → открытие её модалки = модалка над
+модалкой) и не давала бы места фильтрам. Вкладка в настройках ставит его рядом с
+«Участники» — там же, где остальной ws-контекст, — и оставляет доску чистой.
+Ссылка на живую задачу уводит на `/tasks?task=<id>`, где модалка открывается уже
+в своём контексте.
+
+### Доступ
+
+Read-only для **всех** ролей (owner/editor/viewer): RLS на `sync_task_activity_log`
+разрешает SELECT любому участнику. Вкладка видна только для `kind='shared'` (для
+personal лог не пишется вовсе) — в списке табов её попросту нет, как и «Участники».
+
+### Store: workspace-scope выборка
+
+`useTaskActivityStore` расширен: `byWorkspace[wsId]` + `reloadWorkspace(wsId)`
+читает **весь** лог пространства (`WHERE workspace_id=? ORDER BY created_at DESC`).
+Хук `useWorkspaceActivity(wsId, { kinds?, userId?, taskIds? }, pageSize=WS_PAGE_SIZE=50)`
+применяет фильтры на клиенте (SQLite быстрый — server-side пагинация не нужна) и
+отдаёт `{ records, total, hasMore, loadMore, reload }`. Пагинация — локальный
+счётчик видимых записей (+50 на «Показать ещё»); смена фильтров/пространства
+сбрасывает его на первую страницу. Пустой `kinds` = «все типы»; `taskIds=[]` = ни
+одной (текстовый фильтр без совпадений), `taskIds=null` = «все задачи».
+
+### UI: `WorkspaceHistoryTab.tsx`
+
+- **Фильтры** (компактная строка сверху): тип действия (поповер с чекбоксами,
+  мультивыбор), участник (список членов ws; ник из presence, иначе публичный
+  `TF-XXXXXX`, иначе короткий id — **никогда email**), задача (текст-поиск по
+  заголовку → множество uuid, отдаётся в стор как `taskIds`).
+- **Запись** рендерится общим `ActivityAuthorRow` (см. ниже) + слот `extra` со
+  ссылкой на задачу: жива → кнопка «`«title»`» открывает её модалку через навигацию
+  на `/tasks?task=<localId>` (там `useSearchParams` подхватывает и вычищает
+  параметр); удалена/отсутствует локально → «`«title»` (удалена)» без ссылки,
+  title из локальной строки задачи либо из `payload.title`.
+- **Empty state** — «Нет записей истории», **loadMore** — «Показать ещё».
+
+### Переиспользование render-логики
+
+Render одной записи (аватар + имя автора + локализованное действие + relative-время
+с tooltip) вынесен из `TaskActivityLog.tsx` в общий `src/components/ActivityEntry.tsx`
+(`ActivityAuthorRow`, `eventText`, `relativeTime`) и используется обоими экранами —
+дублирования нет. Резолв автора и приватность — как в PR-c-03.
+
+### Сознательно вне scope
+
+- **Backend/DDL/миграции** — 0 изменений (данные из PR-c-03).
+- **Экспорт лога** (CSV/JSON) — не сейчас.
+- **Server-side пагинация** — клиентской достаточно.
+- **Restore/действия из UI лога** — только просмотр.
+
+### Тесты
+
+- `useWorkspaceActivity.test.tsx` — `reloadWorkspace` (весь ws-лог, DESC, ошибка
+  db → пусто), хук: `wsId=null` → пусто, пагинация `WS_PAGE_SIZE`+`loadMore`,
+  фильтры kind/user/task, семантика пустых `kinds`/`taskIds`.
+- `WorkspaceHistoryTab.test.tsx` — empty state, список + «Показать ещё», фильтр по
+  kind/user передаётся в хук, fallback ника → TF-ID (не email), клик по живой
+  задаче → навигация, удалённая задача → «(удалена)» без ссылки.
+- `WorkspaceSettings.test.tsx` — вкладка «История» скрыта в personal, видна всем
+  ролям в shared.
+
+### i18n
+
+- `ws_history_tab_title` («История»/History), `ws_history_filter_kind`,
+  `ws_history_filter_user`, `ws_history_filter_task`, `ws_history_filter_all`,
+  `ws_history_load_more`, `ws_history_empty`, `ws_history_task_deleted`
+  («(удалена)»/(deleted)) — ru+en. Строки типов действий переиспользуются из
+  PR-c-03 (`ws_activity_*`).

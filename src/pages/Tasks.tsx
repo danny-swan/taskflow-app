@@ -14,7 +14,7 @@ import {
   List, LayoutGrid,
 } from 'lucide-react';
 import { KanbanBoard } from '../components/KanbanBoard';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   DndContext, closestCorners, PointerSensor, useSensor, useSensors,
   DragEndEvent, DragOverlay, DragStartEvent,
@@ -69,6 +69,22 @@ export function TasksPage() {
   const templatesMenuRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Deep-link ?task=<id> (например, из вкладки «История» ws-настроек) —
+  // открываем модалку задачи и вычищаем параметр из URL.
+  useEffect(() => {
+    const raw = searchParams.get('task');
+    if (!raw) return;
+    const id = Number(raw);
+    const target = allTasks.find(t => t.id === id);
+    if (target) setOpenTask(target);
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.delete('task');
+      return next;
+    }, { replace: true });
+  }, [searchParams, allTasks, setSearchParams]);
 
   // Task 8: initialize collapse state from defaultCollapsed (first render only)
   const defaultCollapseInit = useMemo(() => {

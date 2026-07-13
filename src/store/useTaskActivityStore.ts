@@ -11,7 +11,7 @@
 // Пагинация: страница PAGE_SIZE=20, сортировка created_at DESC (свежие сверху).
 // Чтобы узнать «есть ли ещё», выбираем limit+1 строку и обрезаем.
 import { create } from 'zustand';
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as db from '../lib/db';
 import { logger } from '../lib/logger';
 
@@ -39,6 +39,11 @@ export interface ActivityRecord {
 }
 
 export const PAGE_SIZE = 20;
+/** Размер страницы в workspace-логе (PR-c-04) — крупнее, чем в модалке задачи. */
+export const WS_PAGE_SIZE = 50;
+
+/** Стабильная пустая ссылка — чтобы zustand-селектор не ре-рендерил вхолостую. */
+const EMPTY_RECORDS: ActivityRecord[] = [];
 
 interface ActivityLogRow {
   uuid: string;
@@ -91,6 +96,27 @@ function queryActivity(taskUuid: string, limit: number): { records: ActivityReco
   }
 }
 
+/**
+ * Читает ВЕСЬ журнал пространства (created_at DESC). Фильтры и пагинация —
+ * на клиенте (SQLite mirror быстрый, server-side пагинация не нужна, см. §4
+ * wave-c-plan). При отсутствии таблицы возвращает пустой список.
+ */
+function queryWorkspaceActivity(workspaceId: string): ActivityRecord[] {
+  try {
+    const rows = db.all<ActivityLogRow>(
+      `SELECT uuid, task_id, workspace_id, user_id, kind, payload, created_at
+         FROM task_activity_log
+        WHERE workspace_id = ?
+        ORDER BY created_at DESC, id DESC`,
+      [workspaceId],
+    );
+    return rows.map(parseRow);
+  } catch (e) {
+    logger.info('[activity] workspace query failed (no mirror table?):', e);
+    return [];
+  }
+}
+
 interface TaskActivityState {
   /** Загруженные записи по uuid задачи. */
   byTask: Record<string, ActivityRecord[]>;
@@ -98,11 +124,15 @@ interface TaskActivityState {
   limit: Record<string, number>;
   /** Есть ли ещё записи за пределами текущего лимита. */
   hasMore: Record<string, boolean>;
+  /** Полный (нефильтрованный) журнал по workspace (PR-c-04). */
+  byWorkspace: Record<string, ActivityRecord[]>;
 
   /** Перечитать журнал задачи с текущим (или начальным) лимитом. */
   reload: (taskUuid: string) => void;
   /** Подгрузить следующую страницу. */
   loadMore: (taskUuid: string) => void;
+  /** Перечитать весь журнал пространства (PR-c-04). */
+  reloadWorkspace: (workspaceId: string) => void;
   /** Очистить кеш (смена задачи/логаут). */
   clear: () => void;
 }
@@ -111,6 +141,7 @@ export const useTaskActivityStore = create<TaskActivityState>((set, get) => ({
   byTask: {},
   limit: {},
   hasMore: {},
+  byWorkspace: {},
 
   reload(taskUuid) {
     const limit = get().limit[taskUuid] ?? PAGE_SIZE;
@@ -132,8 +163,13 @@ export const useTaskActivityStore = create<TaskActivityState>((set, get) => ({
     }));
   },
 
+  reloadWorkspace(workspaceId) {
+    const records = queryWorkspaceActivity(workspaceId);
+    set((s) => ({ byWorkspace: { ...s.byWorkspace, [workspaceId]: records } }));
+  },
+
   clear() {
-    set({ byTask: {}, limit: {}, hasMore: {} });
+    set({ byTask: {}, limit: {}, hasMore: {}, byWorkspace: {} });
   },
 }));
 
@@ -164,5 +200,78 @@ export function useTaskActivity(taskUuid: string | null | undefined): UseTaskAct
     hasMore,
     loadMore: () => taskUuid && loadMore(taskUuid),
     reload: () => taskUuid && reload(taskUuid),
+  };
+}
+
+/** Фильтры workspace-лога (все клиентские). Пустые/undefined → «все». */
+export interface WorkspaceActivityFilters {
+  /** Оставить только эти типы действий. Пусто/undefined → все типы. */
+  kinds?: ActivityKind[] | null;
+  /** Оставить действия только этого автора (uuid). null/undefined → все. */
+  userId?: string | null;
+  /** Оставить действия только по этим задачам (uuid). null/undefined → все. */
+  taskIds?: string[] | null;
+}
+
+export interface UseWorkspaceActivityResult {
+  /** Отфильтрованные и обрезанные до текущего лимита записи. */
+  records: ActivityRecord[];
+  /** Всего записей после фильтрации (до пагинации). */
+  total: number;
+  /** Есть ли ещё записи за пределами текущего лимита. */
+  hasMore: boolean;
+  /** Показать следующую страницу (+pageSize). */
+  loadMore: () => void;
+  /** Перечитать журнал пространства из зеркала. */
+  reload: () => void;
+}
+
+/**
+ * Хук workspace-scope журнала (PR-c-04). Загружает весь лог пространства из
+ * локального зеркала, применяет клиентские фильтры (kind/user/task) и отдаёт
+ * страницу размером pageSize с кнопкой «Показать ещё».
+ *
+ * workspaceId=null/undefined (personal / не выбран) → пустой результат.
+ */
+export function useWorkspaceActivity(
+  workspaceId: string | null | undefined,
+  filters: WorkspaceActivityFilters = {},
+  pageSize = WS_PAGE_SIZE,
+): UseWorkspaceActivityResult {
+  const all = useTaskActivityStore((s) => (workspaceId ? s.byWorkspace[workspaceId] ?? EMPTY_RECORDS : EMPTY_RECORDS));
+  const reloadWorkspace = useTaskActivityStore((s) => s.reloadWorkspace);
+  const [visible, setVisible] = useState(pageSize);
+
+  useEffect(() => {
+    if (workspaceId) reloadWorkspace(workspaceId);
+  }, [workspaceId, reloadWorkspace]);
+
+  // Стабильные ключи фильтров, чтобы useMemo не пересчитывался вхолостую.
+  const kindsKey = filters.kinds && filters.kinds.length ? [...filters.kinds].sort().join(',') : '';
+  const taskKey = filters.taskIds ? [...filters.taskIds].sort().join(',') : null;
+  const userId = filters.userId ?? null;
+
+  const filtered = useMemo(() => {
+    const kindSet = kindsKey ? new Set(kindsKey.split(',')) : null;
+    const taskSet = taskKey !== null ? new Set(taskKey ? taskKey.split(',') : []) : null;
+    return all.filter((r) => {
+      if (kindSet && !kindSet.has(r.kind)) return false;
+      if (userId && r.userId !== userId) return false;
+      if (taskSet && !taskSet.has(r.taskId)) return false;
+      return true;
+    });
+  }, [all, kindsKey, userId, taskKey]);
+
+  // Смена фильтров/пространства сбрасывает пагинацию на первую страницу.
+  useEffect(() => {
+    setVisible(pageSize);
+  }, [workspaceId, kindsKey, userId, taskKey, pageSize]);
+
+  return {
+    records: filtered.slice(0, visible),
+    total: filtered.length,
+    hasMore: filtered.length > visible,
+    loadMore: () => setVisible((v) => v + pageSize),
+    reload: () => workspaceId && reloadWorkspace(workspaceId),
   };
 }
