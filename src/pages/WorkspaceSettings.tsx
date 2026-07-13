@@ -15,8 +15,9 @@ import { tr } from '../lib/i18n';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { StatusesSection, TagsSection } from './Settings';
 import { MembersTab } from '../components/MembersTab';
+import { WorkspaceHistoryTab } from '../components/WorkspaceHistoryTab';
 
-type Tab = 'statuses' | 'tags' | 'deadlines' | 'members';
+type Tab = 'statuses' | 'tags' | 'deadlines' | 'members' | 'history';
 
 export function WorkspaceSettingsPage() {
   const lang = useStore(s => s.language);
@@ -48,6 +49,7 @@ export function WorkspaceSettingsPage() {
     { key: 'tags', label: tr(lang, 'ws_tab_tags') },
     { key: 'deadlines', label: tr(lang, 'ws_tab_deadlines') },
     ...(isShared ? [{ key: 'members' as Tab, label: tr(lang, 'ws_tab_members') }] : []),
+    ...(isShared ? [{ key: 'history' as Tab, label: tr(lang, 'ws_history_tab_title') }] : []),
   ];
 
   // Гарантируем валидный таб, если участники исчезли (переключение на personal).
@@ -116,6 +118,7 @@ export function WorkspaceSettingsPage() {
             {activeTab === 'tags' && <TagsSection />}
             {activeTab === 'deadlines' && <DeadlinesSection />}
             {activeTab === 'members' && isShared && <MembersTab />}
+            {activeTab === 'history' && isShared && <WorkspaceHistoryTab />}
           </div>
 
           {isOwner && (
