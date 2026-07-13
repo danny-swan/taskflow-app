@@ -211,6 +211,80 @@ RLS каждой sync-таблицы переписываем:
   - kind='shared' в Wave A запрещён вовсе (check + триггер).
 - Клиентская проверка — только UX (disabled + тултип), не барьер.
 
+### 3.8-факт Реализация (PR-5, `feat/ws-a-05-limits`)
+
+> Фактически реализованное в PR-5. Соответствует плану §3.8; ниже — точные формулировки того, что закоммичено (не запушено на момент фиксации).
+
+**Миграция:** `supabase/migrations/0029_workspace_limits.sql` — номер `0029`, а НЕ `0028`: `0028` уже был занят (`0028_workspaces_mvp_guards`). На прод не применяется до решения релизить Wave A (как 0027/0028).
+
+**Лимиты (зеркалят клиентский `resolveEntitlement`):** платный активный entitlement (`plan IN ('pro','trial','lifetime')`, `valid_until > now()` или lifetime бессрочно) → 7 суммарно по всем kind; free + personal → 2; free + shared → 0. Истёкший pro трактуется как free.
+
+**SQL — `get_workspace_limit(uid uuid, workspace_kind text) returns int`** (SECURITY DEFINER, `stable`, `search_path = public, pg_catalog`; EXECUTE отозван у anon/authenticated/public):
+```sql
+select case
+  when exists (
+    select 1 from public.user_entitlements e
+    where e.user_id = uid
+      and e.plan in ('pro', 'trial', 'lifetime')
+      and (e.plan = 'lifetime' or (e.valid_until is not null and e.valid_until > now()))
+  ) then 7                                   -- платный: 7 суммарно по всем kind
+  when workspace_kind = 'shared' then 0      -- free: shared недоступен
+  else 2                                     -- free: 2 personal
+end;
+```
+
+**SQL — триггер `enforce_workspace_limit()`** (BEFORE INSERT ON `sync_workspaces`, SECURITY DEFINER, plpgsql, `search_path = public, pg_catalog`; EXECUTE отозван):
+```sql
+begin
+  -- Гейт активен ТОЛЬКО когда пользователь создаёт СВОЁ пространство
+  -- (auth.uid() = owner_id). Пропускает service_role/backfill/суперпользователя
+  -- (auth.uid() IS NULL) и вставки от чужого имени. IS DISTINCT FROM обрабатывает NULL.
+  if (select auth.uid()) is distinct from new.owner_id then
+    return new;
+  end if;
+
+  select count(*) into v_count
+  from public.sync_workspaces w
+  where w.owner_id = new.owner_id
+    and w.deleted_at is null
+    and w.id <> new.id;
+
+  v_limit := public.get_workspace_limit(new.owner_id, new.kind);
+
+  if v_count >= v_limit then
+    raise exception 'workspace_limit_exceeded'
+      using errcode = 'P0001',
+            detail  = format('owner=%s kind=%s active=%s limit=%s', new.owner_id, new.kind, v_count, v_limit),
+            hint    = 'Тарифный лимит пространств достигнут. Free: 2, Pro: 7.';
+  end if;
+  return new;
+end;
+```
+```sql
+drop trigger if exists enforce_workspace_limit on public.sync_workspaces;
+create trigger enforce_workspace_limit
+  before insert on public.sync_workspaces
+  for each row execute function public.enforce_workspace_limit();
+```
+
+**Ключевые решения:**
+- **Гейт `auth.uid() = owner_id` (IS DISTINCT FROM), а не `auth.uid() IS NULL`.** Это ровно то, что гарантирует RLS INSERT-политика 0027 (`owner_id = auth.uid() = user_id`) → для реального клиента гейт всегда активен. Пропускает service_role/backfill 0027/pgTAP-сетапы/суперпользователя. Дополнительно устойчиво к утечке GUC `request.jwt.claim.sub` через `RESET ROLE` в pgTAP.
+- **SECURITY DEFINER на триггере критичен:** при реальном push порядок PUSH_ORDER — «сначала все workspaces, потом все members», поэтому на момент INSERT'а N-го пространства owner-членства предыдущих ещё не вставлены → под RLS (`has_workspace_role`) они невидимы, и count был бы занижен. DEFINER-контекст даёт честный подсчёт.
+- **Форвард-совместимость с shared (Wave B):** счётчик считает ВСЕ активные пространства владельца (любого kind), а `get_workspace_limit` уже различает personal/shared для free — при открытии shared лимитная логика не потребует изменений.
+- **Регрессия PR-1 сохранена:** имя триггера `enforce_workspace_limit` (буква «e») сортируется ПОСЛЕ `block_shared_workspaces` («b»), поэтому `kind='shared'` по-прежнему отклоняется check-constraint'ом / `block_shared_workspaces` с SQLSTATE `23514`, а НЕ лимитом (`P0001`).
+
+**Клиент:**
+- `src/lib/workspaceLimits.ts` — чистый резолвер `evaluateWorkspaceLimit({isPaid, activeWorkspaceCount})` (константы `FREE_WORKSPACE_LIMIT=2`, `PAID_WORKSPACE_LIMIT=7`) + `isWorkspaceLimitError(err)` (распознаёт подстроку `workspace_limit_exceeded` в Error/строке/объекте с `message`).
+- `src/components/CreateWorkspaceModal.tsx` — UX-гейт ПЕРЕД созданием: кнопка «Создать» в `disabled` при достигнутом лимите + апселл (амбер-блок) отдельными текстами для free и paid; `submit` дополнительно защищён `if (!canCreate) return`.
+- `src/components/Sidebar.tsx` — fallback на серверную ошибку лимита. Создание пространства offline-first (локальный INSERT + outbox, без синхронного серверного вызова), поэтому серверный `workspace_limit_exceeded` при race между устройствами ловится не в модалке, а на sync-поверхности: sync-чип показывает тарифное сообщение вместо сырого текста ошибки.
+- i18n (`src/lib/i18n.ts`, ru+en): `ws_limit_free_hint` («Обновите до Pro…»), `ws_limit_paid_hint` («максимум 7»), `ws_limit_sync_error` (нейтральный fallback для sync-чипа).
+
+**Тесты:**
+- pgTAP `supabase/tests/11_workspace_limits_test.sql` (`plan(14)`): `get_workspace_limit` (free personal=2 / free shared=0 / pro=7 / trial=7 / истёкший pro=2), `has_trigger`, free 1→2 успех / 2→3 отклонён (`P0001`), paid 6→7 успех / 7→8 отклонён, shared free/paid отклонён check-constraint'ом (`23514`). Предзаполнение — суперпользователем (гейт пропускает), проверяемая граница — под ролью `authenticated` с выставленным JWT. Добавлен в `.github/workflows/db-tests.yml`.
+- vitest: `src/lib/workspaceLimits.test.ts` (10) + `src/components/CreateWorkspaceModal.test.tsx` (4) — free/paid под лимитом и на лимите → состояние кнопки + правильный апселл + `createWorkspace` не зовётся на лимите.
+
+**Результаты прогонов (локально):** vitest 349/349, `tsc --noEmit` чисто, `npm run build` OK, pgTAP CI-список (01–09 + 11) 265/265. Прогон на PostgreSQL 18 в песочнице; CI — vanilla Postgres 15.
+
 ---
 
 ## 4. Риски Wave A и тестирование
@@ -236,7 +310,7 @@ RLS каждой sync-таблицы переписываем:
 2. **`feat/ws-a-02-sync`** — мапперы/pull/push/outbox/realtime под workspace_id. vitest на applier'ы.
 3. **`feat/ws-a-03-store-ui`** — currentWorkspaceId, переключатель в шапке, ws-scoped хуки, фильтры на всех страницах.
 4. **`feat/ws-a-04-settings`** — per-workspace настройки, overdue_mode → workspace_settings, создание/удаление ws.
-5. **`feat/ws-a-05-limits`** — тарифные лимиты (триггер + UX).
+5. **`feat/ws-a-05-limits`** — тарифные лимиты (триггер + UX). ✅ Реализовано, закоммичено локально в ветке `feat/ws-a-05-limits` (на момент фиксации не запушено, PR не открыт). Детали — см. §3.8-факт.
 6. **`feat/ws-a-06-hardening`** — регрессия, полный pgTAP-набор, ручной чек-лист, доки.
 
 После стабилизации всех шести — единый merge-PR `feat/workspaces → main`, затем desktop-релиз (v1.1.0).

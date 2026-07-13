@@ -14,26 +14,38 @@ import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { useAuth } from '../lib/auth';
 import { useEntitlement, isProOrTrial } from '../lib/entitlements';
+import { evaluateWorkspaceLimit } from '../lib/workspaceLimits';
 
 export function CreateWorkspaceModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const lang = useStore(s => s.language);
   const createWorkspace = useStore(s => s.createWorkspace);
+  const workspaces = useStore(s => s.workspaces);
   const auth = useAuth();
   const { entitlement } = useEntitlement(auth.user?.id ?? null, auth.user?.email ?? null);
+  const isPaid = isProOrTrial(entitlement);
   // Dev-стаб гейта shared: доступно только Pro/Trial (полная логика — PR-5).
-  const canShared = isProOrTrial(entitlement);
+  const canShared = isPaid;
+
+  // Тарифный лимит по числу активных пространств (Free 2 / Pro 7). Зеркалит
+  // серверный триггер enforce_workspace_limit (0029). Счёт — по всем активным
+  // (store.workspaces уже отфильтрован deleted_at IS NULL).
+  const limitState = evaluateWorkspaceLimit({ isPaid, activeWorkspaceCount: workspaces.length });
+  const limitHint = limitState.reason === 'paid'
+    ? tr(lang, 'ws_limit_paid_hint')
+    : tr(lang, 'ws_limit_free_hint');
 
   const [name, setName] = useState('');
   const [kind, setKind] = useState<'personal' | 'shared'>('personal');
 
   const trimmed = name.trim();
-  const valid = trimmed.length >= 1 && trimmed.length <= 60;
+  const canCreate = trimmed.length >= 1 && trimmed.length <= 60 && !limitState.atLimit;
 
   const reset = () => { setName(''); setKind('personal'); };
   const handleClose = () => { reset(); onClose(); };
 
   const submit = () => {
-    if (!valid) return;
+    // Клиентский гейт: не создаём при достигнутом лимите (сервер тоже отклонит).
+    if (!canCreate) return;
     const effectiveKind = kind === 'shared' && !canShared ? 'personal' : kind;
     createWorkspace(trimmed, effectiveKind);
     handleClose();
@@ -78,7 +90,7 @@ export function CreateWorkspaceModal({ open, onClose }: { open: boolean; onClose
             value={name}
             maxLength={60}
             onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && valid) submit(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && canCreate) submit(); }}
             placeholder={tr(lang, 'ws_name_placeholder')}
             className="bg-surface-alt border border-border-soft rounded-lg px-3 py-2 text-[14px] outline-none focus:border-accent"
           />
@@ -98,6 +110,12 @@ export function CreateWorkspaceModal({ open, onClose }: { open: boolean; onClose
           )}
         </div>
 
+        {limitState.atLimit && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-500 leading-relaxed">
+            {limitHint}
+          </div>
+        )}
+
         <div className="flex gap-2 justify-end pt-1">
           <button
             onClick={handleClose}
@@ -107,10 +125,10 @@ export function CreateWorkspaceModal({ open, onClose }: { open: boolean; onClose
           </button>
           <button
             onClick={submit}
-            disabled={!valid}
+            disabled={!canCreate}
             className={
               'px-4 py-2 text-[13px] rounded-lg font-medium transition-colors text-white ' +
-              (valid ? 'bg-accent hover:bg-accent-hover' : 'bg-accent/40 cursor-not-allowed')
+              (canCreate ? 'bg-accent hover:bg-accent-hover' : 'bg-accent/40 cursor-not-allowed')
             }
           >
             {tr(lang, 'ws_create_action')}
