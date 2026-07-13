@@ -24,7 +24,7 @@ import { supabase } from '../supabase';
 import { logger } from '../logger';
 import { uuidv7 } from '../uuid';
 import {
-  PUSH_ORDER,
+  PULL_ORDER,
   resolveStatusIdByUuid,
   resolveTagIdByUuid,
   resolveTaskIdByUuid,
@@ -76,7 +76,7 @@ function readSetting(key: string): string | null {
  */
 function getLastPulledAt(
   cloudTable: string,
-  cursorCol: 'updated_at' | 'id' = 'updated_at',
+  cursorCol: 'updated_at' | 'id' | 'created_at' = 'updated_at',
   workspaceId?: string | null,
 ): string {
   const initial = cursorCol === 'id'
@@ -507,6 +507,37 @@ function applyCloudRowSettings(row: CloudRow): boolean {
   return true;
 }
 
+/**
+ * task_activity_log: иммутабельный append-only журнал (миграция 0034). Только
+ * INSERT — если строка с таким uuid уже есть локально, ничего не делаем (лог
+ * не меняется). task_id хранится как серверный uuid задачи (без резолюции в
+ * int). payload (jsonb) кладём как JSON-строку. НЕ откладываем при отсутствии
+ * задачи локально: лог самодостаточен (task_id — просто uuid для фильтрации в
+ * UI), а сама задача в shared-ws могла быть soft-deleted и вообще не пуллиться.
+ */
+function applyCloudRowActivityLog(row: CloudRow): boolean {
+  const local = db.get<{ id: number }>(
+    'SELECT id FROM task_activity_log WHERE uuid=?',
+    [row.id],
+  );
+  if (local) return false; // иммутабельно — уже есть, не трогаем
+  db.run(
+    `INSERT INTO task_activity_log
+      (uuid, task_id, workspace_id, user_id, kind, payload, created_at)
+     VALUES (?,?,?,?,?,?,?)`,
+    [
+      row.id,
+      row.task_id,
+      row.workspace_id,
+      row.user_id,
+      row.kind,
+      JSON.stringify(row.payload ?? {}),
+      row.created_at,
+    ],
+  );
+  return true;
+}
+
 /** Карта applier'ов по имени облачной таблицы. */
 const APPLIERS: Record<string, (row: CloudRow) => boolean> = {
   sync_workspaces: applyCloudRowWorkspaces,
@@ -518,14 +549,18 @@ const APPLIERS: Record<string, (row: CloudRow) => boolean> = {
   sync_task_templates: applyCloudRowTemplates,
   sync_overdue_events: applyCloudRowOverdueEvents,
   sync_task_hold_periods: applyCloudRowHoldPeriods,
+  sync_task_activity_log: applyCloudRowActivityLog,
 };
 
 /**
  * Описание курсора для pull. Большинство таблиц пуллятся по updated_at,
- * а overdue_events — по id (uuidv7 монотонный).
+ * overdue_events — по id (uuidv7 монотонный), а иммутабельный журнал активности
+ * (нет updated_at) — по created_at.
  */
-function cursorColumnFor(cloudTable: string): 'updated_at' | 'id' {
-  return cloudTable === 'sync_overdue_events' ? 'id' : 'updated_at';
+function cursorColumnFor(cloudTable: string): 'updated_at' | 'id' | 'created_at' {
+  if (cloudTable === 'sync_overdue_events') return 'id';
+  if (cloudTable === 'sync_task_activity_log') return 'created_at';
+  return 'updated_at';
 }
 
 /** Ключ settings для last_pulled cursor value. */
@@ -632,14 +667,15 @@ async function pullTable(userId: string, spec: TableSpec, workspaceIds: string[]
 }
 
 /**
- * Полный pull: пуллит все таблицы в порядке PUSH_ORDER (parent'ы первыми).
+ * Полный pull: пуллит все таблицы в порядке PULL_ORDER (parent'ы первыми,
+ * пулл-only журнал активности в конце).
  * Если applied+skipped == PULL_BATCH_SIZE — было много изменений, идём
  * следующей итерацией той же таблицы (max 5 итераций).
  */
 export async function pullAll(userId: string): Promise<PullResult> {
   const total: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
   const workspaceIds = listWorkspaceIds(userId);
-  for (const spec of PUSH_ORDER) {
+  for (const spec of PULL_ORDER) {
     for (let i = 0; i < 5; i++) {
       const r = await pullTable(userId, spec, workspaceIds);
       total.applied += r.applied;
@@ -666,6 +702,7 @@ export const _internals = {
   applyCloudRowWorkspaces,
   applyCloudRowMembers,
   applyCloudRowSettings,
+  applyCloudRowActivityLog,
   lastPulledKey,
   cursorColumnFor,
   initialCursorValue,

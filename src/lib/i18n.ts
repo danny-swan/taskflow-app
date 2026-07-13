@@ -289,6 +289,21 @@ const dict = {
     support_disclaimer: '⚠ Если захотите перевести криптой, то не забывайте, что перевод строго на указанную валюту в указанной сети на соответствующий адрес. Отправка USDT TRC-20 на ERC-20-адрес (или наоборот), TON на Ethereum-адрес и т.п. — приведёт к БЕЗВОЗВРАТНОЙ потере средств. Всегда сверяйте сеть перед отправкой. Спасибо и хорошего Вам дня!',
     // Wave C PR-c-01 — presence «кто онлайн».
     ws_presence_aria: 'Сейчас онлайн в пространстве',
+    // Wave C PR-c-03 — журнал активности задачи (shared-пространства).
+    // tr() без интерполяции: плейсхолдеры {{old}}/{{new}}/{{tag}} заменяются в компоненте.
+    ws_activity_log_title: 'История изменений',
+    ws_activity_log_empty: 'Пока нет изменений',
+    ws_activity_log_load_more: 'Показать ещё',
+    ws_activity_you: 'вы',
+    ws_activity_created: 'создал(а) задачу',
+    ws_activity_status_changed: 'сменил(а) статус',
+    ws_activity_deadline_changed: 'изменил(а) дедлайн',
+    ws_activity_title_changed: 'изменил(а) название',
+    ws_activity_description_changed: 'изменил(а) описание',
+    ws_activity_deleted: 'удалил(а) задачу',
+    ws_activity_restored: 'восстановил(а) задачу',
+    ws_activity_tag_added: 'добавил(а) тег',
+    ws_activity_tag_removed: 'убрал(а) тег',
   },
   en: {
     brand_sub: 'Task manager',
@@ -578,6 +593,21 @@ const dict = {
     support_disclaimer: '⚠ If you’d like to send crypto, just a heads-up: please send only the specified currency, on the specified network, to the matching address. Sending USDT TRC-20 to an ERC-20 address (or vice versa), TON to an Ethereum address, etc. — will result in a PERMANENT loss of funds. Always double-check the network before sending. Thanks, and have a great day!',
     // Wave C PR-c-01 — presence "who's online".
     ws_presence_aria: 'Currently online in this workspace',
+    // Wave C PR-c-03 — task activity log (shared workspaces).
+    // tr() has no interpolation: {{old}}/{{new}}/{{tag}} placeholders are replaced in the component.
+    ws_activity_log_title: 'Activity',
+    ws_activity_log_empty: 'No changes yet',
+    ws_activity_log_load_more: 'Show more',
+    ws_activity_you: 'you',
+    ws_activity_created: 'created the task',
+    ws_activity_status_changed: 'changed the status',
+    ws_activity_deadline_changed: 'changed the deadline',
+    ws_activity_title_changed: 'changed the title',
+    ws_activity_description_changed: 'changed the description',
+    ws_activity_deleted: 'deleted the task',
+    ws_activity_restored: 'restored the task',
+    ws_activity_tag_added: 'added a tag',
+    ws_activity_tag_removed: 'removed a tag',
   },
 } as const;
 

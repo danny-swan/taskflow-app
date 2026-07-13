@@ -9,6 +9,7 @@ import { EmojiPicker, useEmojiPicker } from './EmojiPicker';
 import { usePrompt } from './PromptDialog';
 import { insertCheckboxLines } from '../lib/checkboxes';
 import { DatePicker } from './DatePicker';
+import { TaskActivityLog } from './TaskActivityLog';
 
 export function TaskModal({
   task, onClose,
@@ -17,6 +18,8 @@ export function TaskModal({
   onClose: () => void;
 }) {
   const lang = useStore(s => s.language);
+  const workspaces = useStore(s => s.workspaces);
+  const currentWorkspaceId = useStore(s => s.currentWorkspaceId);
   const statuses = useCurrentWorkspaceStatuses();
   const tags = useCurrentWorkspaceTags();
   const updateTask = useStore(s => s.updateTask);
@@ -279,6 +282,13 @@ export function TaskModal({
               <span className="ml-2 mono">{draft.finish_date}</span>
             </div>
           )}
+
+          {/* Wave C PR-c-03: история изменений — только для shared-пространств. */}
+          {(() => {
+            const wsId = draft.workspace_id ?? currentWorkspaceId;
+            const isShared = workspaces.some(w => w.id === wsId && w.kind === 'shared');
+            return isShared ? <TaskActivityLog taskUuid={draft.uuid} /> : null;
+          })()}
 
         </div>
 

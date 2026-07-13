@@ -401,6 +401,7 @@ describe('realtime schedulePull (v0.9.35-dev.5)', () => {
       'sync_task_templates',
       'sync_overdue_events',
       'sync_task_hold_periods',
+      'sync_task_activity_log',
     ]);
   });
 
