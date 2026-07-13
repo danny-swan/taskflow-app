@@ -4,6 +4,7 @@ import { useWorkspaces, useCurrentWorkspace, useCanEdit } from '../store/workspa
 import { CreateWorkspaceModal } from './CreateWorkspaceModal';
 import { tr } from '../lib/i18n';
 import { usePendingSyncCount } from '../lib/pendingSync';
+import { isWorkspaceLimitError } from '../lib/workspaceLimits';
 import {
   ListChecks, Plus, LayoutDashboard, BarChart3, Settings, HelpCircle,
   Sun, Moon, Sparkles, Leaf, Palette, ChevronDown, CalendarDays, Cloud, X, Clock,
@@ -340,9 +341,16 @@ function PendingSyncChip() {
     valueColor = count > 0 ? 'text-accent font-semibold tabular' : 'text-faint tabular';
   }
 
+  // Fallback-апселл при race: если серверный триггер отклонил создание
+  // пространства (workspace_limit_exceeded), показываем тарифное сообщение,
+  // а не сырой текст ошибки sync.
+  const isLimitError = isError && isWorkspaceLimitError(syncError);
+  const errorText = isLimitError
+    ? tr(lang, 'ws_limit_sync_error')
+    : (syncError ?? (lang === 'ru' ? 'неизвестно' : 'unknown'));
   const title = lang === 'ru'
-    ? (isError ? `Ошибка: ${syncError ?? 'неизвестно'}` : `В очереди: ${count}, статус: ${syncStatus}`)
-    : (isError ? `Error: ${syncError ?? 'unknown'}` : `Queued: ${count}, status: ${syncStatus}`);
+    ? (isError ? `Ошибка: ${errorText}` : `В очереди: ${count}, статус: ${syncStatus}`)
+    : (isError ? `Error: ${errorText}` : `Queued: ${count}, status: ${syncStatus}`);
 
   return (
     <div

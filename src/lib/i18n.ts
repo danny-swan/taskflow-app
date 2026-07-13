@@ -17,6 +17,10 @@ const dict = {
     ws_type_shared: 'Общее',
     ws_shared_paid_hint: 'Общие пространства доступны на платном тарифе',
     ws_create_action: 'Создать',
+    // Wave A PR-5 — тарифные лимиты на количество пространств.
+    ws_limit_free_hint: 'Достигнут лимит пространств на бесплатном тарифе. Обновите до Pro, чтобы создавать больше пространств.',
+    ws_limit_paid_hint: 'Достигнут максимум пространств (7).',
+    ws_limit_sync_error: 'Пространство не создано: достигнут тарифный лимит.',
     ws_settings_title: 'Настройки пространства',
     ws_nav_settings: 'Настройки пространства',
     ws_tab_statuses: 'Статусы',
@@ -251,6 +255,10 @@ const dict = {
     ws_type_shared: 'Shared',
     ws_shared_paid_hint: 'Shared workspaces are available on a paid plan',
     ws_create_action: 'Create',
+    // Wave A PR-5 — plan-based workspace count limits.
+    ws_limit_free_hint: 'You’ve reached the workspace limit on the free plan. Upgrade to Pro to create more workspaces.',
+    ws_limit_paid_hint: 'You’ve reached the maximum number of workspaces (7).',
+    ws_limit_sync_error: 'Workspace not created: plan limit reached.',
     ws_settings_title: 'Workspace settings',
     ws_nav_settings: 'Workspace settings',
     ws_tab_statuses: 'Statuses',
