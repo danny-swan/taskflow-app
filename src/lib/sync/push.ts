@@ -48,7 +48,7 @@ function isReadyForRetry(attemptCount: number, lastAttemptAt: string | null): bo
  * Определяет, является ли ошибка от Supabase "permanent" — то есть
  * её бессмысленно ретраить. Смотрим на:
  *   - PostgREST/Postgres codes: 42501 (permission denied), 42P01 (undefined table),
- *     42703 (undefined column), 22P02 (invalid text), 23503 (fk violation),
+ *     42703 (undefined column), 22P02 (invalid text),
  *     PGRST301 (JWT expired), PGRST116 (schema mismatch);
  *   - HTTP-маркеры в тексте: "401", "403", "404", "422";
  *   - RLS: "row-level security", "violates row-level security";
@@ -57,11 +57,18 @@ function isReadyForRetry(attemptCount: number, lastAttemptAt: string | null): bo
  *
  * NB: 409 (conflict) и 429 (rate limit) — ТРАНЗИЕНТНЫЕ, ретраим.
  * 5xx / сеть — тоже транзиентные.
+ *
+ * NB: 23503 (foreign_key_violation) — ТРАНЗИЕНТНАЯ (не permanent). После
+ * миграции 0030 workspace_id имеет FK на sync_workspaces(id): если child
+ * (task/status/…) пушится раньше своего workspace (race в outbox), сервер
+ * отклоняет его с 23503. PUSH_ORDER гарантирует parent-first, поэтому это
+ * лечится ретраем — на следующей итерации workspace уже на сервере. См.
+ * isForeignKeyViolation ниже и ADR 0005 «Последствия».
  */
 export function isPermanentError(errorMsg: string): boolean {
   const m = errorMsg.toLowerCase();
-  // Postgres SQLSTATE codes
-  if (/\b42501\b|\b42p01\b|\b42703\b|\b22p02\b|\b23503\b/.test(m)) return true;
+  // Postgres SQLSTATE codes (23503 намеренно НЕ здесь — см. jsdoc / retry ниже).
+  if (/\b42501\b|\b42p01\b|\b42703\b|\b22p02\b/.test(m)) return true;
   // PostgREST codes
   if (/\bpgrst\d{3}\b/.test(m)) return true;
   // RLS
@@ -76,6 +83,17 @@ export function isPermanentError(errorMsg: string): boolean {
   // Mapper-ошибки (например task не имеет uuid) — permanent до overdue-цикла,
   // но мы хотим их ретраить (task может появиться). Не маркируем.
   return false;
+}
+
+/**
+ * FK-violation (23503) — child пушится раньше своего workspace. Не ошибка UX:
+ * PUSH_ORDER пушит workspace первым, а разъезд лечится ретраем. Логируем как
+ * «ждём родительский workspace», не как error. Postgres шлёт 23503 +
+ * "violates foreign key constraint"; ловим оба варианта текста.
+ */
+export function isForeignKeyViolation(errorMsg: string): boolean {
+  const m = errorMsg.toLowerCase();
+  return /\b23503\b/.test(m) || m.includes('foreign key constraint');
 }
 
 interface OutboxRow {
@@ -225,7 +243,14 @@ export async function pushBatch(userId: string, clientId: string): Promise<PushR
       markFailure(validIds, msg);
       result.failed += validIds.length;
       if (!result.firstError) result.firstError = msg;
-      logger.warn(`[sync/push] ${g.spec.cloud} (${g.op}) failed:`, msg);
+      if (isForeignKeyViolation(msg)) {
+        // Транзиентно: workspace ещё не долетел. Ретрай (см. markFailure/backoff).
+        logger.info(
+          `[sync/push] ${g.spec.cloud} (${g.op}): waiting for parent workspace to sync (FK 23503), will retry`,
+        );
+      } else {
+        logger.warn(`[sync/push] ${g.spec.cloud} (${g.op}) failed:`, msg);
+      }
     }
   }
 
@@ -258,6 +283,7 @@ export async function pushAll(userId: string, clientId: string): Promise<PushRes
 export const _internals = {
   isReadyForRetry,
   isPermanentError,
+  isForeignKeyViolation,
   readReadyBatch,
   markSuccess,
   markFailure,

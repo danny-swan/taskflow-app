@@ -1,12 +1,19 @@
 # 0005. Shared workspaces — роли, инвайты по TF-ID и `workspace_id` text → uuid + FK + ON DELETE CASCADE
 
-- Статус: accepted
+- Статус: accepted; пункт 5 (FK + CASCADE) **реализован в PR-b-01** (миграция `0030_workspace_id_fk_cascade.sql`)
 - Дата: 2026-07-13
 - Связано: направление workspaces, Wave B. План — [`docs/architecture/wave-b-plan.md`](../architecture/wave-b-plan.md);
   living-анализ — [`docs/architecture/tf_workspaces_architecture.md`](../architecture/tf_workspaces_architecture.md);
   фундамент Wave A — [`docs/architecture/workspaces-plan.md`](../architecture/workspaces-plan.md).
   Соседние решения: ADR [0001](0001-payment-method-id-vs-external-id.md)–[0004](0004-rate-limiting-table-based.md).
-  Реализация FK+CASCADE — в PR `feat/ws-b-01-integrity` (migration Wave B, «PR-b-01»).
+  Реализация FK+CASCADE — в PR `feat/ws-b-01-integrity` (миграция `0030`, Wave B, «PR-b-01»).
+
+> **Уточнение по факту реализации (PR-b-01):** пункт 5 реализован **без смены типа
+> `workspace_id` на `uuid`** — колонка остаётся `text`. Причина: `sync_workspaces.id` —
+> это `text` PK формата `ws_<hex>` (не валидный uuid; `'ws_...'::uuid` падает), а
+> клиент и сервер обязаны генерировать идентичный id для склейки personal-ws по PK.
+> FK + `ON DELETE CASCADE` полностью валидны на `text→text` PK, суть решения (п.5)
+> достигнута. Подробности — `wave-b-plan.md` §3-факт и шапка миграции `0030`.
 
 ## Контекст
 
@@ -84,16 +91,19 @@ PR-6) продолжает работать.
 
 ## Последствия
 
-- Обновить outbox retry, если он ещё не обрабатывает FK-ошибку корректно (child
-  раньше parent → ретрай, не permanent-error).
-- Провести orphan/format-scan существующих данных **во время миграции**, до
-  `ALTER COLUMN ... TYPE uuid` (все значения должны быть валидными UUID; orphan'ов
-  быть не должно).
-- Обновить pgTAP-тесты PR-6: часть инвариантов становится избыточной. Например,
-  тест группы C «INSERT с несуществующим `workspace_id` проходит незамеченным»
-  можно упростить — теперь такой INSERT падает по FK, а не проходит тихо.
-- Снятие check-constraint `block_shared_workspaces` открывает `kind='shared'` на
-  уровне схемы; продуктовое открытие shared идёт отдельными PR (b-03…b-05).
+- ✅ Обновлён outbox retry: FK-ошибка (SQLSTATE `23503`) — транзиентная (child
+  раньше parent → ретрай, не permanent-error). См. `src/lib/sync/push.ts`.
+- ✅ Проведён orphan-scan существующих данных **во время миграции** (audit-блок в
+  `0030`, до навешивания FK; orphan'ов быть не должно — иначе миграция падает).
+  Format-scan «все значения валидные UUID» **неприменим**: id имеют формат
+  `ws_<hex>` (осознанный дизайн), тип остаётся `text` — см. уточнение в шапке.
+- ✅ Обновлены pgTAP-тесты PR-6 (09/11/12): инварианты «нет FK» / «orphan INSERT
+  проходит» / «hard delete осиротляет» инвертированы под FK+CASCADE; shared
+  теперь `lives_ok`/отклоняется тарифным лимитом (P0001), а не 23514. Новый файл
+  `13_workspace_id_integrity_test.sql` фиксирует все инварианты 0030.
+- ✅ Снят guard `block_shared_workspaces` (в 0027 — триггер+функция, не
+  check-constraint), `kind='shared'` открыт на уровне схемы; продуктовое открытие
+  shared идёт отдельными PR (b-03…b-05).
 
 ## Альтернативы, которые отвергнуты
 

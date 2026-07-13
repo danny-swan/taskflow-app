@@ -16,15 +16,15 @@
 --   B) фактическое поведение при удалении пространства (soft/hard, каскад);
 --   C) integrity колонки workspace_id (индексы, FK-факты, owner_id, backfill).
 --
--- ─── ЗАФИКСИРОВАННЫЕ ФАКТЫ СХЕМЫ (см. отчёт PR-6, раздел «расхождения») ──────
---   • workspace_id в шести sync-таблицах И в members/settings — plain text
---     БЕЗ FK на sync_workspaces(id) (осознанный дизайн 0027: «без FK, как
---     принято», целостность — на клиенте + RLS по членству). Следствия:
---       – INSERT с несуществующим workspace_id НЕ падает по FK (падает только
---         по RLS под ролью authenticated — has_workspace_role=false → 42501);
---       – DELETE пространства НЕ каскадит на дочерние строки/members/settings.
---     Это НЕ баг для Wave A (shared закрыт, клиент так не делает); помечено как
---     возможный вектор для Wave B.
+-- ─── ЗАФИКСИРОВАННЫЕ ФАКТЫ СХЕМЫ (обновлено под 0030, Wave B PR-b-01) ─────────
+--   • workspace_id в шести sync-таблицах И в members/settings — text С FK на
+--     sync_workspaces(id) ON DELETE CASCADE (введён 0030; тип остаётся text —
+--     id имеют формат 'ws_<hex>', не uuid, см. 0030/13). Следствия:
+--       – INSERT с несуществующим workspace_id падает FK-violation 23503 (даже
+--         у superuser: FK проверяется всегда, вне RLS) — тест C8;
+--       – hard DELETE пространства каскадит на дочерние строки/members/settings
+--         (тесты B9-B11); soft DELETE (deleted_at) НЕ каскадит.
+--     До 0030 (Wave A) FK не было — целостность держалась на клиенте + RLS.
 --   • sync_workspaces.owner_id / user_id — NOT NULL + FK на auth.users
 --     ON DELETE CASCADE (удаление аккаунта сносит его personal-ws).
 --   • RLS UPDATE-политика через WITH CHECK НЕ даёт перенести строку в чужой
@@ -207,19 +207,19 @@ SELECT is((SELECT count(*)::int FROM public.sync_tasks WHERE workspace_id = 'wsC
 SELECT is((SELECT count(*)::int FROM public.sync_workspace_settings WHERE workspace_id = 'wsC1-12'),
           1, 'B6: soft-delete НЕ трогает settings (остаются физически)');
 
--- ─── HARD delete: НЕТ FK на workspace_id → дочерние строки НЕ каскадятся ─────
+-- ─── HARD delete: FK+CASCADE (0030) → дочерние строки удаляются каскадом ─────
 SELECT lives_ok(
   $$ DELETE FROM public.sync_workspaces WHERE id = 'wsC1-12' $$,
-  'B7: hard DELETE ws-C1 проходит (нет FK-ссылок на sync_workspaces.id)');
+  'B7: hard DELETE ws-C1 проходит');
 SELECT is((SELECT count(*)::int FROM public.sync_workspaces WHERE id = 'wsC1-12'),
           0, 'B8: строка ws-C1 физически удалена');
--- Фактическое поведение схемы: НЕТ ON DELETE CASCADE (workspace_id — text без FK).
+-- Поведение после 0030: FK workspace_id → sync_workspaces(id) ON DELETE CASCADE.
 SELECT is((SELECT count(*)::int FROM public.sync_tasks WHERE workspace_id = 'wsC1-12'),
-          2, 'B9: дочерние задачи ОСИРОТЕЛИ, а не удалились (нет FK-каскада — дизайн Wave A)');
+          0, 'B9: дочерние задачи удалены каскадом (FK ON DELETE CASCADE, 0030)');
 SELECT is((SELECT count(*)::int FROM public.sync_workspace_members WHERE workspace_id = 'wsC1-12'),
-          1, 'B10: members ОСИРОТЕЛИ, а не удалились (нет FK-каскада)');
+          0, 'B10: members удалены каскадом (FK ON DELETE CASCADE, 0030)');
 SELECT is((SELECT count(*)::int FROM public.sync_workspace_settings WHERE workspace_id = 'wsC1-12'),
-          1, 'B11: settings ОСИРОТЕЛИ, а не удалились (нет FK-каскада)');
+          0, 'B11: settings удалены каскадом (FK ON DELETE CASCADE, 0030)');
 
 -- ─── Изоляция удаления: данные второго ws того же юзера не тронуты ───────────
 SELECT is((SELECT count(*)::int FROM public.sync_tasks WHERE workspace_id = 'wsC2-12'),
@@ -238,10 +238,9 @@ SELECT has_index('public', 'sync_task_templates',    'sync_task_templates_worksp
 SELECT has_index('public', 'sync_overdue_events',    'sync_overdue_events_workspace_idx',    'workspace_id', 'C5: sync_overdue_events.workspace_id индексирован');
 SELECT has_index('public', 'sync_task_hold_periods', 'sync_task_hold_periods_workspace_idx', 'workspace_id', 'C6: sync_task_hold_periods.workspace_id индексирован');
 
--- ─── C7: НЕТ FK на workspace_id (фиксируем фактический дизайн 0027) ──────────
--- Ожидаемый в задаче инвариант «FK на sync_workspaces(id)» в схеме ОТСУТСТВУЕТ.
--- Прямое подтверждение через каталог: 0 FK-констрейнтов, ссылающихся из
--- sync_tasks.workspace_id. См. отчёт PR-6 (возможный вектор для Wave B).
+-- ─── C7: FK на workspace_id теперь ЕСТЬ (введён 0030, Wave B PR-b-01) ────────
+-- Инвариант ADR 0005 п.5: workspace_id → sync_workspaces(id). Прямое
+-- подтверждение через каталог: ровно 1 FK-констрейнт из sync_tasks.workspace_id.
 SELECT is(
   (SELECT count(*)::int
      FROM pg_constraint c
@@ -249,17 +248,18 @@ SELECT is(
     WHERE c.conrelid = 'public.sync_tasks'::regclass
       AND c.contype = 'f'
       AND a.attname = 'workspace_id'),
-  0, 'C7: sync_tasks.workspace_id НЕ имеет FK (дизайн Wave A: целостность на клиенте+RLS)'
+  1, 'C7: sync_tasks.workspace_id имеет FK → sync_workspaces(id) (0030)'
 );
 
--- ─── C8: как следствие отсутствия FK — INSERT с несуществующим ws НЕ падает ──
--- Задача ожидала FK-violation; фактически (superuser, RLS/FK не мешают) INSERT
--- проходит. Это фиксирует отсутствие FK на уровне поведения.
-SELECT lives_ok(
+-- ─── C8: как следствие FK — INSERT с несуществующим ws падает 23503 ──────────
+-- До 0030 INSERT проходил (не было FK). Теперь FK отклоняет orphan даже у
+-- superuser (FK проверяется всегда, вне зависимости от RLS).
+SELECT throws_ok(
   $$ INSERT INTO public.sync_tasks (id, user_id, workspace_id, title)
        VALUES ('tk-nofk-12', '6ccc0000-0000-0000-0000-000000000003'::uuid,
                'ws-does-not-exist-12', 'orphan') $$,
-  'C8: INSERT с несуществующим workspace_id проходит (нет FK — вместо ожидавшегося FK-violation)'
+  '23503', NULL,
+  'C8: INSERT с несуществующим workspace_id падает FK-violation 23503 (0030)'
 );
 
 -- ─── C9-11: owner_id / user_id integrity на sync_workspaces ──────────────────
