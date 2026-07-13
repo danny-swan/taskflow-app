@@ -52,6 +52,14 @@
 
 **Влияние на sync (реализовано):** SQLSTATE `23503` (foreign_key_violation) в outbox-ретрае классифицирован как **транзиентная** ошибка (не permanent) — child, пушнутый раньше своего workspace, ретраится, а не помечается исчерпавшим попытки (`src/lib/sync/push.ts`: `isPermanentError` без 23503 + новый `isForeignKeyViolation`; тесты в `dev5.test.ts`). `PUSH_ORDER` (parent-first) уже гарантирует правильный порядок, `DEFERRABLE` — задел на возможную единую транзакцию push'а.
 
+### §4.2-факт — реализация в PR-b-02 (миграция `0031_workspace_rls_roles.sql`)
+
+**Что сделано:** ролевые RLS-политики на 8 workspace-таблицах приведены к единой предсказуемой схеме имён `<table>_<op>_ws_role` (было `<table>_ws_<op>` из 0027), каждой политике добавлен `COMMENT ON POLICY`. 0031 — единственный источник правды по ролевым RLS этих таблиц (идемпотентно дропает и старые 0027-имена, и новые). Модель доступа: 6 sync-таблиц — SELECT→viewer, INSERT/UPDATE/DELETE→editor; `sync_workspace_members` — SELECT→viewer, INSERT→owner|bootstrap, UPDATE/DELETE→owner + self-leave не-owner'а; `sync_workspace_settings` — SELECT→viewer, запись→owner.
+
+**РАСХОЖДЕНИЕ С ПЛАНОМ — почти всё уже было в Wave A; чистое поведенческое изменение ровно одно.** Аудит показал, что фундамент 0027 уже выразил доступ к 8 таблицам через `has_workspace_role`, а 0028 уже добавил self-leave не-owner'а и триггер `assert_at_least_one_owner` (защита последнего owner'a). Поэтому 0031 — это в основном **кодификация** (переименование в единую схему + COMMENT), а не введение новых прав. Единственное реальное изменение поведения: **`sync_statuses` writes owner→editor** — в 0027 запись статусов была owner-only («критичная настройка»), план §4.2 явно ставит статусы в один ряд с задачами/тегами → editor теперь может INSERT/UPDATE/DELETE статусы. Защита последнего owner'a **не дублируется** в 0031 — остаётся на триггере `assert_at_least_one_owner` (0028), единый источник (design invariant). Self-leave политики 0028 пересозданы под теми же именами, чтобы весь ролевой контур `members` лежал в одном файле.
+
+**Тесты:** pgTAP `14_workspace_rls_roles_test.sql` (plan 103) — трёхролевая матрица (owner/editor/viewer) внутри одного shared-ws + outsider + last-owner. `sync_overdue_events` исключён из UPDATE-подматрицы: у таблицы pre-existing триггер `trg_set_updated_at` (0005), обращающийся к `NEW.updated_at`, при отсутствии такой колонки (0002) — любой UPDATE падает независимо от RLS (append-only де-факто). Это pre-existing quirk, вне scope PR-b-02.
+
 ---
 
 ## 4. Разбивка Wave B на PR

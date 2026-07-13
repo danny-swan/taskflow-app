@@ -141,4 +141,5 @@ jobs:
             supabase/tests/09_workspaces_test.sql \
             supabase/tests/11_workspace_limits_test.sql \
             supabase/tests/12_workspaces_regression_test.sql \
-            supabase/tests/13_workspace_id_integrity_test.sql
+            supabase/tests/13_workspace_id_integrity_test.sql \
+            supabase/tests/14_workspace_rls_roles_test.sql
