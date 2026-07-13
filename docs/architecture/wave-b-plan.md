@@ -96,6 +96,23 @@
 
 **Тесты (клиент, `npm test`):** `src/lib/invites.test.ts` (22) — контракт RPC + маппинг всех кодов ошибок; `InviteMemberModal.test.tsx` (14), `MembersTab.test.tsx` (9), `MyInvitesSection.test.tsx` (6) — ролевые гейты, валидация, accept/reject/limit-гард, перевод ошибок.
 
+### §4.5-факт — реализация в PR-b-05 (`feat/ws-b-05-navigation`)
+
+**Что сделано:** UX-раздел «Личные / Общие» в переключателе пространств (архитектура A из `tf_workspaces_architecture.md` §7). Чистый клиентский UI, **0 DDL**, backend не тронут.
+
+- **Вынос компонента:** приватный `WorkspaceSwitcher` извлечён из `Sidebar.tsx` в отдельный файл `src/components/WorkspaceSwitcher.tsx` (для тестируемости; `Sidebar` теперь его импортирует). Разметка/дизайн дропдауна сохранены 1:1.
+- **Сплит секций:** список делится по `kind` на «Личные» (`kind==='personal'`) и «Общие» (`kind!=='personal'`). Обе секции рендерятся всегда (в отличие от Wave-A, где «Общие» показывались только при непустом списке) — чтобы было место под пустое состояние. Заголовки на новых ключах `ws_switcher_section_personal/shared`.
+- **Role-badge:** у shared-пространств рядом с названием — маленький бейдж роли текущего пользователя: `editor` → «Редактор» (иконка карандаша), `viewer` → «Наблюдатель» (иконка глаза). Owner (shared) и все personal — **без бейджа** (подразумевается по умолчанию). Роль на каждое пространство считает новый хук `useWorkspaceRoles()` в `workspaceScope.ts` (карта `{wsId: role|null}`; логика на ws совпадает с `useCurrentWorkspaceRole`: personal/`ws_local` → owner, shared → строка членства из локального зеркала `workspace_members` по `boundUserId`).
+- **Сортировка:** внутри каждой секции активное (текущее) пространство — первым, остальные — по алфавиту (`localeCompare`). Отдельного поля `last_used_at`/`last_opened_at` на `Workspace` НЕТ (есть только `sort_order`), поэтому сортировка алфавитная — как и допускал бриф.
+- **Пустое состояние «Общие»:** при 0 shared-пространств под заголовком «Общие» показывается hint (`ws_switcher_shared_empty_hint`) с собственным TF-ID пользователя (`{tfid}` подставляется из `useProfile(auth.user.id).profile.public_user_id`; до загрузки профиля — плейсхолдер `TF-……`).
+- **i18n:** добавлены `ws_switcher_section_personal/shared`, `ws_switcher_role_editor/viewer`, `ws_switcher_shared_empty_hint` в `ru` и `en`.
+
+**РЕШЕНИЕ по индикатору pending-инвайтов (§5 брифа):** выбран **безопасный вариант 5.b — НЕ добавлять новый индикатор** рядом с заголовком «Общие». Единственное место отображения входящих приглашений остаётся `MyInvitesSection` (PR-b-04) в том же сайдбаре. Причина: собственный счётчик у «Общие» дублировал бы одно и то же состояние (`useInvitesStore().myPending`) в двух местах сайдбара — визуальный шум и риск рассинхрона. `MyInvitesSection` смонтирован сразу под `WorkspaceSwitcher`, так что связь «новое приглашение → раздел общих пространств» и так очевидна пространственно.
+
+**РАСХОЖДЕНИЯ С ПЛАНОМ:** нет (scope выполнен как описано; read-only UI-polish для viewer и правки `MembersTab`/`InviteMemberModal` сознательно вне scope).
+
+**Тесты (клиент, `npm test`):** `src/components/WorkspaceSwitcher.test.tsx` (6) — сплит по kind + `switchWorkspace` по клику, role-badge (editor/viewer есть, shared-owner/personal нет), пустое состояние «Общие» с TF-ID (+ плейсхолдер без профиля), сортировка (активный первым, остальные по алфавиту).
+
 ---
 
 ## 4. Разбивка Wave B на PR
