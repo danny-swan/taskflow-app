@@ -139,6 +139,7 @@ jobs:
             supabase/tests/07_task_hold_periods_test.sql \
             supabase/tests/08_profile_test.sql \
             supabase/tests/09_workspaces_test.sql \
+            supabase/tests/10_workspace_management_test.sql \
             supabase/tests/11_workspace_limits_test.sql \
             supabase/tests/12_workspaces_regression_test.sql \
             supabase/tests/13_workspace_id_integrity_test.sql \

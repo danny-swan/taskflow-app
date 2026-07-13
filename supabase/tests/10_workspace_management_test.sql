@@ -16,25 +16,30 @@
 -- Стиль — как 09_workspaces_test.sql. Выполняется на vanilla Postgres 15 (CI).
 
 BEGIN;
-SELECT plan(25);
+SELECT plan(23);
 
 -- ─── 1. RPC find_user_by_public_id: структура ───────────────────────────────
 SELECT has_function(
   'public', 'find_user_by_public_id', ARRAY['text'],
   'find_user_by_public_id(text) существует'
 );
--- Возвращает НЕ email: колонки набора — id/nickname/avatar_variant.
+-- Возвращает НЕ email: набор записей (RETURNS TABLE → setof record):
+-- колонки id/nickname/avatar_variant.
 SELECT function_returns(
-  'public', 'find_user_by_public_id', ARRAY['text'], 'record',
+  'public', 'find_user_by_public_id', ARRAY['text'], 'setof record',
   'find_user_by_public_id возвращает набор записей'
 );
 
 -- ─── Данные для RPC-тестов ──────────────────────────────────────────────────
+-- Триггер on_auth_user_created (0001) при INSERT в auth.users сам заводит profile
+-- со СЛУЧАЙНЫМ public_user_id, а guard-триггер (0026) запрещает его переписать.
+-- Отключаем на время налива, чтобы задать известные TF-ID явно.
 DO $$
 DECLARE
   u_caller uuid := 'a1111111-1111-1111-1111-111111111111'::uuid;
   u_target uuid := 'a2222222-2222-2222-2222-222222222222'::uuid;
 BEGIN
+  ALTER TABLE auth.users DISABLE TRIGGER on_auth_user_created;
   INSERT INTO auth.users (id, email) VALUES
     (u_caller, 'caller@test'), (u_target, 'target@test')
     ON CONFLICT (id) DO NOTHING;
@@ -42,10 +47,8 @@ BEGIN
     VALUES
       (u_caller, 'caller@test', 'TF-CALL1', 'Caller', 3),
       (u_target, 'target@test', 'TF-TGT10', 'Target', 5)
-    ON CONFLICT (id) DO UPDATE
-      SET public_user_id = excluded.public_user_id,
-          nickname = excluded.nickname,
-          avatar_variant = excluded.avatar_variant;
+    ON CONFLICT (id) DO NOTHING;
+  ALTER TABLE auth.users ENABLE TRIGGER on_auth_user_created;
 END$$;
 
 -- Как аутентифицированный вызывающий — находит цель по TF-ID.
@@ -79,7 +82,7 @@ SELECT is(
   0,
   'RPC возвращает пусто для несуществующего TF-ID'
 );
-RESET ROLE;
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
 -- Без аутентификации (auth.uid() IS NULL) → пусто, даже для валидного TF-ID.
 SET LOCAL ROLE authenticated;
@@ -89,7 +92,7 @@ SELECT is(
   0,
   'RPC требует аутентификацию: без auth.uid() пусто'
 );
-RESET ROLE;
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
 -- ─── 2. Триггер assert_at_least_one_owner ───────────────────────────────────
 DO $$
@@ -135,7 +138,7 @@ SELECT lives_ok(
   $$ UPDATE public.sync_workspace_members SET role = 'viewer' WHERE id = 'med-10' $$,
   'понижение editor→viewer разрешено (owner остаётся)'
 );
-RESET ROLE;
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
 -- При наличии ВТОРОГО owner'a — можно удалить первого.
 DO $$
@@ -178,7 +181,7 @@ SELECT throws_ok(
        VALUES ('mm-new-e', 'ws-mem-10', 'c3333333-3333-3333-3333-333333333333'::uuid, 'viewer') $$,
   '42501', NULL, 'editor НЕ может добавить участника'
 );
-RESET ROLE;
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
 -- owner МОЖЕТ добавить участника.
 SET LOCAL ROLE authenticated;
@@ -198,7 +201,7 @@ SELECT lives_ok(
   $$ DELETE FROM public.sync_workspace_members WHERE id = 'mm-new-o' $$,
   'owner может удалить участника'
 );
-RESET ROLE;
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
 -- self-leave: не-owner (editor) может soft-удалить свою строку.
 SET LOCAL ROLE authenticated;
@@ -207,7 +210,7 @@ SELECT lives_ok(
   $$ UPDATE public.sync_workspace_members SET deleted_at = now() WHERE id = 'mm-edt-10' $$,
   'не-owner может выйти сам (self-leave soft-delete)'
 );
-RESET ROLE;
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
 -- ─── 4. Soft-delete пространства: личное нельзя, shared owner может ──────────
 -- Личное: даже owner не может soft-удалить (block_personal_workspace_delete).
@@ -217,10 +220,11 @@ SELECT throws_ok(
   $$ UPDATE public.sync_workspaces SET deleted_at = now() WHERE id = 'ws-mem-10' $$,
   '23514', NULL, 'личное пространство нельзя soft-удалить'
 );
-RESET ROLE;
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
--- Shared-пространство создаём как superuser, временно отключив guard 0027.
-ALTER TABLE public.sync_workspaces DISABLE TRIGGER block_shared_workspaces;
+-- Shared-пространство создаём как superuser. Guard block_shared_workspaces (0027)
+-- снят миграцией 0030 (FK-каскады) — kind='shared' теперь разрешён в схеме,
+-- поэтому отключать триггер больше не нужно.
 DO $$
 DECLARE
   u_so uuid := 'd1111111-1111-1111-1111-111111111111'::uuid;
@@ -236,13 +240,12 @@ BEGIN
     ('sm-edt-10', 'ws-shd-10', u_se, 'editor')
     ON CONFLICT DO NOTHING;
 END$$;
-ALTER TABLE public.sync_workspaces ENABLE TRIGGER block_shared_workspaces;
 
 -- editor НЕ может soft-удалить shared-ws (RLS update → owner; строк 0).
 SET LOCAL ROLE authenticated;
 SET LOCAL request.jwt.claim.sub TO 'd2222222-2222-2222-2222-222222222222';
 UPDATE public.sync_workspaces SET deleted_at = now() WHERE id = 'ws-shd-10';
-RESET ROLE;
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 SELECT is(
   (SELECT deleted_at FROM public.sync_workspaces WHERE id = 'ws-shd-10'),
   NULL,
@@ -256,7 +259,7 @@ SELECT lives_ok(
   $$ UPDATE public.sync_workspaces SET deleted_at = now() WHERE id = 'ws-shd-10' $$,
   'owner может soft-удалить shared-ws'
 );
-RESET ROLE;
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 SELECT isnt(
   (SELECT deleted_at FROM public.sync_workspaces WHERE id = 'ws-shd-10'),
   NULL,
