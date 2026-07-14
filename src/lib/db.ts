@@ -20,32 +20,10 @@ const STORAGE_KEY = 'taskflow.sqlite.v1';
 const STORAGE_KEY_TS = 'taskflow.sqlite.v1.ts';
 
 // ─── v0.9.35-dev.6.10.3: единый источник правды для сид-справочников ──────────
-// Раньше список статусов/тегов дублировался в seed() (web) и tauriSeed() (Tauri).
-// Любое расхождение приводило к разным справочникам на разных платформах, что
-// критично для sync (uuid у одинаковых по смыслу статусов должны совпадать в
-// пределах устройства, а набор — быть идентичным). Выносим в константы, чтобы
-// seed(), tauriSeed() и ensureSeededIfEmpty() сеяли ОДНО И ТО ЖЕ.
-interface SeedStatus {
-  name: string; color: string; behavior: string;
-  hidden: 0 | 1; default_collapsed: 0 | 1; is_technical: 0 | 1;
-}
-const SEED_STATUSES: SeedStatus[] = [
-  { name: 'Важно',          color: '#EE204D', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-  { name: 'Сегодня',        color: '#C44A8E', behavior: 'top',     hidden: 0, default_collapsed: 0, is_technical: 0 },
-  { name: 'В процессе',     color: '#D98F2B', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-  { name: 'Взять в работу', color: '#FFFFFF', behavior: 'middle',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-  { name: 'Приостановлено', color: '#7A7974', behavior: 'bottom',  hidden: 0, default_collapsed: 0, is_technical: 0 },
-  { name: 'Выполнено',      color: '#437A22', behavior: 'archive', hidden: 0, default_collapsed: 1, is_technical: 0 },
-  // Технический статус «Удалено» — скрыт в списке задач и в топбаре (hidden=1).
-  { name: 'Удалено',        color: '#5A5957', behavior: 'archive', hidden: 1, default_collapsed: 0, is_technical: 1 },
-];
-const SEED_TAGS: { name: string; color: string }[] = [
-  { name: 'OPS', color: '#5B7FB8' },
-  { name: 'DEV', color: '#437A22' },
-  { name: 'MTG', color: '#C44A8E' },
-  { name: 'LRN', color: '#D98F2B' },
-  { name: 'PRS', color: '#7A7974' },
-];
+// Список статусов/тегов вынесен в ./seedData, чтобы им пользовались и db.ts
+// (seed/tauriSeed/ensureSeededIfEmpty), и store.createWorkspace (сев дефолтных
+// статусов при создании нового ws) — без дублирования литералов.
+import { SEED_STATUSES, SEED_TAGS } from './seedData';
 
 let SQL: SqlJsStatic | null = null;
 let webDb: Database | null = null;

@@ -36,6 +36,7 @@ const enqueueOutbox = vi.fn();
 vi.mock('../lib/outbox', () => ({ enqueueOutbox: (...a: any[]) => enqueueOutbox(...a) }));
 
 import { useStore, type Workspace } from './useStore';
+import { SEED_STATUSES } from '../lib/seedData';
 
 const UID = 'user-abc';
 
@@ -89,6 +90,68 @@ describe('createWorkspace', () => {
     );
     // переключились на новый ws
     expect(useStore.getState().currentWorkspaceId).toBe(id);
+  });
+
+  it('Bug #4: сеет 7 эталонных статусов с workspace_id нового ws + outbox-upsert на каждый', () => {
+    dbGet.mockReturnValue(undefined); // sort_order/COUNT → 0 (ws пустой)
+    dbAll.mockImplementation((sql: string) => {
+      if (/FROM workspaces/.test(sql)) {
+        const ins = dbRun.mock.calls.find(c => /INSERT INTO workspaces/.test(String(c[0])));
+        if (ins) {
+          const p = ins[1] as any[];
+          return [{ uuid: p[0], name: p[1], kind: p[2], owner_id: p[3], sort_order: p[4] }];
+        }
+      }
+      return [];
+    });
+
+    const id = useStore.getState().createWorkspace('Проект', 'personal');
+
+    const statusInserts = dbRun.mock.calls.filter(c => /INSERT INTO statuses/.test(String(c[0])));
+    expect(statusInserts).toHaveLength(SEED_STATUSES.length);
+
+    // Имена и behavior сеются точь-в-точь по эталону; workspace_id = новый ws.
+    statusInserts.forEach((call, i) => {
+      const p = call[1] as any[];
+      expect(p[0]).toBe(SEED_STATUSES[i].name);
+      expect(p[1]).toBe(SEED_STATUSES[i].color);
+      expect(p[2]).toBe(SEED_STATUSES[i].behavior);
+      expect(p[3]).toBe(i);                 // sort_order = индекс
+      expect(p[p.length - 1]).toBe(id);     // workspace_id — последний параметр
+    });
+
+    // Технический «Удалено» сеется скрытым.
+    const deleted = statusInserts.find(c => (c[1] as any[])[0] === 'Удалено');
+    expect((deleted?.[1] as any[])[4]).toBe(1); // is_technical
+    expect((deleted?.[1] as any[])[5]).toBe(1); // hidden
+
+    // На каждый статус — enqueueOutbox('statuses', uuid, 'upsert').
+    const statusOutbox = enqueueOutbox.mock.calls.filter(c => c[0] === 'statuses');
+    expect(statusOutbox).toHaveLength(SEED_STATUSES.length);
+    expect(statusOutbox.every(c => c[2] === 'upsert')).toBe(true);
+  });
+
+  it('Bug #4: идемпотентность — если в ws уже есть статусы, повторно не сеет', () => {
+    dbGet.mockImplementation((sql: string) => {
+      if (/COUNT\(\*\)\s+AS\s+c\s+FROM statuses/.test(sql)) return { c: 7 };
+      return undefined;
+    });
+    dbAll.mockImplementation((sql: string) => {
+      if (/FROM workspaces/.test(sql)) {
+        const ins = dbRun.mock.calls.find(c => /INSERT INTO workspaces/.test(String(c[0])));
+        if (ins) {
+          const p = ins[1] as any[];
+          return [{ uuid: p[0], name: p[1], kind: p[2], owner_id: p[3], sort_order: p[4] }];
+        }
+      }
+      return [];
+    });
+
+    useStore.getState().createWorkspace('Проект', 'shared');
+
+    const statusInserts = dbRun.mock.calls.filter(c => /INSERT INTO statuses/.test(String(c[0])));
+    expect(statusInserts).toHaveLength(0);
+    expect(enqueueOutbox.mock.calls.filter(c => c[0] === 'statuses')).toHaveLength(0);
   });
 });
 

@@ -11,6 +11,7 @@ import { logger } from '../lib/logger';
 import { uuidv7 } from '../lib/uuid';
 import { getClientId } from '../lib/clientId';
 import { enqueueOutbox } from '../lib/outbox';
+import { SEED_STATUSES } from '../lib/seedData';
 
 export type ThemeName = 'light' | 'dark' | 'akatsuki' | 'konoha' | 'custom';
 
@@ -346,6 +347,45 @@ function resolveWriteWorkspaceId(current: string | null): string | null {
 }
 
 /**
+ * Bug #4: сев эталонных статусов при создании нового пространства.
+ *
+ * Раньше новые ws создавались пустыми — ни статусов, ни колонок на доске, задачи
+ * некуда положить. Сеем те же 7 эталонных статусов (SEED_STATUSES, единый
+ * источник правды из lib/seedData), что и при первичной инициализации
+ * personal-ws, но с workspace_id нового пространства. Статусы создаются на
+ * клиенте с UUIDv7 + client_id и ставятся в outbox → уходят в облако штатным
+ * push по PUSH_ORDER (та же модель, что и addStatus). Для shared-участника
+ * статусы приезжают pull'ом от owner — этот путь не трогаем.
+ *
+ * Идемпотентно: если в ws уже есть живые статусы — no-op (защита от повторного
+ * сева при ретраях/pull). Возвращает число засеянных статусов.
+ */
+function seedDefaultStatuses(wsId: string): number {
+  const existing =
+    db.get<{ c: number }>(
+      'SELECT COUNT(*) AS c FROM statuses WHERE workspace_id=? AND deleted_at IS NULL',
+      [wsId],
+    )?.c ?? 0;
+  if (existing > 0) return 0;
+
+  const now = new Date().toISOString();
+  const clientId = getClientId();
+  for (let i = 0; i < SEED_STATUSES.length; i++) {
+    const s = SEED_STATUSES[i];
+    const rowUuid = uuidv7();
+    db.run(
+      `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed,
+                             uuid, client_id, version, updated_at, workspace_id)
+       VALUES (?,?,?,?,1,?,?,?,?,?,1,?,?)`,
+      [s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed,
+       rowUuid, clientId, now, wsId],
+    );
+    enqueueOutbox('statuses', rowUuid, 'upsert');
+  }
+  return SEED_STATUSES.length;
+}
+
+/**
  * overdue_mode ТЕКУЩЕГО пространства из workspace_settings.
  * Приоритет: workspace_settings(ws,'overdue_mode') → глобальный settings.overdue_mode
  * (легаси-фолбэк) → 'calendar'.
@@ -650,6 +690,8 @@ export const useStore = create<State>((set, get) => ({
       [memberUuid, wsUuid, boundUserId, boundUserId, now, now, now, clientId],
     );
     enqueueOutbox('workspace_members', memberUuid, 'upsert');
+    // Bug #4: сеем эталонные статусы в новое пространство (иначе доска пустая).
+    seedDefaultStatuses(wsUuid);
     get().loadWorkspaces();
     get().loadWorkspaceMembers();
     get().switchWorkspace(wsUuid);
