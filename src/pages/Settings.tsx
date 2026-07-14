@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
-import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCurrentWorkspaceTasks, useCurrentWorkspaceTemplates, useCanEdit } from '../store/workspaceScope';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCurrentWorkspaceTasks, useCurrentWorkspaceTemplates, useCanManageWorkspace } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { Trash2, GripVertical, Plus, Check, Sun, Moon, Sparkles, Leaf, Palette, Download, Upload, HardDrive, AlertTriangle, FolderOpen, Info, FileText, Pencil, RefreshCw, LogOut, User, Shield, KeyRound, Mail, Cloud, Copy, Clock, ExternalLink, CheckCircle2, XCircle, CircleDollarSign, CreditCard, RotateCcw, Ban, History, Save, Loader2 } from 'lucide-react';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../lib/updater';
@@ -397,7 +397,7 @@ function InlineStatsToggle({ lang }: { lang: string }) {
 
 export function TagsSection() {
   const lang = useStore(s => s.language);
-  const canEdit = useCanEdit(); // Wave C PR-c-05: viewer — read-only
+  const canManage = useCanManageWorkspace(); // Bug #5: справочник/настройки — только owner (viewer/editor read-only)
   const tags = useCurrentWorkspaceTags();
   const addTag = useStore(s => s.addTag);
   const updateTag = useStore(s => s.updateTag);
@@ -409,7 +409,7 @@ export function TagsSection() {
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-display text-[16px] font-semibold">{tr(lang, 'settings_tags')}</h3>
-        {canEdit && (
+        {canManage && (
           <button
             onClick={() => addTag('NEW' + (tags.length + 1), '#5B7FB8')}
             className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
@@ -419,22 +419,25 @@ export function TagsSection() {
           </button>
         )}
       </div>
+      {!canManage && (
+        <p className="text-[12px] text-muted mb-3">{tr(lang, 'ws_owner_only_reference')}</p>
+      )}
       <div className="border border-border-soft rounded-lg max-h-[60vh] overflow-y-auto bg-surface">
         {tags.map(t => (
           <div key={t.id} className="flex items-center gap-3 px-3 py-2 border-b border-border-soft last:border-b-0">
             <input
               type="color" value={t.color}
-              disabled={!canEdit}
+              disabled={!canManage}
               onChange={(e) => updateTag(t.id, { color: e.target.value })}
-              className={'w-7 h-7 border-0 bg-transparent ' + (canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60')}
+              className={'w-7 h-7 border-0 bg-transparent ' + (canManage ? 'cursor-pointer' : 'cursor-not-allowed opacity-60')}
             />
             <input
               value={t.name}
-              disabled={!canEdit}
+              disabled={!canManage}
               onChange={(e) => updateTag(t.id, { name: e.target.value })}
               className="flex-1 bg-transparent border-0 outline-none text-[13px] font-mono uppercase disabled:opacity-60"
             />
-            {canEdit && (
+            {canManage && (
               <button
                 onClick={() => setConfirmId(t.id)}
                 className="p-1 text-muted hover:text-[var(--status-important)]"
@@ -461,7 +464,7 @@ export function TagsSection() {
 
 export function StatusesSection() {
   const lang = useStore(s => s.language);
-  const canEdit = useCanEdit(); // Wave C PR-c-05: viewer — read-only
+  const canManage = useCanManageWorkspace(); // Bug #5: справочник/настройки — только owner (viewer/editor read-only)
   const statuses = useCurrentWorkspaceStatuses();
   const addStatus = useStore(s => s.addStatus);
   const updateStatus = useStore(s => s.updateStatus);
@@ -485,7 +488,7 @@ export function StatusesSection() {
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-display text-[16px] font-semibold">{tr(lang, 'settings_statuses')}</h3>
-        {canEdit && (
+        {canManage && (
           <button
             onClick={() => addStatus('Новый', '#5B7FB8', 'middle')}
             className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] border border-border-soft rounded-md hover:bg-surface-alt"
@@ -495,10 +498,13 @@ export function StatusesSection() {
           </button>
         )}
       </div>
+      {!canManage && (
+        <p className="text-[12px] text-muted mb-3">{tr(lang, 'ws_owner_only_reference')}</p>
+      )}
       <div className="border border-border-soft rounded-lg max-h-[60vh] overflow-y-auto bg-surface">
         {nonTech.map((s, i) => (
           <div key={s.id} className="flex items-center gap-2 px-3 py-2 border-b border-border-soft last:border-b-0">
-            {canEdit && (
+            {canManage && (
               <div className="flex flex-col">
                 <button onClick={() => move(i, -1)} className="text-muted hover:text-text leading-none text-[10px]">▲</button>
                 <button onClick={() => move(i, 1)} className="text-muted hover:text-text leading-none text-[10px]">▼</button>
@@ -507,32 +513,32 @@ export function StatusesSection() {
             <GripVertical size={14} className="text-faint" />
             <input
               type="color" value={s.color}
-              disabled={!canEdit}
+              disabled={!canManage}
               onChange={(e) => updateStatus(s.id, { color: e.target.value })}
-              className={'w-7 h-7 border-0 bg-transparent ' + (canEdit ? 'cursor-pointer' : 'cursor-not-allowed opacity-60')}
+              className={'w-7 h-7 border-0 bg-transparent ' + (canManage ? 'cursor-pointer' : 'cursor-not-allowed opacity-60')}
             />
             <input
               value={s.name}
-              disabled={!canEdit}
+              disabled={!canManage}
               onChange={(e) => updateStatus(s.id, { name: e.target.value })}
               className="flex-1 bg-transparent border-0 outline-none text-[13px] disabled:opacity-60"
             />
             {/* Task 8: TWO independent checkboxes: hidden + default_collapsed */}
-            <label className={'flex items-center gap-1 text-[11px] text-muted select-none shrink-0 ' + (canEdit ? 'cursor-pointer' : 'cursor-not-allowed')}>
+            <label className={'flex items-center gap-1 text-[11px] text-muted select-none shrink-0 ' + (canManage ? 'cursor-pointer' : 'cursor-not-allowed')}>
               <input
                 type="checkbox"
                 checked={!!s.hidden}
-                disabled={!canEdit}
+                disabled={!canManage}
                 onChange={(e) => updateStatus(s.id, { hidden: e.target.checked ? 1 : 0 })}
                 className="w-3.5 h-3.5 accent-[var(--accent)] disabled:cursor-not-allowed"
               />
               {lang === 'ru' ? 'Скрытый' : 'Hidden'}
             </label>
-            <label className={'flex items-center gap-1 text-[11px] text-muted select-none shrink-0 ' + (canEdit ? 'cursor-pointer' : 'cursor-not-allowed')}>
+            <label className={'flex items-center gap-1 text-[11px] text-muted select-none shrink-0 ' + (canManage ? 'cursor-pointer' : 'cursor-not-allowed')}>
               <input
                 type="checkbox"
                 checked={!!s.default_collapsed}
-                disabled={!canEdit}
+                disabled={!canManage}
                 onChange={(e) => updateStatus(s.id, { default_collapsed: e.target.checked ? 1 : 0 })}
                 className="w-3.5 h-3.5 accent-[var(--accent)] disabled:cursor-not-allowed"
               />
@@ -549,7 +555,7 @@ export function StatusesSection() {
               >
                 {lang === 'ru' ? 'системный' : 'system'}
               </span>
-            ) : canEdit ? (
+            ) : canManage ? (
               <button
                 onClick={() => setConfirmId(s.id)}
                 className="p-1 text-muted hover:text-[var(--status-important)]"
@@ -1754,8 +1760,8 @@ function TimezoneRow({ lang }: { lang: 'ru' | 'en' }) {
  * Не используем drag-and-drop сортировку: это редко, и порядок шаблонов в меню
  * определяется sort_order из БД + id (стабильно, предсказуемо).
  */
-function TemplatesSection({ lang }: { lang: 'ru' | 'en' }) {
-  const canEdit = useCanEdit(); // Wave C PR-c-05: viewer — read-only
+export function TemplatesSection({ lang }: { lang: 'ru' | 'en' }) {
+  const canManage = useCanManageWorkspace(); // Bug #5: справочник/настройки — только owner (viewer/editor read-only)
   const templates = useCurrentWorkspaceTemplates();
   const updateTemplate = useStore(s => s.updateTemplate);
   const deleteTemplate = useStore(s => s.deleteTemplate);
@@ -1775,6 +1781,9 @@ function TemplatesSection({ lang }: { lang: 'ru' | 'en' }) {
           ? 'Создавайте шаблоны из любой задачи (в окне редактирования — «Сохранить как шаблон»). Затем используйте их через стрелку «▾» рядом с кнопкой «+ Новая задача» на странице «Задачи».'
           : 'Save any task as a template (use “Save as template” in the task editor). Then use them via the “▾” arrow next to “+ New task” on the Tasks page.'}
       </p>
+      {!canManage && (
+        <p className="text-[12px] text-muted">{tr(lang, 'ws_owner_only_reference')}</p>
+      )}
 
       {templates.length === 0 ? (
         <div className="px-4 py-6 text-center text-[12px] text-muted border border-dashed border-border-soft rounded-lg">
@@ -1797,7 +1806,7 @@ function TemplatesSection({ lang }: { lang: 'ru' | 'en' }) {
                       <div className="text-[11px] text-muted truncate">{tpl.title}</div>
                     )}
                   </div>
-                  {canEdit && (
+                  {canManage && (
                     <button
                       onClick={() => setExpanded(isOpen ? null : tpl.id)}
                       className="flex items-center gap-1 px-2 py-1 text-[12px] border border-border-soft rounded hover:bg-surface-alt"
@@ -1807,7 +1816,7 @@ function TemplatesSection({ lang }: { lang: 'ru' | 'en' }) {
                       {lang === 'ru' ? 'Изменить' : 'Edit'}
                     </button>
                   )}
-                  {!canEdit ? null : confirmDelete === tpl.id ? (
+                  {!canManage ? null : confirmDelete === tpl.id ? (
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => {

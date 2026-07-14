@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import { Pencil, Check, X, Trash2 } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { useCurrentWorkspace, useCurrentWorkspaceRole } from '../store/workspaceScope';
+import { useCurrentWorkspace, useCurrentWorkspaceRole, useCanManageWorkspace } from '../store/workspaceScope';
 import { computeWorkspaceId } from '../lib/sync/workspace';
 import { tr } from '../lib/i18n';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -164,11 +164,16 @@ export function WorkspaceSettingsPage() {
   );
 }
 
-/** Вкладка «Дедлайны» — режим подсчёта просрочки (ws-scoped через overdueMode). */
+/**
+ * Вкладка «Дедлайны» — режим подсчёта просрочки (ws-scoped через overdueMode).
+ * overdueMode мапится в sync_workspace_settings (owner-only на сервере, 0031),
+ * поэтому переключатель доступен только владельцу (Bug #5).
+ */
 function DeadlinesSection() {
   const lang = useStore(s => s.language);
   const overdueMode = useStore(s => s.overdueMode);
   const setOverdueMode = useStore(s => s.setOverdueMode);
+  const canManage = useCanManageWorkspace();
 
   return (
     <div className="max-w-2xl">
@@ -178,14 +183,20 @@ function DeadlinesSection() {
           <button
             key={m}
             onClick={() => setOverdueMode(m)}
+            disabled={!canManage}
+            title={!canManage ? tr(lang, 'ws_owner_only_reference') : undefined}
             className={'px-3 py-1.5 text-[13px] rounded border ' +
-              (overdueMode === m ? 'bg-accent text-white border-accent' : 'border-border-soft hover:bg-surface-alt')}
+              (overdueMode === m ? 'bg-accent text-white border-accent' : 'border-border-soft hover:bg-surface-alt') +
+              (!canManage ? ' opacity-60 cursor-not-allowed' : '')}
           >
             {m === 'calendar' ? tr(lang, 'ws_deadline_calendar') : tr(lang, 'ws_deadline_business')}
           </button>
         ))}
       </div>
       <p className="text-[11px] text-muted">{tr(lang, 'ws_deadlines_hint')}</p>
+      {!canManage && (
+        <p className="text-[11px] text-muted mt-1.5">{tr(lang, 'ws_owner_only_reference')}</p>
+      )}
     </div>
   );
 }

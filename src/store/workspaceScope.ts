@@ -185,3 +185,19 @@ export function useCanEdit(): boolean {
 export function useIsViewer(): boolean {
   return useCurrentWorkspaceRole() === 'viewer';
 }
+
+/**
+ * Может ли текущий пользователь управлять СПРАВОЧНИКОМ пространства
+ * (статусы/тэги/шаблоны) и НАСТРОЙКАМИ (Bug #5, ADR 0005).
+ *
+ * Разрешено только owner'у: editor — редактор ЗАДАЧ (в т.ч. status_id/tag_id
+ * конкретной задачи), но не администратор справочника; viewer — только чтение.
+ * personal-ws и ws_local → 'owner' (см. {@link useCurrentWorkspaceRole}), поэтому
+ * личный сценарий не ломается. role === null (членство ещё не подхватилось или
+ * не найдено) трактуем как НЕ-owner — консервативно: сервер (RLS 0035) всё равно
+ * отклонит запись справочника от editor'а с 42501, а лишний outbox-push породил
+ * бы зацикленный sync-конфликт. Это зеркалит серверные write-политики 0035.
+ */
+export function useCanManageWorkspace(): boolean {
+  return useCurrentWorkspaceRole() === 'owner';
+}

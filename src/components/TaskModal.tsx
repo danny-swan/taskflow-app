@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { useStore, Task } from '../store/useStore';
-import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCanEdit } from '../store/workspaceScope';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCanEdit, useCanManageWorkspace } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { Trash2, X, AlertTriangle, Smile, FilePlus } from 'lucide-react';
@@ -19,6 +19,9 @@ export function TaskModal({
 }) {
   const lang = useStore(s => s.language);
   const canEdit = useCanEdit(); // Wave C PR-c-05: viewer — read-only модалка
+  // Bug #5: создание НОВОГО тэга / шаблона — справочник, только owner.
+  // (Смена tag_id/status_id существующей задачи остаётся под canEdit.)
+  const canManage = useCanManageWorkspace();
   const workspaces = useStore(s => s.workspaces);
   const currentWorkspaceId = useStore(s => s.currentWorkspaceId);
   const statuses = useCurrentWorkspaceStatuses();
@@ -174,10 +177,11 @@ export function TaskModal({
                     <option value="">—</option>
                     {tags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                   </select>
-                  {canEdit && (
+                  {canManage && (
                     <button
                       type="button"
                       onClick={() => setShowNewTag(true)}
+                      title={lang === 'ru' ? 'Создать новый тэг (справочник — только владелец)' : 'Create a new tag (reference data — owner only)'}
                       className="px-2 text-[13px] border border-border-soft rounded hover:bg-surface-alt"
                     >+</button>
                   )}
@@ -316,8 +320,9 @@ export function TaskModal({
                 <Trash2 size={14} /> {tr(lang, 'delete')}
               </button>
             )}
-            {/* v0.8.13: кнопка сохранения текущей задачи как шаблона — важно: не закрывает модалку. */}
-            {canEdit && (
+            {/* v0.8.13: кнопка сохранения текущей задачи как шаблона — важно: не закрывает модалку.
+                Bug #5: шаблон — справочник пространства, создаёт только owner. */}
+            {canManage && (
               <button
                 onClick={saveAsTemplate}
                 title={lang === 'ru' ? 'Сохранить текущие поля как шаблон для будущих задач' : 'Save current fields as a reusable template'}
