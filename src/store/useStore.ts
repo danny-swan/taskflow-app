@@ -608,7 +608,18 @@ export const useStore = create<State>((set, get) => ({
   },
 
   loadWorkspaces() {
-    get().setWorkspaces(readWorkspacesFromDb());
+    const list = readWorkspacesFromDb();
+    // current_workspace_id в settings — источник истины после логина/смены
+    // аккаунта (его переставляет reconcilePersonalWorkspace) и после ручного
+    // switchWorkspace. Подхватываем персистентный указатель, если он валиден в
+    // новом наборе и отличается от in-memory: иначе setWorkspaces НЕ переставит
+    // current, пока «залипшее» чужое пространство ещё присутствует в списке
+    // (его строку clearUserData намеренно не удаляет). См. fix/hydrate-current-workspace.
+    const savedWsId = (readSetting('current_workspace_id') || '').trim() || null;
+    if (savedWsId && savedWsId !== get().currentWorkspaceId && list.some(w => w.id === savedWsId)) {
+      set({ currentWorkspaceId: savedWsId, overdueMode: readOverdueModeForWs(savedWsId) });
+    }
+    get().setWorkspaces(list);
   },
 
   loadWorkspaceMembers() {
