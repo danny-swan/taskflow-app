@@ -675,6 +675,11 @@ export async function clearUserData(): Promise<void> {
   try { await execBoth(`DELETE FROM sqlite_sequence WHERE name IN ('tasks','tags','statuses','task_templates','overdue_events','task_hold_periods')`); } catch { /* may not exist */ }
   // Сбрасываем курсоры pull, чтобы забрать всё облако заново.
   await execBoth(`DELETE FROM settings WHERE key LIKE 'sync_last_pulled_%'`);
+  // Сбрасываем указатели пространств прошлого аккаунта: иначе UI застревает на
+  // ws_<чужой_uid> (данные нового аккаунта приходят под ws_<новый_uid>, экран
+  // пуст). ws-строки/членство НЕ трогаем — их перекроет pull нового аккаунта, а
+  // reconcilePersonalWorkspace() выставит корректные указатели заново.
+  await execBoth(`DELETE FROM settings WHERE key IN ('current_workspace_id','personal_workspace_id')`);
 
   // Персистим web-кэш.
   if (!IS_TAURI) save();
