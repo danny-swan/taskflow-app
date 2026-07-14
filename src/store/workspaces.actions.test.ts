@@ -36,8 +36,11 @@ const enqueueOutbox = vi.fn();
 vi.mock('../lib/outbox', () => ({ enqueueOutbox: (...a: any[]) => enqueueOutbox(...a) }));
 
 import { useStore, type Workspace } from './useStore';
+import { computeWorkspaceId } from '../lib/sync/workspace';
 
 const UID = 'user-abc';
+/** Детерминированный id системного личного пространства текущего юзера. */
+const SYSTEM_WS = computeWorkspaceId(UID);
 
 const wsRow = (id: string, kind: string): Workspace =>
   ({ id, name: id, kind, owner_id: UID, sort_order: 0 });
@@ -108,11 +111,20 @@ describe('renameWorkspace', () => {
 });
 
 describe('deleteWorkspace', () => {
-  it('personal — отказ (никаких db.run / outbox)', () => {
-    useStore.setState({ workspaces: [wsRow('ws_p', 'personal')], currentWorkspaceId: 'ws_p' });
-    useStore.getState().deleteWorkspace('ws_p');
+  it('системное личное — отказ (никаких db.run / outbox)', () => {
+    useStore.setState({ workspaces: [wsRow(SYSTEM_WS, 'personal')], currentWorkspaceId: SYSTEM_WS });
+    useStore.getState().deleteWorkspace(SYSTEM_WS);
     expect(dbRun).not.toHaveBeenCalled();
     expect(enqueueOutbox).not.toHaveBeenCalled();
+  });
+
+  it('дополнительное личное (id ≠ системного) — soft-delete + enqueueOutbox delete', () => {
+    useStore.setState({ workspaces: [wsRow('ws_extra_personal', 'personal')], currentWorkspaceId: 'ws_extra_personal' });
+    dbAll.mockReturnValue([]); // после удаления readWorkspacesFromDb → пусто
+    useStore.getState().deleteWorkspace('ws_extra_personal');
+    const del = dbRun.mock.calls.find(c => /UPDATE workspaces SET deleted_at/.test(String(c[0])));
+    expect(del).toBeTruthy();
+    expect(outboxCalls()).toContainEqual(['workspaces', 'delete']);
   });
 
   it('shared — soft-delete (UPDATE deleted_at) + enqueueOutbox delete', () => {

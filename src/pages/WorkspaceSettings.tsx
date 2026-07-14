@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { Pencil, Check, X, Trash2 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useCurrentWorkspace, useCurrentWorkspaceRole } from '../store/workspaceScope';
+import { computeWorkspaceId } from '../lib/sync/workspace';
 import { tr } from '../lib/i18n';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { StatusesSection, TagsSection } from './Settings';
@@ -25,10 +26,14 @@ export function WorkspaceSettingsPage() {
   const role = useCurrentWorkspaceRole();
   const renameWorkspace = useStore(s => s.renameWorkspace);
   const deleteWorkspace = useStore(s => s.deleteWorkspace);
+  const boundUserId = useStore(s => s.boundUserId);
 
   const isOwner = role === 'owner';
   const isShared = ws?.kind === 'shared';
-  const isPersonal = ws?.kind === 'personal';
+  // Неудаляемо ТОЛЬКО системное личное пространство (детерминированный id,
+  // совпадает с серверным guard). Доп. personal и shared — удаляемы.
+  const isSystemPersonal =
+    ws?.kind === 'personal' && !!boundUserId && ws.id === computeWorkspaceId(boundUserId);
 
   const [tab, setTab] = useState<Tab>('statuses');
   const [editing, setEditing] = useState(false);
@@ -125,11 +130,11 @@ export function WorkspaceSettingsPage() {
             <div className="mt-8 pt-5 border-t border-border-soft">
               <button
                 onClick={() => setConfirmDelete(true)}
-                disabled={isPersonal}
-                title={isPersonal ? tr(lang, 'ws_delete_personal_hint') : undefined}
+                disabled={isSystemPersonal}
+                title={isSystemPersonal ? tr(lang, 'ws_delete_personal_hint') : undefined}
                 className={
                   'flex items-center gap-2 px-4 py-2 text-[13px] rounded-lg border transition-colors ' +
-                  (isPersonal
+                  (isSystemPersonal
                     ? 'border-border-soft text-faint cursor-not-allowed'
                     : 'border-[var(--status-important)]/40 text-[var(--status-important)] hover:bg-[var(--status-important)]/10')
                 }
@@ -137,7 +142,7 @@ export function WorkspaceSettingsPage() {
                 <Trash2 size={15} />
                 {tr(lang, 'ws_delete_action')}
               </button>
-              {isPersonal && (
+              {isSystemPersonal && (
                 <p className="text-[11px] text-faint mt-1.5">{tr(lang, 'ws_delete_personal_hint')}</p>
               )}
             </div>

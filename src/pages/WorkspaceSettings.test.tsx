@@ -27,12 +27,17 @@ vi.mock('../components/WorkspaceHistoryTab', () => ({ WorkspaceHistoryTab: () =>
 vi.mock('../components/ConfirmDialog', () => ({ ConfirmDialog: () => null }));
 
 import { WorkspaceSettingsPage } from './WorkspaceSettings';
+import { computeWorkspaceId } from '../lib/sync/workspace';
+
+const UID = 'user-1';
+const SYSTEM_WS = computeWorkspaceId(UID);
 
 beforeEach(() => {
   storeState = {
     language: 'ru',
     renameWorkspace: vi.fn(),
     deleteWorkspace: vi.fn(),
+    boundUserId: UID,
     overdueMode: 'calendar',
     setOverdueMode: vi.fn(),
   };
@@ -52,5 +57,31 @@ describe('WorkspaceSettings — вкладка История', () => {
     currentRole = role;
     render(<WorkspaceSettingsPage />);
     expect(screen.getByRole('button', { name: /^История$/ })).toBeTruthy();
+  });
+});
+
+describe('WorkspaceSettings — гейт удаления пространства', () => {
+  it('системное личное (id = ws_<uid>): кнопка удаления задизейблена', () => {
+    currentWs = { id: SYSTEM_WS, name: 'Личное', kind: 'personal' };
+    currentRole = 'owner';
+    render(<WorkspaceSettingsPage />);
+    const btn = screen.getByRole('button', { name: /Удалить пространство/ }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('дополнительное личное (id ≠ ws_<uid>): кнопка удаления активна', () => {
+    currentWs = { id: 'ws_extra_personal', name: 'Второе личное', kind: 'personal' };
+    currentRole = 'owner';
+    render(<WorkspaceSettingsPage />);
+    const btn = screen.getByRole('button', { name: /Удалить пространство/ }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+
+  it('shared (owner): кнопка удаления активна', () => {
+    currentWs = { id: 'ws_team', name: 'Команда', kind: 'shared' };
+    currentRole = 'owner';
+    render(<WorkspaceSettingsPage />);
+    const btn = screen.getByRole('button', { name: /Удалить пространство/ }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
   });
 });

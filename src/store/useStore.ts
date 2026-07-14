@@ -3,6 +3,8 @@
 import { create } from 'zustand';
 import * as db from '../lib/db';
 import type { Lang } from '../lib/i18n';
+import { tr } from '../lib/i18n';
+import { computeWorkspaceId } from '../lib/sync/workspace';
 import { detectOverdueEvents, detectOverdueEventForTask } from '../lib/overdue';
 import { recordHoldTransition } from '../lib/holdPeriods';
 import { todayISO } from '../lib/utils';
@@ -670,9 +672,15 @@ export const useStore = create<State>((set, get) => ({
 
   deleteWorkspace(id) {
     const ws = get().workspaces.find(w => w.id === id);
-    // Personal-ws неудаляемо (дублирует серверный guard block_personal_workspace_delete).
-    if (ws?.kind === 'personal') {
-      logger.warn('[deleteWorkspace] отказ: personal-пространство нельзя удалить');
+    // Неудаляемо ТОЛЬКО системное личное пространство (детерминированный id
+    // 'ws_'+boundUserId без дефисов) — дублирует серверный guard
+    // block_personal_workspace_delete (0036). Дополнительные personal и shared
+    // удаляются штатно.
+    const boundUserId = get().boundUserId ?? readSetting('bound_user_id');
+    const systemId = boundUserId ? computeWorkspaceId(boundUserId) : null;
+    if (ws?.kind === 'personal' && systemId && id === systemId) {
+      logger.warn('[deleteWorkspace] отказ: системное личное пространство нельзя удалить');
+      get().pushToast(tr(get().language, 'ws_delete_personal_hint'));
       return;
     }
     const now = new Date().toISOString();
