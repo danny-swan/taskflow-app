@@ -20,6 +20,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { InviteMemberModal } from './InviteMemberModal';
 import { useStore, type WorkspaceMember } from '../store/useStore';
 import { useInvitesStore } from '../store/useInvitesStore';
+import { workspaceHasPendingOutbox } from '../lib/outbox';
 import { tr } from '../lib/i18n';
 
 export function MembersTab() {
@@ -30,9 +31,20 @@ export function MembersTab() {
   const updateWorkspaceMemberRole = useStore(s => s.updateWorkspaceMemberRole);
   const removeWorkspaceMember = useStore(s => s.removeWorkspaceMember);
 
+  // Реактивный триггер пересчёта wsSyncing: pendingSyncCount меняется в refresh()
+  // при любом enqueue/после push, поэтому wsPending ниже переоценивается.
+  const pendingSyncCount = useStore(s => s.pendingSyncCount);
+
   const workspaceInvites = useInvitesStore(s => s.workspaceInvites);
   const loadWorkspaceInvites = useInvitesStore(s => s.loadWorkspaceInvites);
   const cancelInvite = useInvitesStore(s => s.cancel);
+
+  // Bug #2: приглашать можно только после того, как ws + owner-membership
+  // доставлены на сервер (иначе серверная RPC даст ложный «только владелец»).
+  // Пока по ws висит pending outbox — гейтим кнопку и показываем подсказку.
+  // pendingSyncCount читается лишь чтобы пересчитать это при каждом refresh().
+  void pendingSyncCount;
+  const wsSyncing = workspaceHasPendingOutbox(currentWorkspaceId);
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [removeId, setRemoveId] = useState<string | null>(null);
@@ -68,13 +80,25 @@ export function MembersTab() {
         {isOwner && (
           <button
             onClick={() => setInviteOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] rounded-lg font-medium text-white bg-accent hover:bg-accent-hover transition-colors"
+            disabled={wsSyncing}
+            title={wsSyncing ? tr(lang, 'ws_invite_syncing_hint') : undefined}
+            className={
+              'flex items-center gap-1.5 px-3 py-1.5 text-[13px] rounded-lg font-medium text-white transition-colors ' +
+              (wsSyncing ? 'bg-accent/40 cursor-not-allowed' : 'bg-accent hover:bg-accent-hover')
+            }
           >
             <UserPlus size={15} />
             {tr(lang, 'ws_members_invite_button')}
           </button>
         )}
       </div>
+
+      {isOwner && wsSyncing && (
+        <div className="mb-3 flex items-center gap-1.5 text-[12px] text-muted">
+          <Clock size={13} className="shrink-0" />
+          {tr(lang, 'ws_invite_syncing_hint')}
+        </div>
+      )}
 
       <div className="border border-border-soft rounded-lg overflow-hidden bg-surface">
         {rows.map(m => {
