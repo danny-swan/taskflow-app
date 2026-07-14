@@ -412,7 +412,46 @@ Pro:
   `WATCHED_TABLES`.
 - **UI** — сворачиваемая секция «История изменений» в `TaskModal`, только для
   shared; автор резолвится как в Presence/MembersTab (я/presence-ник/короткий id,
-  **никогда email**).
+  **никогда email**). Общий лог всего пространства (PR-c-04) — read-only вкладка
+  «История» в `WorkspaceSettings` поверх того же зеркала, видна всем ролям только
+  в shared.
+
+#### Realtime: presence-канал (PR-c-01)
+
+Presence — **отдельный от `postgres_changes` транспорт**: тот же
+`supabase.channel(...)`, но эфемерное состояние «кто в канале сейчас», которого
+нет и не должно быть в БД. **0 backend/DDL.**
+
+- **Канал** `presence-ws-<workspaceId>` с `config.presence.key = userId` (несколько
+  вкладок одного юзера → один ключ). Поднимается **только** для `kind='shared'`;
+  на personal-пространство не создаётся вовсе.
+- **Эфемерность.** Состояние вне оффлайн-first `useStore`/SQLite/outbox — в
+  отдельном сторе `usePresenceStore`. Не переживает закрытие вкладки; unsubscribe
+  делает `untrack()` + `removeChannel()` + `clear()`, иначе «призрачные» юзеры
+  висят до heartbeat-таймаута сервера.
+- **Приватность.** В presence-meta уходит только публичный минимум профиля
+  (`nickname`/`avatar_variant`/`public_user_id`) — **email не трекается никогда**.
+  Тот же принцип own-row RLS, что в `MembersTab` и audit-log.
+- **Жизненный цикл** — хук `useWorkspacePresence()` симметричен
+  `resubscribeRealtime`: переподписка при смене `currentWorkspaceId`, снятие при
+  уходе с shared.
+
+#### Roles: viewer-polish (PR-c-05)
+
+UI-слой поверх ролевой RLS (см. §5.3) — сервер остаётся источником истины,
+клиентские гейты только для UX. **0 backend/DDL.** Виртуальные хелперы над
+`useCurrentWorkspaceRole` в `src/store/workspaceScope.ts`:
+
+- `useCanEdit()` — `role !== 'viewer'`; `null` (роль ещё не подхвачена / личное
+  пространство) → `true`, чтобы не блокировать UI до загрузки членства (worst-case
+  сервер всё равно отсечёт запись).
+- `useIsViewer()` — строгое `role === 'viewer'` (для явных read-only веток, где
+  `null` не должен считаться viewer'ом).
+
+Правило подачи: **disabled + tooltip** (`ws_viewer_readonly_tooltip`) по умолчанию
+— viewer видит полноту интерфейса без ложных кликов; **hidden** только там, где
+disabled-кнопка была бы шумом (точечные действия-иконки на карточках, кнопки
+футера модалки). Danger zone и управление участниками уже owner-only.
 
 ### Что делать НЕ надо в этих волнах
 - Не вводить «проекты внутри пространства» — избыточно, добавит третий уровень без ясной пользы.
