@@ -47,7 +47,106 @@ export function listWorkspaceIds(userId?: string | null): string[] {
 }
 
 /**
- * Согласование `ws_local` → `ws_<uid>` при привязке базы к аккаунту.
+ * Согласование personal-пространства текущего пользователя при логине/смене
+ * аккаунта. Делает два дела:
+ *
+ *   1. Переклейка `ws_local` → `ws_<uid>` при первой привязке local-only базы
+ *      (склейка строк по PK перед первым push, см. ниже).
+ *   2. Пиннинг указателей `personal_workspace_id`/`current_workspace_id` в
+ *      settings на personal-ws текущего пользователя (`ws_<uid>`), чтобы UI не
+ *      застревал на `ws_local` (холодный старт) или на `ws_<чужой_uid>`
+ *      (переключение аккаунтов). См. §«current_workspace_id» диагностики.
+ *
+ * Идемпотентно: если указатели/строки уже верные — no-op (никаких лишних
+ * записей в settings/outbox). Вызывается из orchestrator перед pull/push и
+ * безопасно при каждом sync.
+ *
+ * @returns true, если что-то изменили (переклеили или переставили указатель).
+ */
+export function reconcilePersonalWorkspace(userId: string): boolean {
+  const target = computeWorkspaceId(userId);
+  if (target === LOCAL_WS_ID) return false;
+
+  let changed = reconcileLocalPlaceholder(userId, target);
+  if (pinWorkspacePointers(userId, target)) changed = true;
+  return changed;
+}
+
+/**
+ * Пиннинг указателей settings на personal-ws текущего пользователя.
+ *
+ * • `personal_workspace_id` — ВСЕГДА = `ws_<uid>` (детерминированный id).
+ * • `current_workspace_id` — переставляется на `ws_<uid>` ТОЛЬКО когда указатель
+ *   «чужой» для текущего пользователя, а именно:
+ *     (а) он равен placeholder'у `ws_local` (холодный старт, причина A), ИЛИ
+ *     (б) в локальном `workspace_members` НЕТ строки с этим user_id для ws, на
+ *         который он указывает (залипание на пространстве прошлого аккаунта,
+ *         причина B), ИЛИ указателя нет вовсе.
+ *   Если `current_workspace_id` уже указывает на personal `ws_<uid>` ИЛИ на
+ *   shared-ws, где у пользователя есть валидное членство (Wave B, выбор самим
+ *   пользователем), — НЕ трогаем.
+ *
+ * Строго идемпотентно: пишет в settings только при реальном изменении значения.
+ *
+ * @returns true, если хотя бы один указатель был изменён.
+ */
+function pinWorkspacePointers(userId: string, target: string): boolean {
+  let changed = false;
+
+  const personal = readPointer('personal_workspace_id');
+  if (personal !== target) {
+    db.run(
+      `INSERT OR REPLACE INTO settings (key, value) VALUES ('personal_workspace_id', ?)`,
+      [target],
+    );
+    changed = true;
+  }
+
+  const current = readPointer('current_workspace_id');
+  // Уже на personal-ws пользователя — идемпотентный no-op.
+  if (current === target) return changed;
+
+  const shouldReset =
+    !current || current === LOCAL_WS_ID || !hasLocalMembership(userId, current);
+  if (shouldReset) {
+    db.run(
+      `INSERT OR REPLACE INTO settings (key, value) VALUES ('current_workspace_id', ?)`,
+      [target],
+    );
+    changed = true;
+  }
+  return changed;
+}
+
+/** Прочитать trimmed-значение указателя из settings (null, если пусто/нет). */
+function readPointer(key: string): string | null {
+  try {
+    const row = db.get<{ value: string | null }>(
+      'SELECT value FROM settings WHERE key=?',
+      [key],
+    );
+    const v = (row?.value ?? '').trim();
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Есть ли у пользователя живое членство в данном ws в локальном зеркале. */
+function hasLocalMembership(userId: string, wsId: string): boolean {
+  try {
+    return !!db.get<{ n: number }>(
+      `SELECT 1 AS n FROM workspace_members
+        WHERE workspace_id=? AND user_id=? AND deleted_at IS NULL LIMIT 1`,
+      [wsId, userId],
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Переклейка `ws_local` → `ws_<uid>` при привязке базы к аккаунту.
  *
  * Локально-only база (созданная без входа) в v11 получила personal-пространство
  * с placeholder-id `ws_local`. После входа под аккаунтом серверный backfill уже
@@ -56,14 +155,10 @@ export function listWorkspaceIds(userId?: string | null): string[] {
  * ссылки `ws_local` → `ws_<uid>` и завести ws/членство под правильным id.
  *
  * Идемпотентно: если `ws_local` уже нет (или база уже под ws_<uid>) — no-op.
- * Вызывается из orchestrator перед pull/push и безопасно при каждом sync.
  *
  * @returns true, если что-то переименовали (для логов/тестов).
  */
-export function reconcilePersonalWorkspace(userId: string): boolean {
-  const target = computeWorkspaceId(userId);
-  if (target === LOCAL_WS_ID) return false;
-
+function reconcileLocalPlaceholder(userId: string, target: string): boolean {
   // Есть ли локальный placeholder ws_local?
   const localWs = db.get<{ id: number }>(
     'SELECT id FROM workspaces WHERE uuid=?',
@@ -125,11 +220,7 @@ export function reconcilePersonalWorkspace(userId: string): boolean {
     );
   }
 
-  // 5. Указатели текущего/personal пространства в settings.
-  db.run(
-    `UPDATE settings SET value=? WHERE key IN ('personal_workspace_id','current_workspace_id') AND value=?`,
-    [target, LOCAL_WS_ID],
-  );
+  // 5. Указатели settings переставляет pinWorkspacePointers (вызывается после).
 
   // 6. Ставим на push переименованные ws-сущности под правильным id.
   enqueueOutbox('workspaces', target, 'upsert');

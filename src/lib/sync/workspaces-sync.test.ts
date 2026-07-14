@@ -379,6 +379,71 @@ describe('(e) reconcilePersonalWorkspace: ws_local → ws_<uid>', () => {
     const { reconcilePersonalWorkspace } = await import('./workspace');
     expect(reconcilePersonalWorkspace(USER_ID)).toBe(false);
   });
+
+  it('current указывает на чужой ws (нет членства) → переставляет на ws_<uid>', async () => {
+    liveDb = null;
+    await setupDb(true); // привязана под USER_ID, v11 → current = ws_<uid>
+    const { reconcilePersonalWorkspace } = await import('./workspace');
+
+    // Симулируем залипание: указатель на пространство прошлого аккаунта, где у
+    // текущего пользователя НЕТ членства (причина B из диагностики).
+    const FOREIGN_WS = 'ws_foreignaccount000000000000000';
+    liveDb!.run(
+      `INSERT INTO workspaces (uuid, name, kind, sort_order, created_at, updated_at, version)
+       VALUES (?, 'Foreign', 'personal', 0, 't', 't', 1)`,
+      [FOREIGN_WS],
+    );
+    liveDb!.run(
+      `INSERT OR REPLACE INTO settings (key, value) VALUES ('current_workspace_id', ?)`,
+      [FOREIGN_WS],
+    );
+
+    const did = reconcilePersonalWorkspace(USER_ID);
+    expect(did).toBe(true);
+
+    // Указатель переставлен на personal-ws текущего пользователя.
+    const cur = liveDb!.exec(
+      `SELECT value FROM settings WHERE key='current_workspace_id'`,
+    )[0].values[0][0];
+    expect(cur).toBe(WS);
+    // personal_workspace_id тоже гарантированно на ws_<uid>.
+    const personal = liveDb!.exec(
+      `SELECT value FROM settings WHERE key='personal_workspace_id'`,
+    )[0].values[0][0];
+    expect(personal).toBe(WS);
+    // Идемпотентность: повторный вызов уже не меняет ничего.
+    expect(reconcilePersonalWorkspace(USER_ID)).toBe(false);
+  });
+
+  it('НЕ трогает current, если у пользователя есть членство в выбранном shared-ws (Wave B)', async () => {
+    liveDb = null;
+    await setupDb(true);
+    const { reconcilePersonalWorkspace } = await import('./workspace');
+
+    // Пользователь сам выбрал shared-ws, где у него есть валидное членство.
+    const SHARED_WS = 'ws_sharedteam0000000000000000000';
+    liveDb!.run(
+      `INSERT INTO workspaces (uuid, name, kind, sort_order, created_at, updated_at, version)
+       VALUES (?, 'Team', 'shared', 0, 't', 't', 1)`,
+      [SHARED_WS],
+    );
+    liveDb!.run(
+      `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, joined_at, created_at, updated_at, version)
+       VALUES ('wsm-shared', ?, ?, 'editor', 't', 't', 't', 1)`,
+      [SHARED_WS, USER_ID],
+    );
+    liveDb!.run(
+      `INSERT OR REPLACE INTO settings (key, value) VALUES ('current_workspace_id', ?)`,
+      [SHARED_WS],
+    );
+
+    // personal_workspace_id уже = ws_<uid> (v11), current — валидный shared → no-op.
+    expect(reconcilePersonalWorkspace(USER_ID)).toBe(false);
+    const cur = liveDb!.exec(
+      `SELECT value FROM settings WHERE key='current_workspace_id'`,
+    )[0].values[0][0];
+    expect(cur).toBe(SHARED_WS);
+  });
 });
 
 // ─── (f) мягкая миграция ключа курсора ────────────────────────────────────────
