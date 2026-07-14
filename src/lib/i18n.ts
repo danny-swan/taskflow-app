@@ -314,6 +314,8 @@ const dict = {
     ws_history_task_deleted: '(удалена)',
     // Wave C PR-c-05 — read-only UI polish для роли viewer.
     ws_viewer_readonly_tooltip: 'Только просмотр. Обратитесь к владельцу или редактору.',
+    // Bug #5 — справочник/настройки пространства меняет только владелец.
+    ws_owner_only_reference: 'Только владелец пространства может менять статусы, тэги, шаблоны и настройки.',
   },
   en: {
     brand_sub: 'Task manager',
@@ -628,6 +630,8 @@ const dict = {
     ws_history_task_deleted: '(deleted)',
     // Wave C PR-c-05 — read-only UI polish for the viewer role.
     ws_viewer_readonly_tooltip: 'Read-only. Ask an owner or editor for changes.',
+    // Bug #5 — workspace reference data / settings are owner-only.
+    ws_owner_only_reference: 'Only the workspace owner can change statuses, tags, templates, and settings.',
   },
 } as const;
 

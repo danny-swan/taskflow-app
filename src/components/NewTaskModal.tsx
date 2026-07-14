@@ -2,7 +2,7 @@
 // Вызывается с вкладки «Задачи» при клике на «+ Новая задача».
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store/useStore';
-import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags } from '../store/workspaceScope';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCanManageWorkspace } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
 import { StatusPill } from './StatusPill';
@@ -19,6 +19,7 @@ export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => 
   const tags = useCurrentWorkspaceTags();
   const addTask = useStore(s => s.addTask);
   const addTagFn = useStore(s => s.addTag);
+  const canManage = useCanManageWorkspace(); // Bug #5: создание нового тэга — только owner
   const pushToast = useStore(s => s.pushToast);
 
   const [title, setTitle] = useState('');
@@ -112,11 +113,14 @@ export function NewTaskModal({ open, onClose }: { open: boolean; onClose: () => 
                   <option value="">—</option>
                   {tags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
-                <button
-                  type="button"
-                  onClick={() => setShowNewTag(true)}
-                  className="px-2 text-[13px] border border-border-soft rounded hover:bg-surface-alt"
-                >+</button>
+                {canManage && (
+                  <button
+                    type="button"
+                    onClick={() => setShowNewTag(true)}
+                    title={lang === 'ru' ? 'Создать новый тэг (справочник — только владелец)' : 'Create a new tag (reference data — owner only)'}
+                    className="px-2 text-[13px] border border-border-soft rounded hover:bg-surface-alt"
+                  >+</button>
+                )}
               </div>
             ) : (
               <div className="flex gap-1.5">
