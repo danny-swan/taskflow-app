@@ -14,9 +14,44 @@
  * проставить) — это фиксирует контракт заранее, до Wave B.
  */
 import { useMemo } from 'react';
-import { useStore, type Task, type Status, type Tag, type TaskTemplate, type Workspace } from './useStore';
+import { useStore, type Task, type Status, type Tag, type TaskTemplate, type Workspace, type WorkspaceMember } from './useStore';
 
 export type WorkspaceRole = 'owner' | 'editor' | 'viewer';
+
+/**
+ * Роль текущего пользователя в конкретном пространстве (Bug #1, фикс #4).
+ *
+ * Owner-признак вычисляется из СТРОКИ ЧЛЕНСТВА текущего пользователя
+ * (`member.user_id === boundUserId && role === 'owner'`), а не статически по
+ * `kind === 'personal'`. Иначе чужое personal-ws (остаток прошлого аккаунта,
+ * просочившийся в локальный SQLite) рисуется как «вы — владелец».
+ *
+ * Правила:
+ *   • `ws_local` (local-only, вход не выполнялся) → 'owner';
+ *   • есть моя строка членства → её роль (owner/editor/viewer);
+ *   • нет моей строки, но есть чужая для этого ws → ws не мой → null;
+ *   • нет ни одной строки членства для ws И kind==='personal' → 'owner'
+ *     (инвариант personal: членство ещё не подтянулось из облака / холодный старт);
+ *   • иначе → null.
+ */
+function computeRole(
+  wsId: string,
+  kind: string | undefined,
+  members: WorkspaceMember[],
+  boundUserId: string | null,
+): WorkspaceRole | null {
+  if (wsId === 'ws_local') return 'owner';
+  const mine = members.find(m => m.workspace_id === wsId && m.user_id === boundUserId);
+  if (mine) {
+    const role = mine.role;
+    return role === 'owner' || role === 'editor' || role === 'viewer' ? role : null;
+  }
+  const foreignExists = members.some(
+    m => m.workspace_id === wsId && m.user_id != null && m.user_id !== boundUserId,
+  );
+  if (kind === 'personal' && !foreignExists) return 'owner';
+  return null;
+}
 
 type WsScoped = { workspace_id?: string | null };
 
@@ -93,11 +128,8 @@ export function useCurrentWorkspaceTemplates(): TaskTemplate[] {
 /**
  * Роль текущего пользователя в ТЕКУЩЕМ пространстве (Wave A, PR-4).
  *
- * Ищет живую строку членства в локальном зеркале `workspace_members` по
- * (currentWorkspaceId, bound_user_id). Особые случаи:
- *   • personal-ws → всегда 'owner' (владелец — сам пользователь);
- *   • ws_local (local-only, ещё не привязан) → 'owner';
- *   • ws не выбран / членство не найдено → null.
+ * Делегирует в {@link computeRole}: owner-признак берётся из строки членства
+ * ТЕКУЩЕГО пользователя, а не статически по kind (Bug #1, фикс #4).
  *
  * Это UX-слой: сервер (RLS в 0027) — источник истины для записи.
  */
@@ -108,14 +140,8 @@ export function useCurrentWorkspaceRole(): WorkspaceRole | null {
   const boundUserId = useStore(s => s.boundUserId);
   return useMemo(() => {
     if (!wsId) return null;
-    // local-only пространство — пользователь всегда владелец.
-    if (wsId === 'ws_local') return 'owner';
     const ws = workspaces.find(w => w.id === wsId);
-    if (ws?.kind === 'personal') return 'owner';
-    const mine = members.find(m => m.workspace_id === wsId && m.user_id === boundUserId);
-    const role = mine?.role;
-    if (role === 'owner' || role === 'editor' || role === 'viewer') return role;
-    return null;
+    return computeRole(wsId, ws?.kind, members, boundUserId);
   }, [wsId, workspaces, members, boundUserId]);
 }
 
@@ -123,12 +149,9 @@ export function useCurrentWorkspaceRole(): WorkspaceRole | null {
  * Роль текущего пользователя в КАЖДОМ доступном пространстве (Wave B, PR-b-05).
  *
  * Возвращает карту `{ [workspaceId]: WorkspaceRole | null }` для рендера
- * role-badge в переключателе. Логика на пространство совпадает с
- * {@link useCurrentWorkspaceRole}:
- *   • personal-ws → 'owner';
- *   • ws_local → 'owner';
- *   • shared → строка членства (currentUser) в локальном зеркале;
- *   • членство не найдено → null (badge не рисуем).
+ * role-badge в переключателе. Логика на пространство — та же {@link computeRole},
+ * что и в {@link useCurrentWorkspaceRole} (owner-признак из членства текущего
+ * пользователя, а не статически).
  */
 export function useWorkspaceRoles(): Record<string, WorkspaceRole | null> {
   const workspaces = useStore(s => s.workspaces);
@@ -137,13 +160,7 @@ export function useWorkspaceRoles(): Record<string, WorkspaceRole | null> {
   return useMemo(() => {
     const out: Record<string, WorkspaceRole | null> = {};
     for (const ws of workspaces) {
-      if (ws.id === 'ws_local' || ws.kind === 'personal') {
-        out[ws.id] = 'owner';
-        continue;
-      }
-      const mine = members.find(m => m.workspace_id === ws.id && m.user_id === boundUserId);
-      const role = mine?.role;
-      out[ws.id] = role === 'owner' || role === 'editor' || role === 'viewer' ? role : null;
+      out[ws.id] = computeRole(ws.id, ws.kind, members, boundUserId);
     }
     return out;
   }, [workspaces, members, boundUserId]);

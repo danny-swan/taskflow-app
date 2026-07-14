@@ -83,6 +83,16 @@ describe('useCurrentWorkspaceRole', () => {
     expect(renderHook(() => useCurrentWorkspaceRole()).result.current).toBeNull();
   });
 
+  it('чужое personal-ws (Bug #1: членство другого юзера) → null, а не owner', () => {
+    // Остаток прошлого аккаунта: kind=personal, но членство принадлежит другому.
+    useStore.setState({
+      workspaces: [ws('ws_foreign', 'personal')],
+      workspaceMembers: [member('ws_foreign', 'someone-else', 'owner')],
+      currentWorkspaceId: 'ws_foreign',
+    });
+    expect(renderHook(() => useCurrentWorkspaceRole()).result.current).toBeNull();
+  });
+
   it('ws не выбран → null', () => {
     useStore.setState({ currentWorkspaceId: null });
     expect(renderHook(() => useCurrentWorkspaceRole()).result.current).toBeNull();

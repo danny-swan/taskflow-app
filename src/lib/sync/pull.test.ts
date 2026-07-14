@@ -343,3 +343,71 @@ describe('pull worker: applier tasks', () => {
     expect(row[0]).toBe('2026-07-05T15:00:00Z');
   });
 });
+
+/**
+ * Bug #1 (фикс #1): prunePhantomWorkspaces удаляет из локального зеркала ws, где
+ * у текущего пользователя нет живого членства (остатки прошлых аккаунтов), но
+ * сохраняет personal-ws и shared-ws, где он состоит.
+ */
+describe('pull worker: prunePhantomWorkspaces (Bug #1)', () => {
+  const UID = 'user-me';
+  const PERSONAL = 'ws_' + UID.replace(/-/g, '');
+
+  const insertWs = (uuid: string, kind: string) =>
+    liveDb!.run(
+      `INSERT INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, version, client_id)
+       VALUES (?,?,?,?,0,'2026-07-01','2026-07-01',1,'test')`,
+      [uuid, uuid, kind, UID],
+    );
+  const insertMember = (wsId: string, userId: string, role: string, deleted_at: string | null) =>
+    liveDb!.run(
+      `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, created_at, updated_at, deleted_at, version, client_id)
+       VALUES (?,?,?,?, '2026-07-01','2026-07-01', ?, 1,'test')`,
+      [`wsm_${wsId}_${userId}`, wsId, userId, role, deleted_at],
+    );
+  const wsUuids = (): string[] =>
+    (liveDb!.exec(`SELECT uuid FROM workspaces ORDER BY uuid`)[0]?.values ?? []).map(r => r[0] as string);
+
+  it('удаляет чужое personal-ws, сохраняет моё personal и shared с моим членством', async () => {
+    const { _internals } = await import('./pull');
+    // Моё personal (членство owner) + shared (я editor) + чужое personal (я не член).
+    insertWs(PERSONAL, 'personal');
+    insertMember(PERSONAL, UID, 'owner', null);
+    insertWs('ws_shared', 'shared');
+    insertMember('ws_shared', UID, 'editor', null);
+    insertWs('ws_foreign', 'personal');
+    insertMember('ws_foreign', 'someone-else', 'owner', null);
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(1);
+    // ws_local сеется миграцией и защищён allow-list'ом (local-only база).
+    expect(wsUuids()).toEqual(['ws_local', 'ws_shared', PERSONAL]);
+    // Членство фантома тоже вычищено.
+    const memCnt = liveDb!.exec(
+      `SELECT COUNT(*) FROM workspace_members WHERE workspace_id='ws_foreign'`,
+    )[0].values[0][0];
+    expect(memCnt).toBe(0);
+  });
+
+  it('членство с deleted_at не даёт права — ws удаляется', async () => {
+    const { _internals } = await import('./pull');
+    insertWs(PERSONAL, 'personal');
+    insertMember(PERSONAL, UID, 'owner', null);
+    insertWs('ws_left', 'shared');
+    insertMember('ws_left', UID, 'editor', '2026-07-10'); // вышел из ws
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(1);
+    expect(wsUuids()).toEqual(['ws_local', PERSONAL]);
+  });
+
+  it('не трогает personal-ws пользователя, даже если членство ещё не подтянулось', async () => {
+    const { _internals } = await import('./pull');
+    // Только строка ws, членства нет (холодный старт) — personal защищён allow-list'ом.
+    insertWs(PERSONAL, 'personal');
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(0);
+    expect(wsUuids()).toEqual(['ws_local', PERSONAL]);
+  });
+});

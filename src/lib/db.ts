@@ -636,6 +636,9 @@ export async function resetDatabase(): Promise<void> {
 //
 // Что удаляется:
 //   • tasks, tags, statuses, task_templates, overdue_events — все данные;
+//   • workspaces, workspace_members, workspace_settings — пространства/членство
+//     прошлого аккаунта (Bug #1, фикс #3): иначе они остаются фантомами в
+//     сайдбаре после смены аккаунта. Пересоздаются reconcile + pull;
 //   • sync_outbox — очередь пуша (иначе старые локальные строки утекут в облако);
 //   • sync_last_pulled_* курсоры в settings — чтобы pull забрал всё заново.
 //
@@ -671,13 +674,22 @@ export async function clearUserData(): Promise<void> {
   await execBoth('DELETE FROM tags');
   await execBoth('DELETE FROM statuses');
   await execBoth('DELETE FROM sync_outbox');
+  // Bug #1 (фикс #3): пространства и членство прошлого аккаунта тоже локальные
+  // данные — иначе после «Стереть все данные» / смены аккаунта их строки
+  // остаются в SQLite и всплывают «фантомами» в сайдбаре (второе «Мои задачи»,
+  // чужие ws). reconcilePersonalWorkspace() пересоздаст personal-ws нового
+  // аккаунта, а pull подтянет актуальный состав. Обёрнуто в try — таблицы
+  // появляются только с миграции v11 (на очень старых базах их нет).
+  try { await execBoth('DELETE FROM workspace_settings'); } catch { /* до v11 таблицы нет */ }
+  try { await execBoth('DELETE FROM workspace_members'); } catch { /* до v11 таблицы нет */ }
+  try { await execBoth('DELETE FROM workspaces'); } catch { /* до v11 таблицы нет */ }
   // AUTOINCREMENT счётчики — чтобы новые id начинались с 1 (чистая база).
-  try { await execBoth(`DELETE FROM sqlite_sequence WHERE name IN ('tasks','tags','statuses','task_templates','overdue_events','task_hold_periods')`); } catch { /* may not exist */ }
+  try { await execBoth(`DELETE FROM sqlite_sequence WHERE name IN ('tasks','tags','statuses','task_templates','overdue_events','task_hold_periods','workspaces','workspace_members','workspace_settings')`); } catch { /* may not exist */ }
   // Сбрасываем курсоры pull, чтобы забрать всё облако заново.
   await execBoth(`DELETE FROM settings WHERE key LIKE 'sync_last_pulled_%'`);
   // Сбрасываем указатели пространств прошлого аккаунта: иначе UI застревает на
   // ws_<чужой_uid> (данные нового аккаунта приходят под ws_<новый_uid>, экран
-  // пуст). ws-строки/членство НЕ трогаем — их перекроет pull нового аккаунта, а
+  // пуст). Сами ws-строки/членство удалены выше (фикс #3);
   // reconcilePersonalWorkspace() выставит корректные указатели заново.
   await execBoth(`DELETE FROM settings WHERE key IN ('current_workspace_id','personal_workspace_id')`);
 

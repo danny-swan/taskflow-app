@@ -59,6 +59,16 @@ describe('clearUserData() — контракт удаления/сохранен
     run(
       `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('tasks', 'uuid-1', 'upsert', datetime('now'), 0)`,
     );
+    // Пространства/членство/настройки прошлого аккаунта (Bug #1, фикс #3).
+    run(
+      `INSERT INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, version, client_id) VALUES ('ws_old','Old','personal','user-A',0,'2026-01-01','2026-01-01',1,'client-abc')`,
+    );
+    run(
+      `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, created_at, updated_at, version, client_id) VALUES ('wsm_old','ws_old','user-A','owner','2026-01-01','2026-01-01',1,'client-abc')`,
+    );
+    run(
+      `INSERT INTO workspace_settings (uuid, workspace_id, key, value, created_at, updated_at, version, client_id) VALUES ('wss_old','ws_old','overdue_mode','calendar','2026-01-01','2026-01-01',1,'client-abc')`,
+    );
 
     // Ключи settings: одни должны выжить, другие — исчезнуть.
     const setKey = (k: string, v: string) =>
@@ -90,6 +100,11 @@ describe('clearUserData() — контракт удаления/сохранен
     expect(tableCount(all, 'task_templates')).toBe(0);
     expect(tableCount(all, 'overdue_events')).toBe(0);
     expect(tableCount(all, 'sync_outbox')).toBe(0);
+
+    // ── УДАЛЕНО: пространства/членство/настройки прошлого аккаунта (Bug #1) ─
+    expect(tableCount(all, 'workspaces')).toBe(0);
+    expect(tableCount(all, 'workspace_members')).toBe(0);
+    expect(tableCount(all, 'workspace_settings')).toBe(0);
 
     // ── УДАЛЕНО: курсоры pull (sync_last_pulled_%) ─────────────────────────
     expect(get(`SELECT value FROM settings WHERE key = 'sync_last_pulled_tasks'`)).toBeNull();

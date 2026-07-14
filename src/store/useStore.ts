@@ -259,18 +259,49 @@ let toastId = 0;
 
 // ── Wave A (workspaces): чтение пространств из локальной БД ──────────────────
 
-/** Прочитать список активных пространств из локальной таблицы `workspaces`. */
+/**
+ * Прочитать список активных пространств из локальной таблицы `workspaces`.
+ *
+ * Bug #1 (фантомные пространства): список строится ТОЛЬКО из пространств, где у
+ * текущего пользователя (settings.bound_user_id) есть живое членство в
+ * `workspace_members` (deleted_at IS NULL). Иначе в сайдбар просачиваются
+ * чужие personal-ws и остатки прошлых аккаунтов, осевшие в локальном SQLite.
+ *
+ * Скоуп строится по МЕМБЕРШИПУ (а не owner_id) — иначе поломается shared-сценарий,
+ * где участник видит чужой workspace, в котором он состоит.
+ *
+ * Local-only база (bound_user_id ещё нет — вход не выполнялся): фильтр не
+ * применяем, показываем всё (одна БД = один локальный пользователь).
+ */
 function readWorkspacesFromDb(): Workspace[] {
   try {
-    const rows = db.all<{
-      uuid: string | null; name: string; kind: string;
-      owner_id: string | null; sort_order: number;
-    }>(
-      `SELECT uuid, name, kind, owner_id, sort_order
-         FROM workspaces
-        WHERE uuid IS NOT NULL AND deleted_at IS NULL
-        ORDER BY sort_order, id`,
-    );
+    const boundUserId = (readSetting('bound_user_id') || '').trim() || null;
+    const rows = boundUserId
+      ? db.all<{
+          uuid: string | null; name: string; kind: string;
+          owner_id: string | null; sort_order: number;
+        }>(
+          `SELECT w.uuid, w.name, w.kind, w.owner_id, w.sort_order
+             FROM workspaces w
+            WHERE w.uuid IS NOT NULL AND w.deleted_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM workspace_members m
+                 WHERE m.workspace_id = w.uuid
+                   AND m.user_id = ?
+                   AND m.deleted_at IS NULL
+              )
+            ORDER BY w.sort_order, w.id`,
+          [boundUserId],
+        )
+      : db.all<{
+          uuid: string | null; name: string; kind: string;
+          owner_id: string | null; sort_order: number;
+        }>(
+          `SELECT uuid, name, kind, owner_id, sort_order
+             FROM workspaces
+            WHERE uuid IS NOT NULL AND deleted_at IS NULL
+            ORDER BY sort_order, id`,
+        );
     return rows
       .filter(r => !!r.uuid)
       .map(r => ({

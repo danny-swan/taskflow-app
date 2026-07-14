@@ -30,7 +30,7 @@ import {
   resolveTaskIdByUuid,
   type TableSpec,
 } from './mappers';
-import { listWorkspaceIds } from './workspace';
+import { listWorkspaceIds, computeWorkspaceId, LOCAL_WS_ID } from './workspace';
 
 /**
  * v0.9.35-dev.6.10.3 — Маркер «отложить строку» (deferred by design).
@@ -686,7 +686,63 @@ export async function pullAll(userId: string): Promise<PullResult> {
       // Иначе — было batch_size, возможно есть ещё.
     }
   }
+  prunePhantomWorkspaces(userId);
   return total;
+}
+
+/**
+ * Bug #1 (фикс #1): подчистка «фантомных» пространств прошлых аккаунтов.
+ *
+ * После pull'а членство текущего пользователя (`workspace_members` с активным
+ * `deleted_at IS NULL`) — источник истины о том, к каким ws он ПРИНАДЛЕЖИТ.
+ * RLS на сервере возвращает членство только для этих ws, поэтому локальные
+ * строки `workspaces`/`workspace_members`/`workspace_settings` для ws, которых
+ * нет в этом наборе, — это остатки прошлого аккаунта или старых экспериментов,
+ * просочившиеся в локальный SQLite. Удаляем их, чтобы они не рисовались в
+ * сайдбаре.
+ *
+ * Набор допустимых ws строится по ЧЛЕНСТВУ текущего пользователя (а не по
+ * `owner_id`), поэтому shared-пространства, где юзер — editor/viewer, сохраняются.
+ * В набор всегда включаем детерминированный personal-ws (`ws_<uid>`) и локальный
+ * placeholder `ws_local` — на случай, если членство ещё не подтянулось (холодный
+ * старт) или reconcile ещё не переклеил local-only базу.
+ *
+ * @returns число удалённых строк из таблицы `workspaces` (для логов/тестов).
+ */
+function prunePhantomWorkspaces(userId: string): number {
+  const allowed = new Set<string>([computeWorkspaceId(userId), LOCAL_WS_ID]);
+  try {
+    const rows = db.all<{ workspace_id: string | null }>(
+      `SELECT DISTINCT workspace_id FROM workspace_members
+        WHERE user_id=? AND deleted_at IS NULL`,
+      [userId],
+    );
+    for (const r of rows) if (r.workspace_id) allowed.add(r.workspace_id);
+  } catch {
+    // Таблицы workspace_members нет на базе до v11 — чистить нечего.
+    return 0;
+  }
+
+  const ids = [...allowed];
+  const placeholders = ids.map(() => '?').join(',');
+  let removed = 0;
+  try {
+    const phantoms = db.all<{ uuid: string }>(
+      `SELECT uuid FROM workspaces
+        WHERE uuid IS NOT NULL AND uuid NOT IN (${placeholders})`,
+      ids,
+    );
+    removed = phantoms.length;
+    if (removed > 0) {
+      db.run(`DELETE FROM workspaces WHERE uuid NOT IN (${placeholders})`, ids);
+      db.run(`DELETE FROM workspace_members WHERE workspace_id NOT IN (${placeholders})`, ids);
+      db.run(`DELETE FROM workspace_settings WHERE workspace_id NOT IN (${placeholders})`, ids);
+      logger.info(`[sync/pull] удалено фантомных пространств: ${removed}`);
+    }
+  } catch (e) {
+    logger.warn('[sync/pull] prunePhantomWorkspaces failed:', e);
+  }
+  return removed;
 }
 
 // Экспорт для тестов
@@ -703,6 +759,7 @@ export const _internals = {
   applyCloudRowMembers,
   applyCloudRowSettings,
   applyCloudRowActivityLog,
+  prunePhantomWorkspaces,
   lastPulledKey,
   cursorColumnFor,
   initialCursorValue,
