@@ -70,6 +70,8 @@ describe('clearUserData() — контракт удаления/сохранен
     setKey('lang', 'ru');               // UI-настройка — сохраняется
     setKey('sync_last_pulled_tasks', '2026-01-01T00:00:00Z');   // курсор pull — удаляется
     setKey('sync_last_pulled_tags', '2026-01-01T00:00:00Z');    // курсор pull — удаляется
+    setKey('current_workspace_id', 'ws_old_account');   // указатель прошлого аккаунта — сбрасывается
+    setKey('personal_workspace_id', 'ws_old_account');  // указатель прошлого аккаунта — сбрасывается
 
     // Санити: данные на месте до очистки (initDb мог засеять дефолтные статусы/шаблоны,
     // поэтому проверяем «есть хотя бы наши строки», а не точное число).
@@ -92,6 +94,10 @@ describe('clearUserData() — контракт удаления/сохранен
     // ── УДАЛЕНО: курсоры pull (sync_last_pulled_%) ─────────────────────────
     expect(get(`SELECT value FROM settings WHERE key = 'sync_last_pulled_tasks'`)).toBeNull();
     expect(get(`SELECT value FROM settings WHERE key = 'sync_last_pulled_tags'`)).toBeNull();
+
+    // ── УДАЛЕНО: указатели пространств прошлого аккаунта ────────────────────
+    expect(get(`SELECT value FROM settings WHERE key = 'current_workspace_id'`)).toBeNull();
+    expect(get(`SELECT value FROM settings WHERE key = 'personal_workspace_id'`)).toBeNull();
 
     // ── СОХРАНЕНО: client_id / реестр снимков / привязка / UI ──────────────
     expect(get<{ value: string }>(`SELECT value FROM settings WHERE key = 'client_id'`)?.value).toBe('client-abc');

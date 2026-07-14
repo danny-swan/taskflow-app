@@ -108,6 +108,10 @@ async function runPull(userId: string): Promise<void> {
         const mod = await import('../../store/useStore');
         const state = mod.useStore.getState();
         if (typeof state.refresh === 'function') state.refresh();
+        // Realtime-pull мог изменить состав/указатель пространств — перечитываем
+        // in-memory ws-состояние (как в orchestrator refreshStoreAfterPull).
+        if (typeof state.loadWorkspaces === 'function') state.loadWorkspaces();
+        if (typeof state.loadWorkspaceMembers === 'function') state.loadWorkspaceMembers();
       } catch (e) {
         logger.warn('[sync/realtime] store refresh failed:', e);
       }

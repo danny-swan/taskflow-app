@@ -57,6 +57,12 @@ async function refreshStoreAfterPull(applied: number): Promise<void> {
     const state = mod.useStore.getState();
     if (typeof state.refresh === 'function') {
       state.refresh();
+      // Перечитываем in-memory ws-состав/указатель: pull мог создать personal-ws
+      // и/или reconcilePersonalWorkspace переставил current_workspace_id в БД.
+      // Без этого UI фильтрует по устаревшему currentWorkspaceId (ws_local /
+      // ws_<чужой>) → пустой экран до перезапуска. Только при applied>0.
+      if (typeof state.loadWorkspaces === 'function') state.loadWorkspaces();
+      if (typeof state.loadWorkspaceMembers === 'function') state.loadWorkspaceMembers();
       logger.info(`[sync/orchestrator] store refreshed (${applied} rows applied)`);
     }
   } catch (e) {
