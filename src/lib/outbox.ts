@@ -90,3 +90,36 @@ export function outboxPendingCount(): number {
   const row = db.get<{ count: number }>(`SELECT COUNT(*) as count FROM sync_outbox`);
   return row?.count ?? 0;
 }
+
+/**
+ * Есть ли в outbox неотправленные изменения по конкретному пространству —
+ * либо сама строка `workspaces` (uuid == workspaceId), либо любая его
+ * `workspace_members` (owner-membership создателя).
+ *
+ * Используется гейтом инвайтов: серверная RPC `invite_to_workspace` проверяет
+ * владельца по СЕРВЕРНОЙ `sync_workspace_members`, поэтому приглашать можно
+ * только после того, как ws + owner-membership реально доставлены push'ем.
+ * Пока по ним есть pending outbox — пространство ещё не на сервере.
+ *
+ * db-ошибки (например, БД не инициализирована в отдельных render-путях)
+ * трактуем как «pending нет»: гейт не должен ронять UI/флоу.
+ */
+export function workspaceHasPendingOutbox(workspaceId: string | null | undefined): boolean {
+  if (!workspaceId) return false;
+  try {
+    const row = db.get<{ n: number }>(
+      `SELECT (
+         (SELECT COUNT(*) FROM sync_outbox
+            WHERE entity_table = 'workspaces' AND entity_uuid = ?)
+         +
+         (SELECT COUNT(*) FROM sync_outbox o
+            JOIN workspace_members m ON m.uuid = o.entity_uuid
+           WHERE o.entity_table = 'workspace_members' AND m.workspace_id = ?)
+       ) AS n`,
+      [workspaceId, workspaceId],
+    );
+    return (row?.n ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}

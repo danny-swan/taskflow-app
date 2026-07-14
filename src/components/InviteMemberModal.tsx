@@ -28,6 +28,7 @@ export function inviteErrorKey(code: InviteErrorCode): keyof Dict {
     case 'limit_exceeded': return 'ws_invite_err_limit_exceeded';
     case 'invite_expired': return 'ws_invite_err_invite_expired';
     case 'invite_not_pending': return 'ws_invite_err_invite_not_pending';
+    case 'ws_not_synced': return 'ws_invite_err_ws_not_synced';
     default: return 'ws_invite_err_unknown';
   }
 }

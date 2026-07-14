@@ -22,9 +22,11 @@ import {
   cancelInvite,
   listMyPendingInvites,
   listWorkspaceInvites,
+  InviteRpcError,
   type InviteRole,
   type WorkspaceInvite,
 } from '../lib/invites';
+import { workspaceHasPendingOutbox } from '../lib/outbox';
 
 interface InvitesState {
   myPending: WorkspaceInvite[];                        // мои входящие pending
@@ -38,6 +40,31 @@ interface InvitesState {
   accept: (inviteId: string) => Promise<{ workspaceId: string }>;
   reject: (inviteId: string) => Promise<void>;
   cancel: (inviteId: string) => Promise<void>;
+}
+
+/**
+ * Гарантировать, что shared-ws и owner-membership доставлены на сервер ДО вызова
+ * серверной RPC invite_to_workspace.
+ *
+ * Bug #2: между createWorkspace (только локальная запись + outbox) и invite нет
+ * гарантированного успешного push. RPC проверяет владельца по СЕРВЕРНОЙ
+ * sync_workspace_members и, пока push не долетел, честно отвечает 42501 →
+ * ложное «только владелец может пригласить». Здесь принудительно flush'им outbox
+ * (syncNow) и убеждаемся, что по этому ws не осталось pending. Если после sync
+ * pending остался (paywalled / нет сессии / ошибка сети) — кидаем понятный
+ * ws_not_synced вместо обращения к RPC.
+ */
+async function ensureWorkspaceSynced(workspaceId: string): Promise<void> {
+  if (!workspaceHasPendingOutbox(workspaceId)) return;
+  try {
+    const m = await import('../lib/sync');
+    await m.syncNow?.();
+  } catch (e) {
+    logger.warn('[invites] syncNow before invite failed:', e);
+  }
+  if (workspaceHasPendingOutbox(workspaceId)) {
+    throw new InviteRpcError('ws_not_synced', 'workspace not yet synced to server');
+  }
 }
 
 /** После accept — дотянуть облако (новое членство/пространство) в локальную БД. */
@@ -83,8 +110,24 @@ export const useInvitesStore = create<InvitesState>((set, get) => ({
   },
 
   async invite(params) {
+    // Сначала гарантируем доставку ws на сервер (иначе RPC даст ложный 42501).
+    await ensureWorkspaceSynced(params.workspaceId);
     // Ошибку намеренно НЕ глотаем: модалка мапит code → переведённый текст.
-    await inviteToWorkspace(params);
+    try {
+      await inviteToWorkspace(params);
+    } catch (e) {
+      // Подстраховка: если сервер всё же ответил not_authorized, а по ws до сих
+      // пор висит pending outbox — это проблема доставки, а не прав. Показываем
+      // «пространство синхронизируется», а не «только владелец может пригласить».
+      if (
+        e instanceof InviteRpcError &&
+        e.code === 'not_authorized' &&
+        workspaceHasPendingOutbox(params.workspaceId)
+      ) {
+        throw new InviteRpcError('ws_not_synced', 'workspace not yet synced to server');
+      }
+      throw e;
+    }
     await get().loadWorkspaceInvites(params.workspaceId);
   },
 
