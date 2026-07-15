@@ -311,6 +311,74 @@ describe('push worker', () => {
     expect(upsertCalls[1].table).toBe('sync_tasks');
   });
 
+  it('Fix 4: одна «отравляющая» строка не валит валидные (построчный ретрай)', async () => {
+    const { pushBatch } = await import('./push');
+    const good1 = insertStatus('G1');
+    const bad = insertStatus('BAD');
+    const good2 = insertStatus('G2');
+    for (const s of [good1, bad, good2]) {
+      liveDb!.run(
+        `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+        [s.uuid],
+      );
+    }
+    // Батч (все 3) содержит плохую строку → сервер откатывает весь запрос.
+    // На построчном ретрае плохая падает (permanent 23502), валидные проходят.
+    upsertHandler = async (_table, rows) => {
+      if (rows.some((r: any) => r.id === bad.uuid)) {
+        return { error: { message: 'null value in column "x" violates not-null (23502)' } };
+      }
+      return { error: null };
+    };
+
+    const result = await pushBatch('u', 'c');
+    expect(result.pushed).toBe(2);
+    expect(result.failed).toBe(1);
+    // 1 батч-запрос (упал) + 3 построчных = 4 обращения к upsert.
+    expect(upsertCalls.length).toBe(4);
+    // Валидные удалены из outbox, осталась только плохая.
+    const remain = liveDb!.exec(`SELECT entity_uuid FROM sync_outbox`)[0];
+    expect(remain.values.length).toBe(1);
+    expect(remain.values[0][0]).toBe(bad.uuid);
+    // Плохая помечена permanent (attempt_count=MAX) — больше не блокирует батчи.
+    const ac = liveDb!.exec(`SELECT attempt_count FROM sync_outbox WHERE entity_uuid=?`, [bad.uuid])[0].values[0][0];
+    expect(ac).toBe(5);
+  });
+
+  it('Fix 4: батч из ОДНОЙ строки при ошибке не ретраит повторно (единичный markFailure)', async () => {
+    const { pushBatch } = await import('./push');
+    const { uuid } = insertStatus('S1');
+    liveDb!.run(
+      `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+      [uuid],
+    );
+    upsertHandler = async () => ({ error: { message: 'network down' } });
+
+    const result = await pushBatch('u', 'c');
+    expect(result.failed).toBe(1);
+    // Ровно один upsert (батч=1 не уходит в построчный цикл).
+    expect(upsertCalls.length).toBe(1);
+    const ac = liveDb!.exec(`SELECT attempt_count FROM sync_outbox WHERE entity_uuid=?`, [uuid])[0].values[0][0];
+    expect(ac).toBe(1);
+  });
+
+  it('Fix 4: валидный батч (>1) уходит одним запросом, без построчного', async () => {
+    const { pushBatch } = await import('./push');
+    const s1 = insertStatus('A');
+    const s2 = insertStatus('B');
+    for (const s of [s1, s2]) {
+      liveDb!.run(
+        `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+        [s.uuid],
+      );
+    }
+    const result = await pushBatch('u', 'c');
+    expect(result.pushed).toBe(2);
+    // Ровно один батч-запрос (без построчного ретрая на успехе).
+    expect(upsertCalls.length).toBe(1);
+    expect(upsertCalls[0].rows.length).toBe(2);
+  });
+
   it('soft-delete (op=delete): payload содержит deleted_at и уходит через upsert', async () => {
     const { pushBatch } = await import('./push');
     const { uuid } = insertStatus('X', new Date().toISOString());

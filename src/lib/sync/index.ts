@@ -63,6 +63,10 @@ async function refreshStoreAfterPull(applied: number): Promise<void> {
       // ws_<чужой>) → пустой экран до перезапуска. Только при applied>0.
       if (typeof state.loadWorkspaces === 'function') state.loadWorkspaces();
       if (typeof state.loadWorkspaceMembers === 'function') state.loadWorkspaceMembers();
+      // Fix 2: перечитываем boundUserId из settings в стор. Без этого computeRole
+      // видит устаревший (или null) boundUserId → своя строка членства не находится
+      // → owner получает «Только владелец пространства может менять статусы…».
+      if (typeof state.reloadAccountBinding === 'function') state.reloadAccountBinding();
       logger.info(`[sync/orchestrator] store refreshed (${applied} rows applied)`);
     }
   } catch (e) {
@@ -210,33 +214,14 @@ export async function syncNow(): Promise<SyncResult> {
       return { ...emptyResult, error: err };
     }
 
-    // 2.5. Entitlement-гейт (v0.9.35-dev.6).
+    // 2.5. Согласование personal-пространства (Wave A, PR-2) — ВСЕГДА, до гейта.
     //
-    // Sync — платная фича. Free-план и истёкший trial блокируются здесь,
-    // до всяких сетевых операций. Если кэш пуст (первый запуск, БД недоступна) —
-    // тоже считаем free (безопасный дефолт: пропустить sync проще, чем потом
-    // объяснять пользователю, почему он видит чужие данные).
-    //
-    // На сервере всё дополнительно защищено RLS: даже если клиент попытается
-    // пушить с free, INSERT/UPDATE в sync_* пройдёт (RLS не отличает планы),
-    // но UI гейт даёт пользователю понятный CTA вместо тихой траты трафика.
-    const userEmail = sessionData?.session?.user?.email ?? null;
-    const ent = await getEntitlement(userId, userEmail);
-    if (!isProOrTrial(ent)) {
-      logger.info('[sync/orchestrator] paywalled (plan=' + ent.effectivePlan + '), skipping');
-      setState({ status: 'paywalled', lastSyncedAt: currentState.lastSyncedAt, lastError: null });
-      return emptyResult;
-    }
-
-    // 3. Регистрируем устройство (idempotent).
-    await ensureDeviceRegistered(userId, clientId);
-
-    // 3.5. Согласование personal-пространства (Wave A, PR-2).
-    //
+    // Fix-round2 (Fix 1): локальный bootstrap personal-пространства НЕ является
+    // платной фичей. Free-план обязан получить рабочее personal-ws офлайн —
+    // поэтому reconcile выполняется для ЛЮБОГО плана, ДО entitlement-гейта.
     // Локально-only база (создана без входа) держит personal-ws под placeholder-id
-    // `ws_local`. Перед первым pull/push нужно переименовать все локальные ссылки
-    // `ws_local` → детерминированный `ws_<uid>` (совпадающий с серверным
-    // backfill'ом 0027), иначе строки не склеятся по PK. Идемпотентно и дёшево:
+    // `ws_local`; reconcile переименовывает все ссылки в детерминированный
+    // `ws_<uid>` (совпадает с серверным backfill'ом 0027). Идемпотентно и дёшево:
     // если placeholder'а уже нет — быстрый no-op. Ошибки не должны валить sync.
     try {
       const { reconcilePersonalWorkspace } = await import('./workspace');
@@ -244,6 +229,48 @@ export async function syncNow(): Promise<SyncResult> {
     } catch (e) {
       logger.warn('[sync/orchestrator] reconcilePersonalWorkspace failed:', e);
     }
+
+    // 2.6. Entitlement-гейт (v0.9.35-dev.6; split в fix-round2 Fix 1).
+    //
+    // Гейт режет ТОЛЬКО сеть (pull/push/realtime/shared-ws). Локальный bootstrap
+    // (reconcile выше + seed/welcome ниже) для free уже сделан. Если кэш
+    // entitlement пуст (первый запуск, БД недоступна) — считаем free: безопасный
+    // дефолт, при котором пользователь всё равно получает рабочее локальное
+    // пространство, но мы не льём его данные в облако без подтверждённого плана.
+    const userEmail = sessionData?.session?.user?.email ?? null;
+    const ent = await getEntitlement(userId, userEmail);
+    if (!isProOrTrial(ent)) {
+      // Free / истёкший trial: сеть выключена. Досеваем базовый справочник и
+      // welcome-задачу (локальный bootstrap), привязываем базу к аккаунту
+      // локально (чтобы computeRole сразу видел owner-роль и сработал детект
+      // смены аккаунта), обновляем стор и выходим БЕЗ pull/push.
+      try {
+        const dbMod = await import('../db');
+        if (typeof dbMod.ensureSeededIfEmpty === 'function') await dbMod.ensureSeededIfEmpty();
+        if (typeof dbMod.ensureWelcomeTaskIfNeeded === 'function') {
+          await dbMod.ensureWelcomeTaskIfNeeded(userId);
+        }
+      } catch (e) {
+        logger.warn('[sync/orchestrator] free-plan local bootstrap failed:', e);
+      }
+      try {
+        if (getBoundUserId() !== userId) {
+          setBoundUserId(userId);
+          logger.info(`[sync/orchestrator] bound local DB to user ${userId} (free, local-only)`);
+        }
+      } catch (e) {
+        logger.warn('[sync/orchestrator] free-plan bind failed:', e);
+      }
+      // applied=1 форсит refresh: UI должен увидеть локально созданные
+      // ws/статусы/теги/welcome + подхватить boundUserId (Fix 2).
+      await refreshStoreAfterPull(1);
+      logger.info('[sync/orchestrator] free plan: local bootstrap done, network sync paywalled');
+      setState({ status: 'paywalled', lastSyncedAt: currentState.lastSyncedAt, lastError: null });
+      return emptyResult;
+    }
+
+    // 3. Регистрируем устройство (idempotent) — только pro/trial (сетевой шаг).
+    await ensureDeviceRegistered(userId, clientId);
 
     // 4. Первый pull — забираем изменения из облака.
     setState({ status: 'pulling', lastSyncedAt: currentState.lastSyncedAt, lastError: null });

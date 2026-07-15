@@ -242,31 +242,77 @@ export async function pushBatch(userId: string, clientId: string): Promise<PushR
     // Отправка. Для upsert и delete используем один и тот же upsert — потому
     // что при soft delete локальная строка уже имеет deleted_at, а payload
     // формируется из локальной строки. Идентично для op='upsert' и op='delete'.
-    try {
-      const { error } = await supabase
-        .from(g.spec.cloud)
-        .upsert(payloads, { onConflict: g.spec.onConflict ?? 'id' });
-      if (error) throw new Error(error.message);
+    const onConflict = g.spec.onConflict ?? 'id';
+    const batchErr = await upsertRows(g.spec.cloud, payloads, onConflict);
+    if (!batchErr) {
       markSuccess(validIds);
       result.pushed += validIds.length;
       logger.info(`[sync/push] ${g.spec.cloud} (${g.op}): ${validIds.length} rows OK`);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      markFailure(validIds, msg);
-      result.failed += validIds.length;
-      if (!result.firstError) result.firstError = msg;
-      if (isForeignKeyViolation(msg)) {
-        // Транзиентно: workspace ещё не долетел. Ретрай (см. markFailure/backoff).
-        logger.info(
-          `[sync/push] ${g.spec.cloud} (${g.op}): waiting for parent workspace to sync (FK 23503), will retry`,
-        );
+      continue;
+    }
+
+    // Батч упал целиком. Причина часто в ОДНОЙ «отравляющей» строке (напр. одна
+    // нарушает NOT NULL/RLS, а остальные валидны) — Postgres откатывает весь
+    // запрос, и все строки батча получают чужую ошибку. Чтобы здоровые строки не
+    // застревали из-за соседа, при батче >1 ретраим построчно и наказываем
+    // markFailure только реально плохие строки. FK-violation (23503) касается
+    // всего батча одинаково (родитель ещё не долетел) — построчный ретрай
+    // безвреден: все строки просто снова уйдут в backoff.
+    if (payloads.length === 1) {
+      markFailure(validIds, batchErr);
+      result.failed += 1;
+      if (!result.firstError) result.firstError = batchErr;
+      logPushFailure(g, batchErr);
+      continue;
+    }
+
+    logger.warn(
+      `[sync/push] ${g.spec.cloud} (${g.op}) batch of ${payloads.length} failed, retrying row-by-row:`,
+      batchErr,
+    );
+    for (let i = 0; i < payloads.length; i++) {
+      const rowErr = await upsertRows(g.spec.cloud, [payloads[i]], onConflict);
+      if (!rowErr) {
+        markSuccess([validIds[i]]);
+        result.pushed += 1;
       } else {
-        logger.warn(`[sync/push] ${g.spec.cloud} (${g.op}) failed:`, msg);
+        markFailure([validIds[i]], rowErr);
+        result.failed += 1;
+        if (!result.firstError) result.firstError = rowErr;
+        logPushFailure(g, rowErr);
       }
     }
   }
 
   return result;
+}
+
+/**
+ * Один upsert-запрос в Supabase. Возвращает текст ошибки или null при успехе.
+ * Ловит и rejected-промисы (голый fetch-error), и `{ error }` из supabase-js.
+ */
+async function upsertRows(cloud: string, rows: any[], onConflict: string): Promise<string | null> {
+  try {
+    const { error } = await supabase.from(cloud).upsert(rows, { onConflict });
+    if (error) return error.message;
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** Логирует неудачу push'а: FK-violation — как ожидаемое ожидание родителя. */
+function logPushFailure(
+  g: { spec: TableSpec; op: 'upsert' | 'delete' },
+  msg: string,
+): void {
+  if (isForeignKeyViolation(msg)) {
+    logger.info(
+      `[sync/push] ${g.spec.cloud} (${g.op}): waiting for parent workspace to sync (FK 23503), will retry`,
+    );
+  } else {
+    logger.warn(`[sync/push] ${g.spec.cloud} (${g.op}) failed:`, msg);
+  }
 }
 
 /**

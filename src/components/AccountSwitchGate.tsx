@@ -38,10 +38,12 @@ import {
   checkAccountBinding,
   createSnapshot,
   setBoundUserId,
+  getBoundUserId,
   isWebSnapshotLimited,
 } from '../lib/snapshots';
 import { getEntitlement, isProOrTrial } from '../lib/entitlements';
 import { reconcilePersonalWorkspace } from '../lib/sync/workspace';
+import { getClientId } from '../lib/clientId';
 import * as db from '../lib/db';
 
 // ─── i18n локально (компактный диф, как в PaywallModal) ───────────────────────
@@ -175,11 +177,19 @@ export function AccountSwitchGate() {
           // снимок → очистка → bound_user_id=new → пересоздание personal-ws → сев.
           try {
             await createSnapshot('before_account_switch');
+            // Fix 3: снимок — гарантированная защита несинхронизированных данных
+            // уходящего аккаунта (создан выше). Сетевой долив здесь невозможен:
+            // сессия уже принадлежит новому пользователю (bound !== session),
+            // а push под чужой сессией нарушил бы изоляцию (Fix F). Снимок покрывает.
             await db.clearUserData();
             setBoundUserId(sessionUserId);
             reconcilePersonalWorkspace(sessionUserId);
             await db.ensureSeededIfEmpty();
+            await db.ensureWelcomeTaskIfNeeded(sessionUserId);
             if (!cancelled) {
+              // Fix 2: сперва привязку (boundUserId + ws/members) — иначе
+              // computeRole не увидит owner-роль нового personal-ws.
+              try { useStore.getState().reloadAccountBinding?.(); } catch { /* best-effort */ }
               try { await Promise.resolve(useStore.getState().refresh?.()); } catch { /* best-effort */ }
               useStore.getState().pushToast(
                 langRef.current === 'ru'
@@ -218,6 +228,39 @@ export function AccountSwitchGate() {
     await m.syncNow();
   }, []);
 
+  // Fix 3: попытка долить outbox в облако ПЕРЕД разрушающим clearUserData.
+  //
+  // Возвращает true, если стирать безопасно (нечего доливать / долив прошёл /
+  // сеть недоступна, но снимок уже создан). Возвращает false ТОЛЬКО когда долив
+  // был реально нужен, начат и завершился с непереданными строками — тогда
+  // вызывающий отменяет стирание (не теряем несинхронизированное сверх снимка).
+  //
+  // Ключевой инвариант изоляции (Fix F): сетевой долив выполняется лишь когда
+  // уходящая база принадлежит ТЕКУЩЕЙ сессии (bound === session). При смене
+  // аккаунта (bound !== session) push под чужой сессией переклеил бы user_id на
+  // новый аккаунт — поэтому не пушим, полагаемся на снимок (создаётся всегда).
+  const flushOutboxBeforeClear = useCallback(async (): Promise<boolean> => {
+    try {
+      const bound = getBoundUserId();
+      if (!bound || bound !== sessionUserId) return true; // смена аккаунта → снимок
+      const pending = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sync_outbox')?.n ?? 0;
+      if (pending <= 0) return true;
+      const ent = await getEntitlement(bound, sessionUserEmail);
+      if (!isProOrTrial(ent)) return true; // free: сети нет, снимок защитит
+      const clientId = getClientId();
+      if (!clientId) return true;
+      const { pushAll } = await import('../lib/sync/push');
+      const r = await pushAll(bound, clientId);
+      // «Стираем только после успеха»: если остались непереданные строки —
+      // не стираем (снимок уже есть, пользователь может повторить).
+      return r.failed === 0;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[AccountSwitchGate] pre-clear flush failed:', e);
+      return false;
+    }
+  }, [sessionUserId, sessionUserEmail]);
+
   const handleChoice = useCallback(
     async (choice: Choice, forceCloud = false) => {
       if (!sessionUserId || busy) return;
@@ -247,6 +290,18 @@ export function AccountSwitchGate() {
           // Очистить локальные + снять привязку → sync подтянет облако нового
           // аккаунта и заново привяжет базу к нему.
           setBusy('apply');
+          // Fix 3: перед стиранием доливаем outbox (безопасно только для своей
+          // сессии; при смене аккаунта — no-op, защита через снимок выше).
+          const safeToClear = await flushOutboxBeforeClear();
+          if (!safeToClear) {
+            setBusy(null);
+            setError(
+              language === 'ru'
+                ? 'Остались несинхронизированные изменения. Снимок сохранён — повторите позже.'
+                : 'Some changes are not synced yet. A snapshot is saved — please retry later.',
+            );
+            return;
+          }
           await db.clearUserData();
           setBoundUserId(null);
           await runSync();
@@ -264,6 +319,10 @@ export function AccountSwitchGate() {
         }
 
         // 3. Обновляем UI и закрываем.
+        // Fix 2: перечитываем привязку (boundUserId + ws/members), чтобы
+        // computeRole сразу увидел owner-роль текущего аккаунта и UI не показывал
+        // «Только владелец пространства может менять статусы…».
+        try { useStore.getState().reloadAccountBinding?.(); } catch { /* best-effort */ }
         try { await Promise.resolve(refresh?.()); } catch { /* refresh best-effort */ }
         finishForSession();
         pushToast(
@@ -275,7 +334,7 @@ export function AccountSwitchGate() {
         setError(`${t('err_generic')}: ${msg}`);
       }
     },
-    [sessionUserId, busy, runSync, refresh, finishForSession, pushToast, language, t, setCloudEmptyWarning],
+    [sessionUserId, busy, runSync, flushOutboxBeforeClear, refresh, finishForSession, pushToast, language, t, setCloudEmptyWarning],
   );
 
   const handleSignOut = useCallback(async () => {

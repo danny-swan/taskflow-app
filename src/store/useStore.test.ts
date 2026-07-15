@@ -136,6 +136,37 @@ describe('useStore — derived helpers', () => {
   });
 });
 
+describe('useStore — reloadAccountBinding (Fix 2)', () => {
+  it('перечитывает bound_user_id из settings в стор + подтягивает ws/members', async () => {
+    const db = await import('../lib/db');
+    (db.get as any).mockImplementation((_sql: string, params: any[] = []) =>
+      params[0] === 'bound_user_id' ? { value: 'user-owner' } : null,
+    );
+    (db.all as any).mockReturnValue([]);
+
+    useStore.setState({ boundUserId: null, workspaces: [], workspaceMembers: [] });
+    useStore.getState().reloadAccountBinding();
+
+    // boundUserId подхвачен из settings — computeRole теперь найдёт свою строку
+    // членства и отдаст owner-роль вместо «только владелец может менять статусы».
+    expect(useStore.getState().boundUserId).toBe('user-owner');
+    // ws/members перечитаны из БД (мок пустой — но вызовы прошли без throw).
+    expect(db.all).toHaveBeenCalled();
+  });
+
+  it('пустой bound_user_id → null (нормализация trim)', async () => {
+    const db = await import('../lib/db');
+    (db.get as any).mockImplementation((_sql: string, params: any[] = []) =>
+      params[0] === 'bound_user_id' ? { value: '   ' } : null,
+    );
+    (db.all as any).mockReturnValue([]);
+
+    useStore.setState({ boundUserId: 'stale' });
+    useStore.getState().reloadAccountBinding();
+    expect(useStore.getState().boundUserId).toBeNull();
+  });
+});
+
 describe('useStore — toasts', () => {
   it('pushToast добавляет тост, dismissToast удаляет по id', () => {
     const { pushToast } = useStore.getState();

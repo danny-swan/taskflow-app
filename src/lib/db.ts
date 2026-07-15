@@ -670,6 +670,9 @@ export async function clearUserData(): Promise<void> {
   // пуст). Сами ws-строки/членство удалены выше (фикс #3);
   // reconcilePersonalWorkspace() выставит корректные указатели заново.
   await execBoth(`DELETE FROM settings WHERE key IN ('current_workspace_id','personal_workspace_id')`);
+  // Fix 1 (fix-round2): сбрасываем маркер welcome-задачи, чтобы новый аккаунт
+  // (или «стереть всё») снова получил стартовую welcome-задачу ровно один раз.
+  await execBoth(`DELETE FROM settings WHERE key='welcome_seeded'`);
 
   // Персистим web-кэш.
   if (!IS_TAURI) save();
@@ -812,6 +815,110 @@ export async function ensureSeededIfEmpty(): Promise<boolean> {
   if (!IS_TAURI) save();
 
   console.info(`[ensureSeededIfEmpty] seeded ${statusUuids.length} statuses + ${tagUuids.length} tags (no welcome task)`);
+  return true;
+}
+
+// ─── Fix 1 (fix-round2): ensureWelcomeTaskIfNeeded ───────────────────────────
+//
+// Гарантирует стартовую welcome-задачу для локального personal-пространства.
+// В отличие от seed() (полный первичный сев на свежей установке) и
+// ensureSeededIfEmpty (досев справочника без welcome), эта функция создаёт
+// РОВНО ОДНУ welcome-задачу и только когда её ещё не создавали.
+//
+// Нужна прежде всего free-плану: orchestrator вызывает её на free-ветке (сеть
+// paywalled), чтобы пользователь без Pro всё равно получил рабочее локальное
+// пространство с приветственной задачей — полностью офлайн.
+//
+// Идемпотентность — через маркер settings.welcome_seeded:
+//   • маркер стоит                 → no-op (уже создавали);
+//   • маркера нет, но задачи есть   → ставим маркер, welcome НЕ плодим
+//                                     (fresh seed уже создал welcome, либо у
+//                                      пользователя своя работа);
+//   • маркера нет и задач нет       → создаём welcome + enqueue outbox + маркер.
+// clearUserData() удаляет маркер, поэтому новый аккаунт снова получит welcome.
+//
+// Возвращает true, если welcome-задача была создана, иначе false.
+export async function ensureWelcomeTaskIfNeeded(_userId?: string): Promise<boolean> {
+  const readScalar = async (sql: string, col: string): Promise<any> => {
+    try {
+      if (IS_TAURI) {
+        const d = await getTauriDb();
+        const rows: any[] = await d.select(sql);
+        return rows[0]?.[col];
+      } else if (webDb) {
+        const stmt = webDb.prepare(sql);
+        let out: any = undefined;
+        if (stmt.step()) out = (stmt.getAsObject() as any)[col];
+        stmt.free();
+        return out;
+      }
+    } catch (e) { console.warn('[ensureWelcomeTaskIfNeeded] read failed:', e); }
+    return undefined;
+  };
+
+  const execBoth = async (sql: string, params: any[] = []) => {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      try { await d.execute(sql, params); } catch (e) { console.warn('[ensureWelcomeTaskIfNeeded][tauri]', e); }
+    }
+    if (webDb) {
+      try { webDb.run(sql, params); } catch (e) { console.warn('[ensureWelcomeTaskIfNeeded][web]', e); }
+    }
+  };
+
+  const marker = await readScalar(`SELECT value FROM settings WHERE key='welcome_seeded' LIMIT 1`, 'value');
+  if (marker) return false;
+
+  const taskCount = Number(await readScalar(`SELECT COUNT(*) AS cnt FROM tasks`, 'cnt') ?? 0);
+  if (taskCount > 0) {
+    // Задачи уже есть — welcome не дублируем, лишь фиксируем маркер.
+    await execBoth(`INSERT OR REPLACE INTO settings (key, value) VALUES ('welcome_seeded','1')`);
+    if (!IS_TAURI) save();
+    return false;
+  }
+
+  // Статус обязателен (tasks.status_id NOT NULL). Предпочитаем «Сегодня» (как в
+  // seed()), иначе — первый по порядку. Если статусов нет вовсе — не создаём.
+  let statusId = await readScalar(`SELECT id FROM statuses WHERE name='Сегодня' LIMIT 1`, 'id');
+  if (statusId == null) statusId = await readScalar(`SELECT id FROM statuses ORDER BY sort_order, id LIMIT 1`, 'id');
+  if (statusId == null) {
+    console.warn('[ensureWelcomeTaskIfNeeded] no statuses available, skipping welcome');
+    return false;
+  }
+  const tagId = (await readScalar(`SELECT id FROM tags WHERE name='PRS' LIMIT 1`, 'id')) ?? null;
+  const clientId = (await readScalar(`SELECT value FROM settings WHERE key='client_id' LIMIT 1`, 'value')) ?? null;
+  const seedWsId =
+    (String((await readScalar(`SELECT value FROM settings WHERE key='personal_workspace_id' LIMIT 1`, 'value')) ?? '').trim()) || 'ws_local';
+
+  const now = new Date().toISOString();
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const deadlineDate = new Date(today);
+  deadlineDate.setDate(deadlineDate.getDate() + 3);
+  const deadlineStr = `${deadlineDate.getFullYear()}-${String(deadlineDate.getMonth() + 1).padStart(2, '0')}-${String(deadlineDate.getDate()).padStart(2, '0')}`;
+
+  const taskUuid = uuidv7();
+  await execBoth(
+    `INSERT INTO tasks
+       (uuid, title, comment, tag_id, status_id, start_date, deadline, finish_date,
+        created_at, updated_at, sort_order, archived, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?)`,
+    [
+      taskUuid,
+      'Добро пожаловать в TaskFlow',
+      'Нажмите ✓ справа, чтобы выполнить задачу, или иконка корзины 🗑 в правом верхнем углу — чтобы удалить.',
+      tagId, statusId, todayStr, deadlineStr, null, now, now, 0, clientId, seedWsId,
+    ]
+  );
+  await execBoth(
+    `INSERT OR IGNORE INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+     VALUES ('tasks', ?, 'upsert', datetime('now'), 0)`,
+    [taskUuid]
+  );
+  await execBoth(`INSERT OR REPLACE INTO settings (key, value) VALUES ('welcome_seeded','1')`);
+  if (!IS_TAURI) save();
+
+  console.info('[ensureWelcomeTaskIfNeeded] welcome task created');
   return true;
 }
 
