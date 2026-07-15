@@ -915,6 +915,56 @@ export const MIGRATIONS: Migration[] = [
       );
     },
   },
+
+  // ================================================================
+  // v14 — Сброс застрявших outbox-строк после серверного фикса 0037.
+  //
+  // РЕГРЕССИЯ (серверная миграция 0037): upsert новых workspace-сущностей
+  // (INSERT ... ON CONFLICT ... RETURNING) отклонялся RLS с 403/42501, потому
+  // что SELECT-политика (нужна для RETURNING) требовала membership, которого
+  // при СОЗДАНИИ нового пространства ещё нет. Клиентский isPermanentError
+  // классифицирует 403 и "row-level security" как ПОСТОЯННЫЕ (push.ts) →
+  // markFailure выставил этим строкам attempt_count = MAX_ATTEMPTS и префикс
+  // last_error='[permanent] ...'. Такие строки isReadyForRetry пропускает
+  // НАВСЕГДА — то есть даже после деплоя серверного фикса 0037 ранее
+  // застрявшие пространства НЕ будут повторно отправлены без нового локального
+  // изменения. Симптом: pending sync висит (9/21), созданные пространства
+  // «не долетают» и теряются при переключении аккаунта.
+  //
+  // ЧТО ДЕЛАЕМ: одноразово сбрасываем attempt_count=0, last_attempt_at=NULL,
+  // last_error=NULL для строк, застрявших ИМЕННО по этой причине — т.е.
+  // last_error содержит маркеры RLS/403 (а также 42501 / permission denied).
+  // Прочие permanent-ошибки (23502 not-null, 23514 check, 42703 undefined
+  // column, невалидный синтаксис) НЕ трогаем — они настоящие и ретрай их лишь
+  // сожжёт бюджет. После сброса readReadyBatch снова возьмёт строки, а сервер
+  // (0037) теперь их примет. Идемпотентно: повторный прогон не найдёт строк с
+  // такими маркерами (last_error обнулён / строки удалены при успехе).
+  //
+  // NB: ничего не пушим здесь напрямую — только помечаем к ретраю; фактический
+  // push произойдёт в ближайшем syncNow под платным гейтом (free остаётся
+  // локальным). Совпадает с политикой: gate решает МОЖНО ли пушить.
+  // ================================================================
+  {
+    version: 14,
+    description: 'Reset outbox rows stuck on RLS/403 after server fix 0037 (Wave A PR-hotfix)',
+    up: async ({ exec }) => {
+      await exec(
+        `UPDATE sync_outbox
+            SET attempt_count = 0,
+                last_attempt_at = NULL,
+                last_error = NULL
+          WHERE attempt_count >= 5
+            AND last_error IS NOT NULL
+            AND (
+              lower(last_error) LIKE '%row-level security%'
+              OR lower(last_error) LIKE '%row level security%'
+              OR last_error LIKE '%42501%'
+              OR lower(last_error) LIKE '%permission denied%'
+              OR last_error LIKE '%403%'
+            )`,
+      );
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */
