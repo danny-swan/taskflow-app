@@ -16,7 +16,7 @@
 -- Стиль — как 09_workspaces_test.sql. Выполняется на vanilla Postgres 15 (CI).
 
 BEGIN;
-SELECT plan(23);
+SELECT plan(24);
 
 -- ─── 1. RPC find_user_by_public_id: структура ───────────────────────────────
 SELECT has_function(
@@ -212,13 +212,36 @@ SELECT lives_ok(
 );
 RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
--- ─── 4. Soft-delete пространства: личное нельзя, shared owner может ──────────
--- Личное: даже owner не может soft-удалить (block_personal_workspace_delete).
+-- ─── 4. Soft-delete пространства: СИСТЕМНОЕ личное нельзя, shared owner может ─
+-- ПОСЛЕ 0036 block_personal_workspace_delete защищает ТОЛЬКО системное личное
+-- пространство с детерминированным id = 'ws_' || replace(owner_id,'-','').
+-- Дополнительные personal-пространства (произвольный id) теперь удаляемы.
+-- Создаём СИСТЕМНОЕ личное пространство для u_own и проверяем гейт.
+DO $$
+DECLARE
+  u_own uuid := 'c1111111-1111-1111-1111-111111111111'::uuid;
+  v_sys text := 'ws_' || replace('c1111111-1111-1111-1111-111111111111', '-', '');
+BEGIN
+  INSERT INTO public.sync_workspaces (id, user_id, owner_id, name, kind)
+    VALUES (v_sys, u_own, u_own, 'SystemPersonal', 'personal')
+    ON CONFLICT DO NOTHING;
+  INSERT INTO public.sync_workspace_members (id, workspace_id, user_id, role)
+    VALUES ('mm-sys-own-10', v_sys, u_own, 'owner')
+    ON CONFLICT DO NOTHING;
+END$$;
+
+-- Системное личное: даже owner не может soft-удалить (block_personal_workspace_delete).
 SET LOCAL ROLE authenticated;
 SET LOCAL request.jwt.claim.sub TO 'c1111111-1111-1111-1111-111111111111';
 SELECT throws_ok(
+  $$ UPDATE public.sync_workspaces SET deleted_at = now()
+       WHERE id = 'ws_c1111111111111111111111111111111' $$,
+  '23514', NULL, 'СИСТЕМНОЕ личное пространство нельзя soft-удалить (0036)'
+);
+-- Дополнительное personal (произвольный id) — owner МОЖЕТ soft-удалить (0036).
+SELECT lives_ok(
   $$ UPDATE public.sync_workspaces SET deleted_at = now() WHERE id = 'ws-mem-10' $$,
-  '23514', NULL, 'личное пространство нельзя soft-удалить'
+  'дополнительное personal-пространство (произвольный id) owner может soft-удалить (0036)'
 );
 RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 

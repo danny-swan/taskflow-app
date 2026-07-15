@@ -174,35 +174,38 @@ SELECT is((SELECT count(*)::int FROM public.sync_overdue_events    WHERE id='o_s
 SELECT is((SELECT count(*)::int FROM public.sync_task_hold_periods WHERE id='h_sel'),1,'E: editor SELECT sync_task_hold_periods');
 
 SELECT lives_ok($$ INSERT INTO public.sync_tasks (id,user_id,workspace_id,title) VALUES ('t_ie','a0000014-0000-0000-0000-000000000002','ws14','x') $$,'E: editor INSERT sync_tasks');
-SELECT lives_ok($$ INSERT INTO public.sync_statuses (id,user_id,workspace_id,name,color) VALUES ('s_ie','a0000014-0000-0000-0000-000000000002','ws14','x','#000') $$,'E: editor INSERT sync_statuses');
-SELECT lives_ok($$ INSERT INTO public.sync_tags (id,user_id,workspace_id,name,color) VALUES ('g_ie','a0000014-0000-0000-0000-000000000002','ws14','x','#000') $$,'E: editor INSERT sync_tags');
-SELECT lives_ok($$ INSERT INTO public.sync_task_templates (id,user_id,workspace_id,name) VALUES ('p_ie','a0000014-0000-0000-0000-000000000002','ws14','x') $$,'E: editor INSERT sync_task_templates');
+-- 0035: справочники (statuses/tags/templates) — owner-only write. editor НЕ пишет.
+SELECT throws_ok($$ INSERT INTO public.sync_statuses (id,user_id,workspace_id,name,color) VALUES ('s_ie','a0000014-0000-0000-0000-000000000002','ws14','x','#000') $$,'42501',NULL,'E: editor INSERT sync_statuses denied (0035 owner-only)');
+SELECT throws_ok($$ INSERT INTO public.sync_tags (id,user_id,workspace_id,name,color) VALUES ('g_ie','a0000014-0000-0000-0000-000000000002','ws14','x','#000') $$,'42501',NULL,'E: editor INSERT sync_tags denied (0035 owner-only)');
+SELECT throws_ok($$ INSERT INTO public.sync_task_templates (id,user_id,workspace_id,name) VALUES ('p_ie','a0000014-0000-0000-0000-000000000002','ws14','x') $$,'42501',NULL,'E: editor INSERT sync_task_templates denied (0035 owner-only)');
 SELECT lives_ok($$ INSERT INTO public.sync_overdue_events (id,user_id,workspace_id,task_id,deadline_snapshot,event_date) VALUES ('o_ie','a0000014-0000-0000-0000-000000000002','ws14','tk14base','2026-01-01','2026-01-02') $$,'E: editor INSERT sync_overdue_events');
 SELECT lives_ok($$ INSERT INTO public.sync_task_hold_periods (id,user_id,workspace_id,task_id,started_at) VALUES ('h_ie','a0000014-0000-0000-0000-000000000002','ws14','tk14base',now()) $$,'E: editor INSERT sync_task_hold_periods');
 
 UPDATE public.sync_tasks             SET title='byE'         WHERE id='t_upd';
+-- 0035: editor UPDATE справочников — no-op под RLS (owner-only), значение остаётся 'orig'.
 UPDATE public.sync_statuses          SET name='byE'          WHERE id='s_upd';
 UPDATE public.sync_tags              SET name='byE'          WHERE id='g_upd';
 UPDATE public.sync_task_templates    SET name='byE'          WHERE id='p_upd';
 UPDATE public.sync_task_hold_periods SET ended_at='2030-02-02 00:00:00+00' WHERE id='h_upd';
 UPDATE public.sync_overdue_events    SET event_date='2030-02-02' WHERE id='o_upd';
 SELECT is((SELECT title      FROM public.sync_tasks             WHERE id='t_upd'),'byE','E: editor UPDATE sync_tasks');
-SELECT is((SELECT name       FROM public.sync_statuses          WHERE id='s_upd'),'byE','E: editor UPDATE sync_statuses');
-SELECT is((SELECT name       FROM public.sync_tags              WHERE id='g_upd'),'byE','E: editor UPDATE sync_tags');
-SELECT is((SELECT name       FROM public.sync_task_templates    WHERE id='p_upd'),'byE','E: editor UPDATE sync_task_templates');
+SELECT is((SELECT name       FROM public.sync_statuses          WHERE id='s_upd'),'orig','E: editor UPDATE sync_statuses denied (0035 owner-only, значение не изменилось)');
+SELECT is((SELECT name       FROM public.sync_tags              WHERE id='g_upd'),'orig','E: editor UPDATE sync_tags denied (0035 owner-only, значение не изменилось)');
+SELECT is((SELECT name       FROM public.sync_task_templates    WHERE id='p_upd'),'orig','E: editor UPDATE sync_task_templates denied (0035 owner-only, значение не изменилось)');
 SELECT is((SELECT ended_at   FROM public.sync_task_hold_periods WHERE id='h_upd'),'2030-02-02 00:00:00+00'::timestamptz,'E: editor UPDATE sync_task_hold_periods');
 SELECT is((SELECT event_date FROM public.sync_overdue_events    WHERE id='o_upd'),'2030-02-02'::date,'E: editor UPDATE sync_overdue_events');
 
 DELETE FROM public.sync_tasks             WHERE id='t_dele';
+-- 0035: editor DELETE справочников — no-op под RLS (owner-only), строка остаётся (count=1).
 DELETE FROM public.sync_statuses          WHERE id='s_dele';
 DELETE FROM public.sync_tags              WHERE id='g_dele';
 DELETE FROM public.sync_task_templates    WHERE id='p_dele';
 DELETE FROM public.sync_overdue_events    WHERE id='o_dele';
 DELETE FROM public.sync_task_hold_periods WHERE id='h_dele';
 SELECT is((SELECT count(*)::int FROM public.sync_tasks             WHERE id='t_dele'),0,'E: editor DELETE sync_tasks');
-SELECT is((SELECT count(*)::int FROM public.sync_statuses          WHERE id='s_dele'),0,'E: editor DELETE sync_statuses');
-SELECT is((SELECT count(*)::int FROM public.sync_tags              WHERE id='g_dele'),0,'E: editor DELETE sync_tags');
-SELECT is((SELECT count(*)::int FROM public.sync_task_templates    WHERE id='p_dele'),0,'E: editor DELETE sync_task_templates');
+SELECT is((SELECT count(*)::int FROM public.sync_statuses          WHERE id='s_dele'),1,'E: editor DELETE sync_statuses denied (0035 owner-only, строка на месте)');
+SELECT is((SELECT count(*)::int FROM public.sync_tags              WHERE id='g_dele'),1,'E: editor DELETE sync_tags denied (0035 owner-only, строка на месте)');
+SELECT is((SELECT count(*)::int FROM public.sync_task_templates    WHERE id='p_dele'),1,'E: editor DELETE sync_task_templates denied (0035 owner-only, строка на месте)');
 SELECT is((SELECT count(*)::int FROM public.sync_overdue_events    WHERE id='o_dele'),0,'E: editor DELETE sync_overdue_events');
 SELECT is((SELECT count(*)::int FROM public.sync_task_hold_periods WHERE id='h_dele'),0,'E: editor DELETE sync_task_hold_periods');
 
