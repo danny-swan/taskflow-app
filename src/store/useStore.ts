@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import * as db from '../lib/db';
 import type { Lang } from '../lib/i18n';
 import { tr } from '../lib/i18n';
-import { computeWorkspaceId } from '../lib/sync/workspace';
+import { computeWorkspaceId, LOCAL_WS_ID } from '../lib/sync/workspace';
 import { detectOverdueEvents, detectOverdueEventForTask } from '../lib/overdue';
 import { recordHoldTransition } from '../lib/holdPeriods';
 import { todayISO } from '../lib/utils';
@@ -305,7 +305,7 @@ function readWorkspacesFromDb(): Workspace[] {
             WHERE uuid IS NOT NULL AND deleted_at IS NULL
             ORDER BY sort_order, id`,
         );
-    return rows
+    const list: Workspace[] = rows
       .filter(r => !!r.uuid)
       .map(r => ({
         id: r.uuid as string,
@@ -314,10 +314,51 @@ function readWorkspacesFromDb(): Workspace[] {
         owner_id: r.owner_id ?? null,
         sort_order: r.sort_order ?? 0,
       }));
+    // Регрессия D/E: personal-ws (и ws_local) обязаны быть в сайдбаре ВСЕГДА —
+    // даже если строка членства ещё не подтянулась (до первого pull, после
+    // clearUserData, при рассинхроне bound_user_id). Иначе EXISTS-фильтр выше
+    // отсеивает personal и экран пуст.
+    if (boundUserId) {
+      ensurePersonalInList(list, boundUserId);
+    }
+    return list;
   } catch {
     // Таблица workspaces отсутствует на базе до v11 — не критично.
     return [];
   }
+}
+
+/**
+ * Гарантировать, что в списке пространств присутствует personal-ws текущего
+ * пользователя (`ws_<uid>`) и, если он локально есть, `ws_local`. Если строки
+ * ws нет вовсе — синтезируем минимальный personal, чтобы переключателю всегда
+ * было куда встать (writer'ы всё равно создадут строку при первом изменении).
+ */
+function ensurePersonalInList(list: Workspace[], boundUserId: string): void {
+  const addByIdIfMissing = (wsId: string, synthesize: boolean) => {
+    if (list.some(w => w.id === wsId)) return;
+    let row: { uuid: string | null; name: string; kind: string; owner_id: string | null; sort_order: number } | null | undefined;
+    try {
+      row = db.get(
+        'SELECT uuid, name, kind, owner_id, sort_order FROM workspaces WHERE uuid=? AND deleted_at IS NULL',
+        [wsId],
+      );
+    } catch { /* таблицы может не быть до v11 */ }
+    if (row?.uuid) {
+      list.unshift({
+        id: row.uuid,
+        name: row.name,
+        kind: row.kind,
+        owner_id: row.owner_id ?? null,
+        sort_order: row.sort_order ?? 0,
+      });
+    } else if (synthesize) {
+      logger.warn('[useStore] personal workspace row missing — synthesizing sidebar entry:', wsId);
+      list.unshift({ id: wsId, name: 'Мои задачи', kind: 'personal', owner_id: boundUserId, sort_order: 0 });
+    }
+  };
+  addByIdIfMissing(computeWorkspaceId(boundUserId), true);
+  addByIdIfMissing(LOCAL_WS_ID, false);
 }
 
 /** Прочитать участников всех пространств из локальной таблицы `workspace_members`. */
@@ -727,6 +768,11 @@ export const useStore = create<State>((set, get) => ({
     seedDefaultStatuses(wsUuid);
     get().loadWorkspaces();
     get().loadWorkspaceMembers();
+    // Диагностика D/E: только что созданный ws ОБЯЗАН попасть в сайдбар. Если нет
+    // — сработал EXISTS-фильтр readWorkspacesFromDb (рассинхрон bound_user_id).
+    if (!get().workspaces.some(w => w.id === wsUuid)) {
+      logger.warn('[createWorkspace] новый ws не попал в readWorkspacesFromDb (рассинхрон bound_user_id?):', wsUuid);
+    }
     get().switchWorkspace(wsUuid);
     return wsUuid;
   },

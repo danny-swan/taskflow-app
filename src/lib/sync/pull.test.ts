@@ -410,4 +410,40 @@ describe('pull worker: prunePhantomWorkspaces (Bug #1)', () => {
     expect(removed).toBe(0);
     expect(wsUuids()).toEqual(['ws_local', PERSONAL]);
   });
+
+  it('Bug D/E: не удаляет свежесозданный shared-ws с pending outbox (ещё до первого pull)', async () => {
+    const { _internals } = await import('./pull');
+    insertWs(PERSONAL, 'personal');
+    insertMember(PERSONAL, UID, 'owner', null);
+    // Только что создан локально: строка ws есть, членства ещё нет, но ws висит
+    // в sync_outbox (push не долетел). Прунить нельзя — иначе «исчезнет».
+    insertWs('ws_new', 'shared');
+    liveDb!.run(
+      `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('workspaces', 'ws_new', 'upsert', datetime('now'), 0)`,
+    );
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(0);
+    expect(wsUuids()).toEqual(['ws_local', 'ws_new', PERSONAL]);
+  });
+
+  it('Bug D/E: защищает ws через pending member-строку в outbox (по join)', async () => {
+    const { _internals } = await import('./pull');
+    insertWs(PERSONAL, 'personal');
+    insertMember(PERSONAL, UID, 'owner', null);
+    // ws_m: активного членства нет в allow-list (строка soft-deleted → query её не
+    // выберет), но member-uuid висит в outbox — join должен вернуть ws в allowed.
+    insertWs('ws_m', 'shared');
+    insertMember('ws_m', UID, 'owner', '2026-07-10'); // deleted_at → не в allow-list
+    liveDb!.run(
+      `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('workspace_members', ?, 'upsert', datetime('now'), 0)`,
+      [`wsm_ws_m_${UID}`],
+    );
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(0);
+    expect(wsUuids()).toContain('ws_m');
+  });
 });

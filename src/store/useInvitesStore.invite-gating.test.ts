@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const inviteToWorkspace = vi.fn(async () => ({ id: 'inv_1' }));
 const listWorkspaceInvites = vi.fn(async () => []);
 const workspaceHasPendingOutbox = vi.fn<(id: string | null | undefined) => boolean>();
+const workspaceOutboxFailedPermanently = vi.fn<(id: string | null | undefined) => boolean>();
 const syncNow = vi.fn(async () => ({ ok: true }));
 
 // Мокаем сервисный слой инвайтов, но сохраняем настоящий-совместимый InviteRpcError,
@@ -40,6 +41,7 @@ vi.mock('../lib/invites', () => {
 
 vi.mock('../lib/outbox', () => ({
   workspaceHasPendingOutbox: (id: string | null | undefined) => workspaceHasPendingOutbox(id),
+  workspaceOutboxFailedPermanently: (id: string | null | undefined) => workspaceOutboxFailedPermanently(id),
 }));
 
 vi.mock('../lib/sync', () => ({
@@ -62,6 +64,7 @@ beforeEach(() => {
   listWorkspaceInvites.mockClear();
   syncNow.mockReset().mockResolvedValue({ ok: true } as never);
   workspaceHasPendingOutbox.mockReset();
+  workspaceOutboxFailedPermanently.mockReset().mockReturnValue(false);
 });
 
 describe('useInvitesStore.invite — гейт доставки ws (Bug #2)', () => {
@@ -105,5 +108,27 @@ describe('useInvitesStore.invite — гейт доставки ws (Bug #2)', () 
     await expect(useInvitesStore.getState().invite(params)).rejects.toMatchObject({
       code: 'not_authorized',
     });
+  });
+
+  it('push ws упал безвозвратно (permanent): ws_sync_failed, syncNow и RPC не зовутся (Bug A)', async () => {
+    // Гейт сразу видит permanent-строку → не тянет время «синхронизируется».
+    workspaceOutboxFailedPermanently.mockReturnValue(true);
+    workspaceHasPendingOutbox.mockReturnValue(true);
+    await expect(useInvitesStore.getState().invite(params)).rejects.toMatchObject({
+      code: 'ws_sync_failed',
+    });
+    expect(syncNow).not.toHaveBeenCalled();
+    expect(inviteToWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('permanent появился только после syncNow: ws_sync_failed, RPC не зовётся (Bug A)', async () => {
+    // До flush — просто pending; после flush строка перешла в permanent.
+    workspaceHasPendingOutbox.mockReturnValue(true);
+    workspaceOutboxFailedPermanently.mockReturnValueOnce(false).mockReturnValue(true);
+    await expect(useInvitesStore.getState().invite(params)).rejects.toMatchObject({
+      code: 'ws_sync_failed',
+    });
+    expect(syncNow).toHaveBeenCalledTimes(1);
+    expect(inviteToWorkspace).not.toHaveBeenCalled();
   });
 });

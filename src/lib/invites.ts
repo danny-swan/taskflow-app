@@ -45,7 +45,8 @@ export type InviteErrorCode =
   | 'limit_exceeded'      // 22023 'workspace limit exceeded' (на accept)
   | 'invite_expired'      // истёкший инвайт
   | 'invite_not_pending'  // инвайт не в статусе pending / не найден
-  | 'ws_not_synced'       // клиентский гейт: ws ещё не доставлен на сервер (push не прошёл)
+  | 'ws_not_synced'       // клиентский гейт: ws ещё не доставлен на сервер (push не прошёл, но ретраится)
+  | 'ws_sync_failed'      // клиентский гейт: push ws упал безвозвратно (permanent/исчерпан лимит)
   | 'unknown';
 
 /** Форма ошибки, возвращаемая наружу (совместимо с брифом PR-b-04). */

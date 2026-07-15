@@ -68,7 +68,9 @@ function isReadyForRetry(attemptCount: number, lastAttemptAt: string | null): bo
 export function isPermanentError(errorMsg: string): boolean {
   const m = errorMsg.toLowerCase();
   // Postgres SQLSTATE codes (23503 намеренно НЕ здесь — см. jsdoc / retry ниже).
-  if (/\b42501\b|\b42p01\b|\b42703\b|\b22p02\b/.test(m)) return true;
+  // 23502 (not-null) и 23514 (check) — permanent: строка не пройдёт валидацию
+  // сервера ни на одной попытке (ретрай лишь жёг бы бюджет и держал гейт).
+  if (/\b42501\b|\b42p01\b|\b42703\b|\b22p02\b|\b23502\b|\b23514\b/.test(m)) return true;
   // PostgREST codes
   if (/\bpgrst\d{3}\b/.test(m)) return true;
   // RLS
@@ -113,8 +115,18 @@ interface OutboxRow {
  * или превышен лимит попыток).
  */
 function readReadyBatch(): { spec: TableSpec; op: 'upsert' | 'delete'; rows: OutboxRow[] }[] {
+  // Bug A: parent-строки (workspaces, затем workspace_members) выбираем ПЕРВЫМИ,
+  // чтобы поток из 50+ задач не вытеснял только что созданный ws за окно батча
+  // (head-of-line starvation) — иначе child'ы вечно ловят FK 23503, а ws не
+  // доезжает и гейт инвайтов висит. Внутри группы порядок по id сохраняется.
   const all = db.all<OutboxRow>(
-    'SELECT id, entity_table, entity_uuid, op, queued_at, attempt_count, last_attempt_at, last_error FROM sync_outbox ORDER BY id LIMIT ?',
+    `SELECT id, entity_table, entity_uuid, op, queued_at, attempt_count, last_attempt_at, last_error
+       FROM sync_outbox
+      ORDER BY CASE entity_table
+                 WHEN 'workspaces' THEN 0
+                 WHEN 'workspace_members' THEN 1
+                 ELSE 2 END, id
+      LIMIT ?`,
     [BATCH_SIZE],
   );
   const groups = new Map<string, { spec: TableSpec; op: 'upsert' | 'delete'; rows: OutboxRow[] }>();

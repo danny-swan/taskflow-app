@@ -723,6 +723,20 @@ function prunePhantomWorkspaces(userId: string): number {
     return 0;
   }
 
+  // Регрессия D/E: только что созданные локально ws (и их owner-membership) ещё
+  // не подтверждены pull'ом — они висят в sync_outbox. Не сносим их, иначе pull
+  // удалит свежесозданный shared-ws до первого round-trip, и он «исчезнет».
+  try {
+    const pend = db.all<{ workspace_id: string | null }>(
+      `SELECT entity_uuid AS workspace_id FROM sync_outbox WHERE entity_table='workspaces'
+       UNION
+       SELECT m.workspace_id FROM sync_outbox o
+         JOIN workspace_members m ON m.uuid = o.entity_uuid
+        WHERE o.entity_table='workspace_members'`,
+    );
+    for (const r of pend) if (r.workspace_id) allowed.add(r.workspace_id);
+  } catch { /* sync_outbox недоступен в отдельных путях — не критично */ }
+
   const ids = [...allowed];
   const placeholders = ids.map(() => '?').join(',');
   let removed = 0;

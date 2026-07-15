@@ -26,7 +26,7 @@ import {
   type InviteRole,
   type WorkspaceInvite,
 } from '../lib/invites';
-import { workspaceHasPendingOutbox } from '../lib/outbox';
+import { workspaceHasPendingOutbox, workspaceOutboxFailedPermanently } from '../lib/outbox';
 
 interface InvitesState {
   myPending: WorkspaceInvite[];                        // мои входящие pending
@@ -55,12 +55,21 @@ interface InvitesState {
  * ws_not_synced вместо обращения к RPC.
  */
 async function ensureWorkspaceSynced(workspaceId: string): Promise<void> {
+  // Уже упало безвозвратно (permanent/исчерпан лимит) — не тянем время «ещё
+  // синхронизируется», сразу говорим о сбое доставки.
+  if (workspaceOutboxFailedPermanently(workspaceId)) {
+    throw new InviteRpcError('ws_sync_failed', 'workspace push failed permanently');
+  }
   if (!workspaceHasPendingOutbox(workspaceId)) return;
   try {
     const m = await import('../lib/sync');
     await m.syncNow?.();
   } catch (e) {
     logger.warn('[invites] syncNow before invite failed:', e);
+  }
+  // После sync строки могли перейти в permanent — отличаем «упало» от «ещё едет».
+  if (workspaceOutboxFailedPermanently(workspaceId)) {
+    throw new InviteRpcError('ws_sync_failed', 'workspace push failed permanently');
   }
   if (workspaceHasPendingOutbox(workspaceId)) {
     throw new InviteRpcError('ws_not_synced', 'workspace not yet synced to server');

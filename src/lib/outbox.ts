@@ -11,6 +11,7 @@
  * API синхронный — соответствует db.run/db.all в остальном сторе.
  */
 import * as db from './db';
+import { MAX_ATTEMPTS } from './sync/push';
 
 /** Таблицы, изменения которых синхронизируются. */
 export type SyncEntityTable =
@@ -107,16 +108,47 @@ export function outboxPendingCount(): number {
 export function workspaceHasPendingOutbox(workspaceId: string | null | undefined): boolean {
   if (!workspaceId) return false;
   try {
+    // Bug A: исчерпанные/permanent-строки (attempt_count >= MAX_ATTEMPTS) НЕ
+    // считаем «pending» — иначе неотправляемая (напр. RLS 42501) строка держала
+    // бы гейт инвайтов вечно true. Такие строки трактует
+    // workspaceOutboxFailedPermanently — инвайт-флоу показывает ошибку, а не
+    // бесконечное «синхронизируется».
     const row = db.get<{ n: number }>(
       `SELECT (
          (SELECT COUNT(*) FROM sync_outbox
-            WHERE entity_table = 'workspaces' AND entity_uuid = ?)
+            WHERE entity_table = 'workspaces' AND entity_uuid = ? AND attempt_count < ?)
          +
          (SELECT COUNT(*) FROM sync_outbox o
             JOIN workspace_members m ON m.uuid = o.entity_uuid
-           WHERE o.entity_table = 'workspace_members' AND m.workspace_id = ?)
+           WHERE o.entity_table = 'workspace_members' AND m.workspace_id = ? AND o.attempt_count < ?)
        ) AS n`,
-      [workspaceId, workspaceId],
+      [workspaceId, MAX_ATTEMPTS, workspaceId, MAX_ATTEMPTS],
+    );
+    return (row?.n ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Есть ли по пространству outbox-строки, упавшие БЕЗВОЗВРАТНО (исчерпан лимит
+ * попыток / permanent-ошибка), т.е. push этого ws точно не долетит без
+ * вмешательства. Инвайт-флоу использует это, чтобы отличить «ещё синкается» от
+ * «упало навсегда» (иначе гейт вис бы на вечном «синхронизируется»).
+ */
+export function workspaceOutboxFailedPermanently(workspaceId: string | null | undefined): boolean {
+  if (!workspaceId) return false;
+  try {
+    const row = db.get<{ n: number }>(
+      `SELECT (
+         (SELECT COUNT(*) FROM sync_outbox
+            WHERE entity_table = 'workspaces' AND entity_uuid = ? AND attempt_count >= ?)
+         +
+         (SELECT COUNT(*) FROM sync_outbox o
+            JOIN workspace_members m ON m.uuid = o.entity_uuid
+           WHERE o.entity_table = 'workspace_members' AND m.workspace_id = ? AND o.attempt_count >= ?)
+       ) AS n`,
+      [workspaceId, MAX_ATTEMPTS, workspaceId, MAX_ATTEMPTS],
     );
     return (row?.n ?? 0) > 0;
   } catch {

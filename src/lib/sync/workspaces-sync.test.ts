@@ -380,6 +380,39 @@ describe('(e) reconcilePersonalWorkspace: ws_local → ws_<uid>', () => {
     expect(reconcilePersonalWorkspace(USER_ID)).toBe(false);
   });
 
+  it('Bug D/E: воссоздаёт строку personal-ws + owner-membership на голой базе (нет ни ws_<uid>, ни ws_local)', async () => {
+    liveDb = null;
+    await setupDb(true);
+    const { reconcilePersonalWorkspace } = await import('./workspace');
+    // Симулируем «данные пропали»: ни одной строки ws/членства (как после
+    // clearUserData при рассинхроне, до первого pull).
+    liveDb!.run(`DELETE FROM workspace_members`);
+    liveDb!.run(`DELETE FROM workspaces`);
+    expect(liveDb!.exec(`SELECT COUNT(*) FROM workspaces`)[0].values[0][0]).toBe(0);
+
+    const did = reconcilePersonalWorkspace(USER_ID);
+    expect(did).toBe(true);
+
+    // personal-ws воссоздан с детерминированным uuid и owner_id.
+    const wsRow = liveDb!.exec(`SELECT uuid, kind, owner_id FROM workspaces WHERE uuid=?`, [WS])[0].values[0];
+    expect(wsRow[0]).toBe(WS);
+    expect(wsRow[1]).toBe('personal');
+    expect(wsRow[2]).toBe(USER_ID);
+    // owner-membership воссоздан.
+    const member = liveDb!.exec(
+      `SELECT uuid, user_id, role FROM workspace_members WHERE workspace_id=?`, [WS],
+    )[0].values[0];
+    expect(member[0]).toBe('wsm_' + USER_ID.toLowerCase().replace(/-/g, ''));
+    expect(member[1]).toBe(USER_ID);
+    expect(member[2]).toBe('owner');
+    // Обе сущности попали в outbox для доставки на сервер.
+    const obTables = liveDb!.exec(`SELECT DISTINCT entity_table FROM sync_outbox`)[0]?.values.map(r => r[0]) ?? [];
+    expect(obTables).toContain('workspaces');
+    expect(obTables).toContain('workspace_members');
+    // Идемпотентность: повторный вызов уже ничего не создаёт.
+    expect(reconcilePersonalWorkspace(USER_ID)).toBe(false);
+  });
+
   it('current указывает на чужой ws (нет членства) → переставляет на ws_<uid>', async () => {
     liveDb = null;
     await setupDb(true); // привязана под USER_ID, v11 → current = ws_<uid>

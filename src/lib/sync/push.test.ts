@@ -326,3 +326,65 @@ describe('push worker', () => {
     expect(upsertCalls[0].rows[0].deleted_at).toBeTruthy();
   });
 });
+
+describe('isPermanentError (Bug A — регресс-якоря)', () => {
+  it('42501 (RLS) — permanent', async () => {
+    const { _internals } = await import('./push');
+    expect(_internals.isPermanentError('new row violates row-level security policy (42501)')).toBe(true);
+    expect(_internals.isPermanentError('permission denied 42501')).toBe(true);
+  });
+
+  it('23502 (not-null) и 23514 (check) — permanent', async () => {
+    const { _internals } = await import('./push');
+    expect(_internals.isPermanentError('null value in column "owner_id" (23502)')).toBe(true);
+    expect(_internals.isPermanentError('violates check constraint (23514)')).toBe(true);
+  });
+
+  it('23503 (FK) — НЕ permanent (транзиентно, ретраится)', async () => {
+    const { _internals } = await import('./push');
+    expect(_internals.isPermanentError('violates foreign key constraint (23503)')).toBe(false);
+    expect(_internals.isForeignKeyViolation('violates foreign key constraint (23503)')).toBe(true);
+  });
+
+  it('сетевые/5xx — НЕ permanent', async () => {
+    const { _internals } = await import('./push');
+    expect(_internals.isPermanentError('network down')).toBe(false);
+    expect(_internals.isPermanentError('503 service unavailable')).toBe(false);
+  });
+});
+
+describe('workspaceToCloudPayload / memberToCloudPayload — живой owner (Bug A)', () => {
+  it('owner_id/user_id ws берутся из живой сессии, а не из протухшего локального owner_id', async () => {
+    const { workspaceToCloudPayload } = await import('./mappers');
+    const row: any = {
+      uuid: 'ws_s1', name: 'Shared', kind: 'shared',
+      owner_id: 'STALE-FOREIGN-UID', // рассинхрон bound_user_id
+      version: 1, client_id: 'c', updated_at: new Date().toISOString(), deleted_at: null,
+    };
+    const payload = workspaceToCloudPayload(row, 'LIVE-UID', 'client-1');
+    expect(payload.owner_id).toBe('LIVE-UID');
+    expect(payload.user_id).toBe('LIVE-UID');
+  });
+
+  it('owner-membership: user_id берётся из живой сессии', async () => {
+    const { memberToCloudPayload } = await import('./mappers');
+    const row: any = {
+      uuid: 'wsm_1', workspace_id: 'ws_s1', role: 'owner',
+      user_id: 'STALE-FOREIGN-UID', invited_by: null, joined_at: null,
+      version: 1, client_id: 'c', updated_at: new Date().toISOString(), deleted_at: null,
+    };
+    const payload = memberToCloudPayload(row, 'LIVE-UID', 'client-1');
+    expect(payload.user_id).toBe('LIVE-UID');
+  });
+
+  it('НЕ-owner membership: чужой user_id сохраняется (invite/remove участника)', async () => {
+    const { memberToCloudPayload } = await import('./mappers');
+    const row: any = {
+      uuid: 'wsm_2', workspace_id: 'ws_s1', role: 'editor',
+      user_id: 'OTHER-MEMBER-UID', invited_by: 'LIVE-UID', joined_at: null,
+      version: 1, client_id: 'c', updated_at: new Date().toISOString(), deleted_at: null,
+    };
+    const payload = memberToCloudPayload(row, 'LIVE-UID', 'client-1');
+    expect(payload.user_id).toBe('OTHER-MEMBER-UID');
+  });
+});
