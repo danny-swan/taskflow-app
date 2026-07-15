@@ -13,6 +13,7 @@ import { Topbar } from './components/Topbar';
 import { ToastStack } from './components/Toast';
 import { Onboarding } from './components/Onboarding';
 import { OnboardingErrorBoundary } from './components/OnboardingErrorBoundary';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { AuthScreen } from './components/AuthScreen';
 import { PasswordResetModal } from './components/PasswordResetModal';
 import { CommandPalette } from './components/CommandPalette';
@@ -256,6 +257,7 @@ function App() {
 
   return (
     <ThemeProvider>
+      <AppErrorBoundary>
       <div className="flex h-full bg-bg text-text">
         <Sidebar />
         <main className="flex-1 flex flex-col overflow-hidden relative">
@@ -305,6 +307,7 @@ function App() {
         {/* v0.9.29: Command Palette */}
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       </div>
+      </AppErrorBoundary>
     </ThemeProvider>
   );
 }

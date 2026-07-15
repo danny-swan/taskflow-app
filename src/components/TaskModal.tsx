@@ -64,6 +64,19 @@ export function TaskModal({
 
   if (!draft) return null;
 
+  // Bug C: после смены ws / pull статус или тэг задачи может «повиснуть» —
+  // указывать на id, которого нет в наборе текущего пространства. Резолвим
+  // терпимо: статус → первый доступный не-технический, тэг → «—» (null).
+  // Без этого value/options у <select> расходятся, а обращения к .name у
+  // отсутствующей записи роняли модалку в белый экран.
+  const visibleStatuses = statuses.filter(s => s.is_technical !== 1);
+  const resolvedStatusId = visibleStatuses.some(s => s.id === draft.status_id)
+    ? draft.status_id
+    : (visibleStatuses[0]?.id ?? draft.status_id);
+  const resolvedTagId = draft.tag_id != null && tags.some(t => t.id === draft.tag_id)
+    ? draft.tag_id
+    : null;
+
   const save = () => {
     updateTask(draft.id, {
       title: draft.title,
@@ -155,20 +168,20 @@ export function TaskModal({
           <div className="grid grid-cols-2 gap-4 mb-4">
             <Field label={tr(lang, 'status')}>
               <select
-                value={draft.status_id}
+                value={resolvedStatusId}
                 disabled={!canEdit}
                 title={!canEdit ? tr(lang, 'ws_viewer_readonly_tooltip') : undefined}
                 onChange={(e) => setDraft({ ...draft, status_id: parseInt(e.target.value, 10) })}
                 className={'w-full bg-surface-alt border border-border-soft rounded px-2.5 py-1.5 text-[13px] ' + (!canEdit ? 'opacity-60 cursor-not-allowed' : '')}
               >
-                {statuses.filter(s => s.is_technical !== 1).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                {visibleStatuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </Field>
             <Field label={tr(lang, 'tag')}>
               {!showNewTag ? (
                 <div className="flex gap-1.5">
                   <select
-                    value={draft.tag_id ?? ''}
+                    value={resolvedTagId ?? ''}
                     disabled={!canEdit}
                     title={!canEdit ? tr(lang, 'ws_viewer_readonly_tooltip') : undefined}
                     onChange={(e) => setDraft({ ...draft, tag_id: e.target.value ? parseInt(e.target.value, 10) : null })}
