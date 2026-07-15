@@ -506,7 +506,11 @@ export function workspaceToCloudPayload(
   userId: string,
   clientId: string,
 ): CloudWorkspacePayload {
-  const owner = row.owner_id ?? userId;
+  // Bug A: серверный RLS требует owner_id=auth.uid() AND user_id=auth.uid() на
+  // INSERT sync_workspaces. Пушить ws может ТОЛЬКО его владелец, поэтому живой
+  // userId из сессии авторитетнее локального owner_id (который мог протухнуть при
+  // рассинхроне bound_user_id и давал вечный 42501 → залипший outbox).
+  const owner = userId || row.owner_id || '';
   return {
     id: row.uuid,
     user_id: owner,            // Wave A: владелец == пользователь
@@ -561,7 +565,10 @@ export function memberToCloudPayload(
   return {
     id: row.uuid,
     workspace_id: row.workspace_id,
-    user_id: row.user_id ?? userId,
+    // owner-membership пушит только сам владелец → user_id обязан совпадать с
+    // auth.uid() живой сессии (иначе RLS 42501, как у workspaces). Чужие роли
+    // (invite/remove участника) не трогаем — там user_id принадлежит другому.
+    user_id: row.role === 'owner' ? (userId || row.user_id || '') : (row.user_id ?? userId),
     role: row.role,
     invited_by: row.invited_by,
     joined_at: row.joined_at,
