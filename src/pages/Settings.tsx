@@ -2134,6 +2134,26 @@ function AccountSection() {
     setBusy(true);
     try {
       await logEvent('logout');
+      // Fix 5: досылаем несинхронизированные изменения ДО убийства сессии.
+      // Иначе локально созданные данные (напр. новое личное ws) не долетят в
+      // облако и «пропадут» после выхода. Выход не блокируем: если push упал —
+      // предупреждаем и защищаем снимком, но signOut всё равно выполняется.
+      const uid = auth.session?.user?.id;
+      const email = auth.session?.user?.email ?? null;
+      if (uid) {
+        const { flushOutboxBeforeLogout } = await import('../lib/sync/logoutFlush');
+        const flush = await flushOutboxBeforeLogout(uid, email);
+        if (flush.attempted && flush.failed) {
+          try {
+            const m = await import('../lib/snapshots');
+            await m.createSnapshot('before_signout');
+          } catch { /* снимок best-effort, не блокирует выход */ }
+          pushToast(t(
+            'Есть несинхронизированные изменения — они сохранены локально в снимке',
+            'Some changes are not synced — they are saved locally in a snapshot',
+          ));
+        }
+      }
       await signOut();
       pushToast(t('Вы вышли из аккаунта', 'You have been signed out'));
     } catch (e: any) {

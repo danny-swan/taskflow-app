@@ -182,6 +182,7 @@ interface State {
   setWorkspaces(list: Workspace[]): void;
   loadWorkspaces(): void;                 // перечитать список из локальной БД + выбрать дефолт
   loadWorkspaceMembers(): void;           // перечитать участников из локальной БД
+  reloadAccountBinding(): void;           // Fix 2: перечитать bound_user_id + ws/members из БД
   switchWorkspace(id: string): void;      // сменить текущее ws (persist + refresh + resync)
 
   // Wave A (workspaces, PR-4): CRUD пространств. Все — локальная запись в SQLite
@@ -738,6 +739,22 @@ export const useStore = create<State>((set, get) => ({
 
   loadWorkspaceMembers() {
     set({ workspaceMembers: readMembersFromDb() });
+  },
+
+  // Fix 2 (fix-round2): перечитать привязку базы к аккаунту из settings и
+  // синхронно обновить in-memory boundUserId + список пространств/членства.
+  //
+  // Без этого после смены аккаунта (AccountSwitchGate) или после первого sync
+  // стор держит устаревший (или null) boundUserId, а computeRole (workspaceScope)
+  // не находит строку членства текущего пользователя → owner получает
+  // «Только владелец пространства может менять статусы…». Порядок важен:
+  // сперва boundUserId, затем members/workspaces — чтобы селекторы, пересчитанные
+  // на смену любого из этих срезов, уже видели актуальную привязку.
+  reloadAccountBinding() {
+    const boundUserId = (readSetting('bound_user_id') || '').trim() || null;
+    set({ boundUserId });
+    get().loadWorkspaceMembers();
+    get().loadWorkspaces();
   },
 
   createWorkspace(name, kind) {
