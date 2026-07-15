@@ -68,7 +68,63 @@ export function reconcilePersonalWorkspace(userId: string): boolean {
   if (target === LOCAL_WS_ID) return false;
 
   let changed = reconcileLocalPlaceholder(userId, target);
+  if (ensurePersonalWorkspaceRow(userId, target)) changed = true;
   if (pinWorkspacePointers(userId, target)) changed = true;
+  return changed;
+}
+
+/**
+ * Гарантировать, что локальная строка personal-ws `ws_<uid>` и owner-membership
+ * существуют, ДАЖЕ если `ws_local` отсутствует (нечего было переклеивать).
+ *
+ * Регрессия D/E + опора Fix F: после `clearUserData` (смена аккаунта) все строки
+ * workspaces/members стёрты, а `reconcileLocalPlaceholder` при отсутствии
+ * placeholder'а строку не создавал → сайдбар пуст, доска пуста. Здесь
+ * идемпотентно (INSERT OR IGNORE) создаём personal-ws + owner-membership с
+ * детерминированными id (совпадают с серверным backfill'ом 0027) и ставим их на
+ * push. Возвращает true, если что-то создали.
+ */
+function ensurePersonalWorkspaceRow(userId: string, target: string): boolean {
+  const memberUuid = 'wsm_' + userId.toLowerCase().replace(/-/g, '');
+  let changed = false;
+  try {
+    const wsExists = !!db.get<{ id: number }>(
+      'SELECT id FROM workspaces WHERE uuid=? AND deleted_at IS NULL',
+      [target],
+    );
+    if (!wsExists) {
+      db.run(
+        `INSERT OR IGNORE INTO workspaces (uuid, name, kind, owner_id, sort_order)
+         VALUES (?, 'Мои задачи', 'personal', ?, 0)`,
+        [target, userId],
+      );
+      enqueueOutbox('workspaces', target, 'upsert');
+      changed = true;
+    }
+    const memberExists = !!db.get<{ id: number }>(
+      `SELECT id FROM workspace_members
+        WHERE workspace_id=? AND user_id=? AND deleted_at IS NULL`,
+      [target, userId],
+    );
+    if (!memberExists) {
+      db.run(
+        `INSERT OR IGNORE INTO workspace_members (uuid, workspace_id, user_id, role)
+         VALUES (?, ?, ?, 'owner')`,
+        [memberUuid, target, userId],
+      );
+      // uuid мог существовать под другим составом — гарантируем корректную строку.
+      db.run(
+        `UPDATE workspace_members
+            SET user_id=?, role='owner', deleted_at=NULL
+          WHERE uuid=?`,
+        [userId, memberUuid],
+      );
+      enqueueOutbox('workspace_members', memberUuid, 'upsert');
+      changed = true;
+    }
+  } catch (e) {
+    logger.warn('[sync/workspace] ensurePersonalWorkspaceRow failed:', e);
+  }
   return changed;
 }
 

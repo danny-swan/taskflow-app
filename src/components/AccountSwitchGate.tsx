@@ -41,6 +41,7 @@ import {
   isWebSnapshotLimited,
 } from '../lib/snapshots';
 import { getEntitlement, isProOrTrial } from '../lib/entitlements';
+import { reconcilePersonalWorkspace } from '../lib/sync/workspace';
 import * as db from '../lib/db';
 
 // ─── i18n локально (компактный диф, как в PaywallModal) ───────────────────────
@@ -167,8 +168,30 @@ export function AccountSwitchGate() {
         const ent = await getEntitlement(sessionUserId, sessionUserEmail);
         if (cancelled) return;
         if (!isProOrTrial(ent)) {
-          // Free-аккаунт: синхронизации нет — окно не нужно. Помечаем сессию
-          // обработанной, чтобы не дёргать getEntitlement повторно.
+          // Free-аккаунт: облака/синхронизации у него нет, поэтому окно с тремя
+          // вариантами (cloud/local/merge) бессмысленно. Но оставлять локальные
+          // данные ПРОШЛОГО аккаунта видимыми под новым нельзя — это утечка между
+          // аккаунтами (баг F). Делаем локальную (без сети) перепривязку:
+          // снимок → очистка → bound_user_id=new → пересоздание personal-ws → сев.
+          try {
+            await createSnapshot('before_account_switch');
+            await db.clearUserData();
+            setBoundUserId(sessionUserId);
+            reconcilePersonalWorkspace(sessionUserId);
+            await db.ensureSeededIfEmpty();
+            if (!cancelled) {
+              try { await Promise.resolve(useStore.getState().refresh?.()); } catch { /* best-effort */ }
+              useStore.getState().pushToast(
+                langRef.current === 'ru'
+                  ? 'Вы вошли под другим аккаунтом. Локальные данные очищены, снимок сохранён.'
+                  : 'Signed in with a different account. Local data cleared, snapshot saved.',
+              );
+            }
+          } catch (e) {
+            // Не зацикливаем: помечаем сессию обработанной даже при ошибке.
+            // eslint-disable-next-line no-console
+            console.warn('[AccountSwitchGate] free-tier local rebind failed:', e);
+          }
           handledForUserRef.current = sessionUserId;
           return;
         }
