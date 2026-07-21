@@ -19,3 +19,4 @@ ADR — это запись одного значимого архитектур
 | 0003 | renewal idempotency-guard — сверка GET /v3/payments до создания платежа автопродления (N10) | accepted | 0003-renewal-idempotency-guard.md |
 | 0004 | rate limiting — table-based счётчик в Postgres на публичных эндпоинтах (N13) | accepted | 0004-rate-limiting-table-based.md |
 | 0005 | shared workspaces — роли/инвайты по TF-ID + `workspace_id` text→uuid + FK + ON DELETE CASCADE (Wave B) | accepted | 0005-shared-workspaces.md |
+| 0006 | F12 (P4): admin-список пользователей — SECURITY DEFINER RPC `get_admin_users_summary` с admin-гейтом вместо GRANT на view; view дополнен `public_user_id` | accepted | 0006-admin-users-list-security-definer-rpc.md |

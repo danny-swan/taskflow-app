@@ -147,4 +147,5 @@ jobs:
             supabase/tests/15_workspace_invites_test.sql \
             supabase/tests/16_workspace_regression_test.sql \
             supabase/tests/17_task_activity_log_test.sql \
-            supabase/tests/18_upsert_returning_bootstrap_test.sql
+            supabase/tests/18_upsert_returning_bootstrap_test.sql \
+            supabase/tests/19_admin_users_summary_test.sql
