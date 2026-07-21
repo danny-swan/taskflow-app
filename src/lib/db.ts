@@ -186,6 +186,14 @@ async function tauriSeed(): Promise<void> {
   const cidRows: any[] = await d.select(`SELECT value FROM settings WHERE key='client_id'`);
   const clientId: string | null = cidRows[0]?.value ?? null;
 
+  // Wave A (workspaces): id personal-пространства для штампа seed-строк.
+  // v11-миграция пишет settings.personal_workspace_id ДО seed(); читаем его,
+  // чтобы засеянные статусы/теги/welcome-задача получили workspace_id и попадали
+  // в ws-scoped выборки UI. Без этого штампа (регрессия P1) сид-строки на
+  // десктопе оставались с workspace_id=NULL и не показывались в системном ws.
+  const wsRows: any[] = await d.select(`SELECT value FROM settings WHERE key='personal_workspace_id'`);
+  const wsId: string = (String(wsRows[0]?.value ?? '').trim()) || 'ws_local';
+
   // v0.9.0: «В процессе» теперь идёт ПЕРЕД «Взять в работу» — это активный статус,
   // ему логично быть выше в списке.
   // v0.9.35-dev.6.10.3: список вынесен в SEED_STATUSES (единый источник правды).
@@ -198,9 +206,9 @@ async function tauriSeed(): Promise<void> {
     await d.execute(
       `INSERT INTO statuses
          (uuid, name, color, behavior, sort_order, is_seed, is_technical,
-          hidden, default_collapsed, updated_at, version, client_id)
-       VALUES (?,?,?,?,?,1,?,?,?,?,1,?)`,
-      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId]
+          hidden, default_collapsed, updated_at, version, client_id, workspace_id)
+       VALUES (?,?,?,?,?,1,?,?,?,?,1,?,?)`,
+      [uuid, s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed, now, clientId, wsId]
     );
   }
 
@@ -210,9 +218,9 @@ async function tauriSeed(): Promise<void> {
     const uuid = uuidv7();
     tagUuids.push(uuid);
     await d.execute(
-      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id)
-       VALUES (?,?,?,?,?,1,?)`,
-      [uuid, tags[i].name, tags[i].color, i, now, clientId]
+      `INSERT INTO tags (uuid, name, color, sort_order, updated_at, version, client_id, workspace_id)
+       VALUES (?,?,?,?,?,1,?,?)`,
+      [uuid, tags[i].name, tags[i].color, i, now, clientId, wsId]
     );
   }
 
@@ -241,13 +249,13 @@ async function tauriSeed(): Promise<void> {
   await d.execute(
     `INSERT INTO tasks
        (uuid, title, comment, tag_id, status_id, start_date, deadline, finish_date,
-        created_at, updated_at, sort_order, archived, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?)`,
+        created_at, updated_at, sort_order, archived, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?)`,
     [
       taskUuid,
       'Добро пожаловать в TaskFlow',
       'Нажмите ✓ справа, чтобы выполнить задачу, или иконка корзины 🗑 в правом верхнем углу — чтобы удалить.',
-      tagId, statusId, todayStr, deadlineStr, null, now, now, 0, clientId,
+      tagId, statusId, todayStr, deadlineStr, null, now, now, 0, clientId, wsId,
     ]
   );
 
@@ -995,23 +1003,26 @@ export async function initDb(): Promise<void> {
       r.client_id ?? null,
     ];
 
-    // Populate webDb from Tauri data
+    // Populate webDb from Tauri data.
+    // Wave A (workspaces): гидрация ОБЯЗАНА переносить workspace_id — иначе
+    // сид-строки (и любые ws-scoped данные) читаются стором как workspace_id=NULL
+    // и выпадают из выборок текущего пространства (регрессия P1).
     for (const s of statuses) {
       webDb.run(
-        `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical,hidden,default_collapsed,updated_at,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical, s.hidden ?? 0, s.default_collapsed ?? 0, s.updated_at ?? new Date().toISOString(), ...syncCols(s)]
+        `INSERT OR REPLACE INTO statuses (id,name,color,behavior,sort_order,is_seed,is_technical,hidden,default_collapsed,updated_at,uuid,deleted_at,version,client_id,workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [s.id, s.name, s.color, s.behavior, s.sort_order, s.is_seed, s.is_technical, s.hidden ?? 0, s.default_collapsed ?? 0, s.updated_at ?? new Date().toISOString(), ...syncCols(s), s.workspace_id ?? null]
       );
     }
     for (const t of tags) {
       webDb.run(
-        `INSERT OR REPLACE INTO tags (id,name,color,sort_order,updated_at,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?)`,
-        [t.id, t.name, t.color, t.sort_order, t.updated_at ?? new Date().toISOString(), ...syncCols(t)]
+        `INSERT OR REPLACE INTO tags (id,name,color,sort_order,updated_at,uuid,deleted_at,version,client_id,workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.name, t.color, t.sort_order, t.updated_at ?? new Date().toISOString(), ...syncCols(t), t.workspace_id ?? null]
       );
     }
     for (const t of tasks) {
       webDb.run(
-        `INSERT OR REPLACE INTO tasks (id,title,comment,tag_id,status_id,start_date,deadline,finish_date,created_at,updated_at,sort_order,archived,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [t.id, t.title, t.comment, t.tag_id, t.status_id, t.start_date, t.deadline, t.finish_date, t.created_at, t.updated_at, t.sort_order, t.archived, ...syncCols(t)]
+        `INSERT OR REPLACE INTO tasks (id,title,comment,tag_id,status_id,start_date,deadline,finish_date,created_at,updated_at,sort_order,archived,uuid,deleted_at,version,client_id,workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.title, t.comment, t.tag_id, t.status_id, t.start_date, t.deadline, t.finish_date, t.created_at, t.updated_at, t.sort_order, t.archived, ...syncCols(t), t.workspace_id ?? null]
       );
     }
     for (const s of settings) {
@@ -1019,20 +1030,20 @@ export async function initDb(): Promise<void> {
     }
     for (const t of templates) {
       webDb.run(
-        `INSERT OR REPLACE INTO task_templates (id,name,title,comment,status_id,tag_id,sort_order,created_at,updated_at,uuid,deleted_at,version,client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [t.id, t.name, t.title, t.comment, t.status_id, t.tag_id, t.sort_order, t.created_at, t.updated_at, ...syncCols(t)]
+        `INSERT OR REPLACE INTO task_templates (id,name,title,comment,status_id,tag_id,sort_order,created_at,updated_at,uuid,deleted_at,version,client_id,workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [t.id, t.name, t.title, t.comment, t.status_id, t.tag_id, t.sort_order, t.created_at, t.updated_at, ...syncCols(t), t.workspace_id ?? null]
       );
     }
     for (const e of overdueEvents) {
       webDb.run(
-        `INSERT OR REPLACE INTO overdue_events (id, task_id, deadline_snapshot, event_date, created_at, updated_at, uuid, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [e.id, e.task_id, e.deadline_snapshot, e.event_date, e.created_at, e.updated_at ?? e.created_at, ...syncCols(e)]
+        `INSERT OR REPLACE INTO overdue_events (id, task_id, deadline_snapshot, event_date, created_at, updated_at, uuid, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [e.id, e.task_id, e.deadline_snapshot, e.event_date, e.created_at, e.updated_at ?? e.created_at, ...syncCols(e), e.workspace_id ?? null]
       );
     }
     for (const h of holdPeriods) {
       webDb.run(
-        `INSERT OR REPLACE INTO task_hold_periods (id, task_id, started_at, ended_at, created_at, updated_at, uuid, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [h.id, h.task_id, h.started_at, h.ended_at ?? null, h.created_at, h.updated_at ?? h.created_at, ...syncCols(h)]
+        `INSERT OR REPLACE INTO task_hold_periods (id, task_id, started_at, ended_at, created_at, updated_at, uuid, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [h.id, h.task_id, h.started_at, h.ended_at ?? null, h.created_at, h.updated_at ?? h.created_at, ...syncCols(h), h.workspace_id ?? null]
       );
     }
   } else {
