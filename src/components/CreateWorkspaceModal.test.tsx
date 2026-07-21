@@ -36,6 +36,8 @@ function setup(count: number, paid: boolean) {
   storeState = {
     language: 'ru',
     createWorkspace,
+    boundUserId: 'u1',
+    workspaceMembers: [],
     workspaces: Array.from({ length: count }, (_, i) => ws('w' + i)),
   };
   mockEntitlement = { effectivePlan: paid ? 'pro' : 'free' };
@@ -79,5 +81,31 @@ describe('CreateWorkspaceModal — тарифный лимит', () => {
     fireEvent.change(screen.getByPlaceholderText(/Название/i), { target: { value: 'X' } });
     expect((createBtn() as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/максимум пространств/i)).toBeTruthy();
+  });
+
+  // P3: лимит СОЗДАНИЯ считается только по СВОИМ (owned) пространствам. Чужие
+  // shared (editor/viewer), пришедшие по приглашению, не должны расходовать лимит.
+  it('free: 1 своё personal + 3 чужих shared → кнопка активна (owned=1 < 2)', () => {
+    storeState = {
+      language: 'ru',
+      createWorkspace,
+      boundUserId: 'u1',
+      workspaceMembers: [
+        { workspace_id: 's1', user_id: 'u1', role: 'editor' },
+        { workspace_id: 's2', user_id: 'u1', role: 'viewer' },
+        { workspace_id: 's3', user_id: 'u1', role: 'editor' },
+      ],
+      workspaces: [
+        { id: 'mine', name: 'mine', kind: 'personal' },
+        { id: 's1', name: 's1', kind: 'shared' },
+        { id: 's2', name: 's2', kind: 'shared' },
+        { id: 's3', name: 's3', kind: 'shared' },
+      ],
+    };
+    mockEntitlement = { effectivePlan: 'free' };
+    render(<CreateWorkspaceModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText(/Название/i), { target: { value: 'X' } });
+    expect((createBtn() as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText(/лимит пространств/i)).toBeNull();
   });
 });

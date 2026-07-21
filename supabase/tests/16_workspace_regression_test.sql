@@ -213,13 +213,14 @@ SELECT throws_ok(
   '22023','target user is on free plan and cannot join shared workspaces',
   'D1: free нельзя пригласить (invite-path)');
 RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
--- D2 (accept-path): free принимает предвставленный инвайт → лимит shared=0.
+-- D2 (accept-path): free принимает предвставленный инвайт → shared недоступен
+-- (гейт по плану, get_workspace_limit(free,'shared')=0; см. миграцию 0038).
 SET LOCAL ROLE authenticated;
 SET LOCAL request.jwt.claim.sub TO 'a0000016-0000-0000-0000-0000000000d2'; -- free target
 SELECT throws_ok(
   $$ SELECT public.accept_invite('inv16D') $$,
-  '22023','workspace limit exceeded',
-  'D2: free не может принять инвайт (accept-path, лимит shared=0)');
+  '22023','shared workspaces require a paid plan',
+  'D2: free не может принять инвайт (accept-path, shared недоступен на free)');
 RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
 -- ============================================================================

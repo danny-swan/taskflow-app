@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import {
   evaluateWorkspaceLimit,
   isWorkspaceLimitError,
+  countOwnedWorkspaces,
   FREE_WORKSPACE_LIMIT,
   PAID_WORKSPACE_LIMIT,
   WORKSPACE_LIMIT_ERROR,
@@ -49,6 +50,32 @@ describe('evaluateWorkspaceLimit', () => {
   it('нулевое число пространств → всегда под лимитом', () => {
     expect(evaluateWorkspaceLimit({ isPaid: false, activeWorkspaceCount: 0 }).atLimit).toBe(false);
     expect(evaluateWorkspaceLimit({ isPaid: true, activeWorkspaceCount: 0 }).atLimit).toBe(false);
+  });
+});
+
+describe('countOwnedWorkspaces — лимит создания считается только по СВОИМ ws', () => {
+  const w = (id: string) => ({ id });
+
+  it('чужие shared (editor/viewer) и без роли не учитываются — только owner', () => {
+    const workspaces = [w('own'), w('ed'), w('vw'), w('none')];
+    const roles = {
+      own: 'owner', ed: 'editor', vw: 'viewer', none: null,
+    } as Record<string, 'owner' | 'editor' | 'viewer' | null>;
+    expect(countOwnedWorkspaces(workspaces, roles)).toBe(1);
+  });
+
+  it('1 своё + N чужих shared → free НЕ упирается в лимит создания (owned=1 < 2)', () => {
+    const workspaces = [w('mine'), w('s1'), w('s2'), w('s3'), w('s4')];
+    const roles = {
+      mine: 'owner', s1: 'editor', s2: 'viewer', s3: 'editor', s4: 'viewer',
+    } as Record<string, 'owner' | 'editor' | 'viewer' | null>;
+    const owned = countOwnedWorkspaces(workspaces, roles);
+    expect(owned).toBe(1);
+    expect(evaluateWorkspaceLimit({ isPaid: false, activeWorkspaceCount: owned }).atLimit).toBe(false);
+  });
+
+  it('пустой список → 0', () => {
+    expect(countOwnedWorkspaces([], {})).toBe(0);
   });
 });
 

@@ -9,7 +9,8 @@
 --   A. Схема (6)        — таблица/RLS/FK-CASCADE/CHECK role,status/unique pending.
 --   B. invite (13)      — owner приглашает; отказы (free/notfound/self/member/
 --                          роль/не-owner); идемпотентность; already member после accept.
---   C. accept (10)      — успех+членство; лимит; чужой; повторно; expired; cancelled; unauth.
+--   C. accept (14)      — успех+членство; гейт по плану (платный с 7 своими ws принимает;
+--                          free блок); мультиприём; чужой; повторно; expired; cancelled; unauth.
 --   D. reject (4)       — target-only, pending→rejected, без членства.
 --   E. cancel (4)       — owner-only, pending→cancelled, editor/viewer denied.
 --   F. RLS (9)          — видимость target/owner, editor/viewer/outsider слепы, прямой DML denied.
@@ -21,7 +22,7 @@
 -- Выполняется на vanilla Postgres 15 (CI).
 
 BEGIN;
-SELECT plan(48);
+SELECT plan(52);
 
 -- ============================================================================
 -- SETUP (superuser: auth.uid() IS NULL → guards/limits/RLS не мешают наливу)
@@ -45,6 +46,7 @@ DECLARE
   u_gown uuid := 'a0000015-0000-0000-0000-000000000015'::uuid; -- G: ws owner (delete ws)
   u_gow2 uuid := 'a0000015-0000-0000-0000-000000000016'::uuid; -- G: ws owner (delete inviter)
   u_ginv uuid := 'a0000015-0000-0000-0000-000000000017'::uuid; -- G: отдельный inviter
+  u_mul  uuid := 'a0000015-0000-0000-0000-000000000018'::uuid; -- pro, 0 своих ws, мультиприём (Cc)
   i int;
 BEGIN
   -- Триггер on_auth_user_created (0001) при INSERT в auth.users сам заводит profile
@@ -57,7 +59,7 @@ BEGIN
     (u_view,'i15-view@t'),(u_out,'i15-out@t'),(u_pro2,'i15-pro2@t'),(u_lim,'i15-lim@t'),
     (u_rej,'i15-rej@t'),(u_can,'i15-can@t'),(u_acc,'i15-acc@t'),(u_exp,'i15-exp@t'),
     (u_cxl,'i15-cxl@t'),(u_ei,'i15-ei@t'),(u_gown,'i15-gown@t'),(u_gow2,'i15-gow2@t'),
-    (u_ginv,'i15-ginv@t')
+    (u_ginv,'i15-ginv@t'),(u_mul,'i15-mul@t')
     ON CONFLICT (id) DO NOTHING;
 
   -- Профили с известными публичными TF-ID (для invite по public_id).
@@ -68,7 +70,8 @@ BEGIN
     (u_pro2,'i15-pro2@t','TF-PRO007'),(u_lim,'i15-lim@t','TF-LIM008'),
     (u_rej,'i15-rej@t','TF-REJ009'),(u_can,'i15-can@t','TF-CAN010'),
     (u_acc,'i15-acc@t','TF-ACC011'),(u_exp,'i15-exp@t','TF-EXP012'),
-    (u_cxl,'i15-cxl@t','TF-CXL013'),(u_ei,'i15-ei@t','TF-EIN014')
+    (u_cxl,'i15-cxl@t','TF-CXL013'),(u_ei,'i15-ei@t','TF-EIN014'),
+    (u_mul,'i15-mul@t','TF-MUL018')
     ON CONFLICT (id) DO NOTHING;
 
   ALTER TABLE auth.users ENABLE TRIGGER on_auth_user_created;
@@ -81,7 +84,7 @@ BEGIN
     (u_lim,'pro',now()+interval '30 days'),(u_rej,'pro',now()+interval '30 days'),
     (u_can,'pro',now()+interval '30 days'),(u_acc,'pro',now()+interval '30 days'),
     (u_exp,'pro',now()+interval '30 days'),(u_cxl,'pro',now()+interval '30 days'),
-    (u_ei,'pro',now()+interval '30 days')
+    (u_ei,'pro',now()+interval '30 days'),(u_mul,'pro',now()+interval '30 days')
     ON CONFLICT (user_id) DO UPDATE SET plan=excluded.plan, valid_until=excluded.valid_until;
 
   -- Shared-пространство ws15 + три роли.
@@ -91,13 +94,23 @@ BEGIN
     ('im_o','ws15',u_own,'owner'),('im_e','ws15',u_edit,'editor'),
     ('im_v','ws15',u_view,'viewer') ON CONFLICT DO NOTHING;
 
-  -- u_lim: 7 активных членств (в отдельных пространствах) → на лимите.
+  -- u_lim: 7 активных владеемых пространств (owner-членства) → «на лимите» по старой
+  -- семантике accept. По новой (гейт по плану) платный принимает чужой инвайт всё равно.
   FOR i IN 1..7 LOOP
     INSERT INTO public.sync_workspaces (id, user_id, owner_id, name, kind)
       VALUES ('wslim'||i, u_lim, u_lim, 'Lim '||i, 'personal') ON CONFLICT DO NOTHING;
     INSERT INTO public.sync_workspace_members (id, workspace_id, user_id, role)
       VALUES ('mlim'||i, 'wslim'||i, u_lim, 'owner') ON CONFLICT DO NOTHING;
   END LOOP;
+
+  -- Cc: три отдельных shared-пространства (owner u_own) для мультиприёма u_mul.
+  INSERT INTO public.sync_workspaces (id, user_id, owner_id, name, kind) VALUES
+    ('wsA', u_own, u_own, 'Multi A', 'shared'),
+    ('wsB', u_own, u_own, 'Multi B', 'shared'),
+    ('wsC', u_own, u_own, 'Multi C', 'shared') ON CONFLICT DO NOTHING;
+  INSERT INTO public.sync_workspace_members (id, workspace_id, user_id, role) VALUES
+    ('imA','wsA',u_own,'owner'),('imB','wsB',u_own,'owner'),('imC','wsC',u_own,'owner')
+    ON CONFLICT DO NOTHING;
 
   -- Пред-инсерт инвайтов с явными id для accept/reject/cancel.
   INSERT INTO public.sync_workspace_invites
@@ -108,7 +121,13 @@ BEGIN
     ('inv_cxl','ws15',u_own,'TF-CXL013',u_cxl,'editor','cancelled', now()+interval '7 days'),
     ('inv_rej','ws15',u_own,'TF-REJ009',u_rej,'viewer','pending', now()+interval '7 days'),
     ('inv_can','ws15',u_own,'TF-CAN010',u_can,'viewer','pending', now()+interval '7 days'),
-    ('inv_ei', 'ws15',u_own,'TF-EIN014',u_ei, 'viewer','pending', now()+interval '7 days')
+    ('inv_ei', 'ws15',u_own,'TF-EIN014',u_ei, 'viewer','pending', now()+interval '7 days'),
+    -- Cb: pending-инвайт free-таргету (RPC invite блокирует free, поэтому наливаем напрямую).
+    ('inv_free','ws15',u_own,'TF-FREE03',u_free,'viewer','pending', now()+interval '7 days'),
+    -- Cc: три чужих инвайта одному платному u_mul в разные пространства.
+    ('inv_m1','wsA',u_own,'TF-MUL018',u_mul,'editor','pending', now()+interval '7 days'),
+    ('inv_m2','wsB',u_own,'TF-MUL018',u_mul,'viewer','pending', now()+interval '7 days'),
+    ('inv_m3','wsC',u_own,'TF-MUL018',u_mul,'editor','pending', now()+interval '7 days')
     ON CONFLICT (id) DO NOTHING;
 
   -- G: отдельные пространства + инвайты для каскадов.
@@ -246,10 +265,12 @@ SELECT is((SELECT role FROM public.sync_workspace_members
              WHERE workspace_id='ws15' AND user_id='a0000015-0000-0000-0000-000000000011'::uuid),
   'editor','C4: роль членства = роль инвайта (editor)');
 
--- C5: target на лимите (7 ws) → limit exceeded.
+-- C5: платный с 7 своими ws (owner-членства) принимает чужой инвайт → УСПЕХ.
+-- Гейт accept теперь по ПЛАНУ (shared доступен), а не по числу членств: владеемые
+-- пространства больше не расходуют бюджет на приём инвайтов.
 SET LOCAL ROLE authenticated; SET LOCAL request.jwt.claim.sub TO 'a0000015-0000-0000-0000-000000000008';
-SELECT throws_ok($$ SELECT public.accept_invite('inv_lim') $$,
-  '22023','workspace limit exceeded','C5: лимит принимающего → 22023');
+SELECT is((public.accept_invite('inv_lim')).workspace_id,'ws15',
+  'C5: платный с 7 своими ws принимает чужой инвайт → успех');
 RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
 -- C6: чужой инвайт (outsider принимает инвайт u_lim) → 42501.
@@ -280,6 +301,21 @@ RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 SET LOCAL ROLE authenticated; SET LOCAL request.jwt.claim.sub TO '';
 SELECT throws_ok($$ SELECT public.accept_invite('inv_acc') $$,
   '42501',NULL,'C10: no auth → 42501');
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
+
+-- C11: free-пользователь НЕ может принять инвайт — shared недоступен на бесплатном
+-- тарифе (get_workspace_limit(free,'shared')=0). Гейт по плану, не по числу членств.
+SET LOCAL ROLE authenticated; SET LOCAL request.jwt.claim.sub TO 'a0000015-0000-0000-0000-000000000003';
+SELECT throws_ok($$ SELECT public.accept_invite('inv_free') $$,
+  '22023','shared workspaces require a paid plan','C11: free accept → 22023 (shared недоступен)');
+RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
+
+-- C12-C14: платный без своих ws принимает несколько чужих инвайтов подряд — все успешны
+-- (регресс: собственный бюджет создания не ограничивает приём чужих инвайтов).
+SET LOCAL ROLE authenticated; SET LOCAL request.jwt.claim.sub TO 'a0000015-0000-0000-0000-000000000018';
+SELECT is((public.accept_invite('inv_m1')).workspace_id,'wsA','C12: 1-й чужой инвайт принят');
+SELECT is((public.accept_invite('inv_m2')).workspace_id,'wsB','C13: 2-й чужой инвайт принят');
+SELECT is((public.accept_invite('inv_m3')).workspace_id,'wsC','C14: 3-й чужой инвайт принят');
 RESET ROLE; SET LOCAL request.jwt.claim.sub TO '';
 
 -- ============================================================================
