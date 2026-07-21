@@ -47,6 +47,38 @@ export function listWorkspaceIds(userId?: string | null): string[] {
 }
 
 /**
+ * Набор ws-id по ЧЛЕНСТВУ текущего пользователя (не по локальной `workspaces`).
+ *
+ * P0-фикс: приглашённый видит чужой shared-ws только через строку членства
+ * (`workspace_members` с `user_id=me`), которую создаёт серверный accept_invite и
+ * тянет фаза 1 pull. Локальной строки `workspaces` для чужого ws на этот момент
+ * ещё нет (её тянет фаза 2 ПО этому набору) — поэтому источником набора должно
+ * быть именно членство, иначе замкнутый круг (chicken-and-egg).
+ *
+ * Personal-ws (`ws_<uid>`) добавляется всегда — у нового аккаунта членство может
+ * ещё не подтянуться, но своё личное пространство тянуть надо. Personal ставим
+ * первым, чтобы он был стабильным «ведущим» ws для per-ws курсоров.
+ */
+export function listMembershipWorkspaceIds(userId?: string | null): string[] {
+  const ids = new Set<string>();
+  if (userId) ids.add(computeWorkspaceId(userId));
+  if (userId) {
+    try {
+      const rows = db.all<{ workspace_id: string | null }>(
+        `SELECT DISTINCT workspace_id FROM workspace_members
+          WHERE user_id=? AND deleted_at IS NULL`,
+        [userId],
+      );
+      for (const r of rows) if (r.workspace_id) ids.add(r.workspace_id);
+    } catch {
+      // Таблицы workspace_members нет на базе до v11 — не критично.
+    }
+  }
+  if (ids.size === 0) ids.add(LOCAL_WS_ID);
+  return [...ids];
+}
+
+/**
  * Согласование personal-пространства текущего пользователя при логине/смене
  * аккаунта. Делает два дела:
  *

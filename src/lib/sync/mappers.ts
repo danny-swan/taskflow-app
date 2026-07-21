@@ -668,11 +668,16 @@ export interface TableSpec<L = any, C = any> {
   /** Колонка(и) конфликта для upsert. По умолчанию 'id'. */
   onConflict?: string;
   /**
-   * Как скоупить pull. 'user_id' (по умолчанию) — WHERE user_id = <me>.
-   * 'workspace_id' — WHERE workspace_id IN (<мои ws>) (для таблиц без user_id,
-   * напр. sync_workspace_settings).
+   * Как скоупить pull:
+   *   • 'user_id' — WHERE user_id = <me> (только СВОИ строки; годится для входа
+   *     в набор — sync_workspace_members);
+   *   • 'workspace_id' — WHERE workspace_id IN (<мои ws>) (данные пространства,
+   *     принадлежащие любому владельцу — опираемся на серверный RLS по членству);
+   *   • 'id' — WHERE id IN (<мои ws>) (для sync_workspaces, у которой сам id и есть
+   *     идентификатор пространства, отдельной колонки workspace_id нет).
+   * По умолчанию (не задано) = 'user_id'.
    */
-  pullScope?: 'user_id' | 'workspace_id';
+  pullScope?: 'user_id' | 'workspace_id' | 'id';
 }
 
 export const TASKS_SPEC: TableSpec<LocalTaskRow, CloudTaskPayload> = {
@@ -680,6 +685,7 @@ export const TASKS_SPEC: TableSpec<LocalTaskRow, CloudTaskPayload> = {
   cloud: 'sync_tasks',
   fetchLocal: (uuid) => db.get<LocalTaskRow>('SELECT * FROM tasks WHERE uuid=?', [uuid]),
   toCloud: taskToCloudPayload,
+  pullScope: 'workspace_id',   // P0: тянем по пространству, не по user_id (shared-ws)
 };
 
 export const STATUSES_SPEC: TableSpec<LocalStatusRow, CloudStatusPayload> = {
@@ -687,6 +693,7 @@ export const STATUSES_SPEC: TableSpec<LocalStatusRow, CloudStatusPayload> = {
   cloud: 'sync_statuses',
   fetchLocal: (uuid) => db.get<LocalStatusRow>('SELECT * FROM statuses WHERE uuid=?', [uuid]),
   toCloud: statusToCloudPayload,
+  pullScope: 'workspace_id',   // P0
 };
 
 export const TAGS_SPEC: TableSpec<LocalTagRow, CloudTagPayload> = {
@@ -694,6 +701,7 @@ export const TAGS_SPEC: TableSpec<LocalTagRow, CloudTagPayload> = {
   cloud: 'sync_tags',
   fetchLocal: (uuid) => db.get<LocalTagRow>('SELECT * FROM tags WHERE uuid=?', [uuid]),
   toCloud: tagToCloudPayload,
+  pullScope: 'workspace_id',   // P0
 };
 
 export const TEMPLATES_SPEC: TableSpec<LocalTemplateRow, CloudTemplatePayload> = {
@@ -701,6 +709,7 @@ export const TEMPLATES_SPEC: TableSpec<LocalTemplateRow, CloudTemplatePayload> =
   cloud: 'sync_task_templates',
   fetchLocal: (uuid) => db.get<LocalTemplateRow>('SELECT * FROM task_templates WHERE uuid=?', [uuid]),
   toCloud: templateToCloudPayload,
+  pullScope: 'workspace_id',   // P0
 };
 
 export const OVERDUE_EVENTS_SPEC: TableSpec<LocalOverdueEventRow, CloudOverdueEventPayload> = {
@@ -708,6 +717,7 @@ export const OVERDUE_EVENTS_SPEC: TableSpec<LocalOverdueEventRow, CloudOverdueEv
   cloud: 'sync_overdue_events',
   fetchLocal: (uuid) => db.get<LocalOverdueEventRow>('SELECT * FROM overdue_events WHERE uuid=?', [uuid]),
   toCloud: overdueEventToCloudPayload,
+  pullScope: 'workspace_id',   // P0
 };
 
 export const HOLD_PERIODS_SPEC: TableSpec<LocalHoldPeriodRow, CloudHoldPeriodPayload> = {
@@ -715,6 +725,7 @@ export const HOLD_PERIODS_SPEC: TableSpec<LocalHoldPeriodRow, CloudHoldPeriodPay
   cloud: 'sync_task_hold_periods',
   fetchLocal: (uuid) => db.get<LocalHoldPeriodRow>('SELECT * FROM task_hold_periods WHERE uuid=?', [uuid]),
   toCloud: holdPeriodToCloudPayload,
+  pullScope: 'workspace_id',   // P0
 };
 
 export const WORKSPACES_SPEC: TableSpec<LocalWorkspaceRow, CloudWorkspacePayload> = {
@@ -722,6 +733,7 @@ export const WORKSPACES_SPEC: TableSpec<LocalWorkspaceRow, CloudWorkspacePayload
   cloud: 'sync_workspaces',
   fetchLocal: (uuid) => db.get<LocalWorkspaceRow>('SELECT * FROM workspaces WHERE uuid=?', [uuid]),
   toCloud: workspaceToCloudPayload,
+  pullScope: 'id',   // P0: у sync_workspaces сам id == ws-id (нет колонки workspace_id)
 };
 
 export const WORKSPACE_MEMBERS_SPEC: TableSpec<LocalMemberRow, CloudMemberPayload> = {
@@ -729,6 +741,7 @@ export const WORKSPACE_MEMBERS_SPEC: TableSpec<LocalMemberRow, CloudMemberPayloa
   cloud: 'sync_workspace_members',
   fetchLocal: (uuid) => db.get<LocalMemberRow>('SELECT * FROM workspace_members WHERE uuid=?', [uuid]),
   toCloud: memberToCloudPayload,
+  pullScope: 'user_id',   // P0: членство — ВХОД в набор ws, тянем строго по своему user_id
 };
 
 export const WORKSPACE_SETTINGS_SPEC: TableSpec<LocalSettingRow, CloudSettingPayload> = {

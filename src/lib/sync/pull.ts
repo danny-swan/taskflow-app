@@ -25,12 +25,17 @@ import { logger } from '../logger';
 import { uuidv7 } from '../uuid';
 import {
   PULL_ORDER,
+  WORKSPACE_MEMBERS_SPEC,
   resolveStatusIdByUuid,
   resolveTagIdByUuid,
   resolveTaskIdByUuid,
   type TableSpec,
 } from './mappers';
-import { listWorkspaceIds, computeWorkspaceId, LOCAL_WS_ID } from './workspace';
+import {
+  listMembershipWorkspaceIds,
+  computeWorkspaceId,
+  LOCAL_WS_ID,
+} from './workspace';
 
 /**
  * v0.9.35-dev.6.10.3 — Маркер «отложить строку» (deferred by design).
@@ -605,11 +610,17 @@ async function pullTable(userId: string, spec: TableSpec, workspaceIds: string[]
   const cursorWs = workspaceIds[0] ?? null;
   const lastPulled = getLastPulledAt(spec.cloud, cursorCol, cursorWs);
   try {
-    // Скоуп-фильтр первым (как раньше .eq('user_id')): таблицы без user_id
-    // (sync_workspace_settings) фильтруем по workspace_id IN (<мои ws>).
-    let scoped = spec.pullScope === 'workspace_id'
-      ? supabase.from(spec.cloud).select('*').in('workspace_id', workspaceIds)
-      : supabase.from(spec.cloud).select('*').eq('user_id', userId);
+    // Скоуп-фильтр первым. P0: почти всё тянем по пространству (workspace_id IN
+    // <мои ws> для data-таблиц; id IN <мои ws> для самой sync_workspaces, где id
+    // и есть ws-id). По user_id остаётся только членство — вход в набор ws.
+    let scoped;
+    if (spec.pullScope === 'workspace_id') {
+      scoped = supabase.from(spec.cloud).select('*').in('workspace_id', workspaceIds);
+    } else if (spec.pullScope === 'id') {
+      scoped = supabase.from(spec.cloud).select('*').in('id', workspaceIds);
+    } else {
+      scoped = supabase.from(spec.cloud).select('*').eq('user_id', userId);
+    }
     const query = scoped
       .gt(cursorCol, lastPulled)
       .order(cursorCol, { ascending: true })
@@ -674,20 +685,52 @@ async function pullTable(userId: string, spec: TableSpec, workspaceIds: string[]
  */
 export async function pullAll(userId: string): Promise<PullResult> {
   const total: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
-  const workspaceIds = listWorkspaceIds(userId);
-  for (const spec of PULL_ORDER) {
-    for (let i = 0; i < 5; i++) {
-      const r = await pullTable(userId, spec, workspaceIds);
-      total.applied += r.applied;
-      total.skipped += r.skipped;
-      total.deferred += r.deferred;
-      if (!total.firstError && r.firstError) total.firstError = r.firstError;
-      if (r.applied + r.skipped < PULL_BATCH_SIZE) break;
-      // Иначе — было batch_size, возможно есть ещё.
+
+  // ── Фаза 1: членство ──────────────────────────────────────────────────────
+  // P0: строку членства в чужом shared-ws создаёт серверный accept_invite
+  // (user_id=me). Тянем её ПЕРВОЙ и строго по своему user_id — это единственный
+  // «вход» в набор пространств. Курсор членства ведём по personal-ws.
+  await pullSpecPaged(userId, WORKSPACE_MEMBERS_SPEC, listMembershipWorkspaceIds(userId), total);
+
+  // ── Набор пространств ──────────────────────────────────────────────────────
+  // Пересчитываем ПОСЛЕ фазы 1 из СВЕЖЕподтянутого членства (а не из локальной
+  // таблицы workspaces) — так чужой ws попадает в набор, разрывая chicken-and-egg.
+  const workspaceIds = listMembershipWorkspaceIds(userId);
+
+  // ── Фаза 2: пространства и их данные ────────────────────────────────────────
+  // Тянем каждое пространство ОТДЕЛЬНО, чтобы у каждого был свой per-ws курсор:
+  // иначе свежедобавленный shared-ws со «старыми» updated_at был бы отсечён общим
+  // курсором ведущего ws (его lastPulled уже «в будущем» относительно тех строк).
+  const phase2 = PULL_ORDER.filter(s => s.cloud !== WORKSPACE_MEMBERS_SPEC.cloud);
+  for (const ws of workspaceIds) {
+    for (const spec of phase2) {
+      await pullSpecPaged(userId, spec, [ws], total);
     }
   }
+
   prunePhantomWorkspaces(userId);
   return total;
+}
+
+/**
+ * Пуллит один spec с пагинацией (до 5 батчей PULL_BATCH_SIZE) и агрегирует
+ * результат в total. Вынесено из pullAll, чтобы переиспользовать в обеих фазах.
+ */
+async function pullSpecPaged(
+  userId: string,
+  spec: TableSpec,
+  workspaceIds: string[],
+  total: PullResult,
+): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    const r = await pullTable(userId, spec, workspaceIds);
+    total.applied += r.applied;
+    total.skipped += r.skipped;
+    total.deferred += r.deferred;
+    if (!total.firstError && r.firstError) total.firstError = r.firstError;
+    if (r.applied + r.skipped < PULL_BATCH_SIZE) break;
+    // Иначе — было batch_size, возможно есть ещё.
+  }
 }
 
 /**
