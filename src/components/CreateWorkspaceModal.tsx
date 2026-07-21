@@ -14,7 +14,8 @@ import { useStore } from '../store/useStore';
 import { tr } from '../lib/i18n';
 import { useAuth } from '../lib/auth';
 import { useEntitlement, isProOrTrial } from '../lib/entitlements';
-import { evaluateWorkspaceLimit } from '../lib/workspaceLimits';
+import { evaluateWorkspaceLimit, countOwnedWorkspaces } from '../lib/workspaceLimits';
+import { useWorkspaceRoles } from '../store/workspaceScope';
 
 export function CreateWorkspaceModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const lang = useStore(s => s.language);
@@ -26,10 +27,12 @@ export function CreateWorkspaceModal({ open, onClose }: { open: boolean; onClose
   // Dev-стаб гейта shared: доступно только Pro/Trial (полная логика — PR-5).
   const canShared = isPaid;
 
-  // Тарифный лимит по числу активных пространств (Free 2 / Pro 7). Зеркалит
-  // серверный триггер enforce_workspace_limit (0029). Счёт — по всем активным
-  // (store.workspaces уже отфильтрован deleted_at IS NULL).
-  const limitState = evaluateWorkspaceLimit({ isPaid, activeWorkspaceCount: workspaces.length });
+  // Тарифный лимит по числу СВОИХ (owned) пространств (Free 2 / Pro 7). Зеркалит
+  // серверный триггер enforce_workspace_limit (0029), который считает по owner_id.
+  // Чужие shared (editor/viewer из приглашений) лимит создания НЕ расходуют (P3).
+  const roles = useWorkspaceRoles();
+  const ownedCount = countOwnedWorkspaces(workspaces, roles);
+  const limitState = evaluateWorkspaceLimit({ isPaid, activeWorkspaceCount: ownedCount });
   const limitHint = limitState.reason === 'paid'
     ? tr(lang, 'ws_limit_paid_hint')
     : tr(lang, 'ws_limit_free_hint');

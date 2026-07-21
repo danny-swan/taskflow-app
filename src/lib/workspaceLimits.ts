@@ -66,6 +66,24 @@ export function evaluateWorkspaceLimit(args: {
 }
 
 /**
+ * Число СВОИХ (owned) пространств — база для лимита создания (P3).
+ *
+ * Лимит на СОЗДАНИЕ пространств считается только по владеемым ws (зеркалит
+ * серверный enforce_workspace_limit, который считает по sync_workspaces.owner_id,
+ * миграция 0029). Чужие shared-пространства, куда пользователя пригласили
+ * (роль editor/viewer), НЕ расходуют лимит создания.
+ *
+ * `roles` — карта роли на пространство из useWorkspaceRoles(): personal/ws_local →
+ * 'owner'; shared → роль из строки членства; иначе null. Owned = role === 'owner'.
+ */
+export function countOwnedWorkspaces(
+  workspaces: ReadonlyArray<{ id: string }>,
+  roles: Record<string, 'owner' | 'editor' | 'viewer' | null>,
+): number {
+  return workspaces.reduce((n, w) => (roles[w.id] === 'owner' ? n + 1 : n), 0);
+}
+
+/**
  * Распознаёт серверную ошибку тарифного лимита (для fallback-апселла при race).
  * Принимает Error / строку / объект с полем message.
  */
