@@ -186,7 +186,14 @@ export interface UseTaskActivityResult {
  * синхронизирована) → пустой результат, запросов нет.
  */
 export function useTaskActivity(taskUuid: string | null | undefined): UseTaskActivityResult {
-  const records = useTaskActivityStore((s) => (taskUuid ? s.byTask[taskUuid] ?? [] : []));
+  // ВАЖНО: пустой результат ДОЛЖЕН быть стабильной ссылкой (EMPTY_RECORDS), а не
+  // инлайн-литералом `[]`. С zustand на useSyncExternalStore новый `[]` при каждом
+  // вызове селектора трактуется как «снимок изменился» → форс ре-рендера → снова
+  // новый `[]` → бесконечный цикл (React "Maximum update depth exceeded"), который
+  // ловил AppErrorBoundary при открытии задачи в shared-ws (там рендерится
+  // TaskActivityLog). Bug A. Соседний useWorkspaceActivity уже использует
+  // EMPTY_RECORDS — приводим task-хук к тому же паттерну.
+  const records = useTaskActivityStore((s) => (taskUuid ? s.byTask[taskUuid] ?? EMPTY_RECORDS : EMPTY_RECORDS));
   const hasMore = useTaskActivityStore((s) => (taskUuid ? s.hasMore[taskUuid] ?? false : false));
   const reload = useTaskActivityStore((s) => s.reload);
   const loadMore = useTaskActivityStore((s) => s.loadMore);

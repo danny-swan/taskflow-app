@@ -271,6 +271,21 @@ describe('(d) ws-сущности: toCloud + pull applier', () => {
     expect(p.client_id).toBe('cid');
   });
 
+  it('Bug C: маппер ИГНОРИРУЕТ протухший row.client_id и ставит текущий clientId', async () => {
+    const m = await import('./mappers');
+    // Локальная строка несёт client_id СТАРОГО устройства (пришёл через pull после
+    // смены аккаунта / с другого устройства) — его нет в sync_devices текущего
+    // контекста → раньше давал FK 23503 (sync_workspaces_client_id_fkey). Теперь
+    // пуш всегда ставит текущее (зарегистрированное) устройство.
+    const p = m.workspaceToCloudPayload(
+      { id: 1, uuid: WS, name: 'Мои задачи', kind: 'personal', owner_id: USER_ID,
+        sort_order: 0, created_at: 't', updated_at: 't', deleted_at: null,
+        version: 1, client_id: 'stale-old-device-9999' } as any,
+      USER_ID, 'current-device',
+    );
+    expect(p.client_id).toBe('current-device'); // НЕ 'stale-old-device-9999'
+  });
+
   it('settingToCloudPayload: без id/user_id, PK=(workspace_id,key)', async () => {
     const m = await import('./mappers');
     const p = m.settingToCloudPayload(
@@ -476,6 +491,57 @@ describe('(e) reconcilePersonalWorkspace: ws_local → ws_<uid>', () => {
       `SELECT value FROM settings WHERE key='current_workspace_id'`,
     )[0].values[0][0];
     expect(cur).toBe(SHARED_WS);
+  });
+
+  it('Bug B: гасит осиротевшую чужую personal-ws (дубль «Мои задачи»), не трогая shared', async () => {
+    liveDb = null;
+    await setupDb(true); // привязана под USER_ID, есть personal ws_<uid>
+    const { reconcilePersonalWorkspace } = await import('./workspace');
+
+    // Осиротевшая personal от ПРОШЛОГО аккаунта: у текущего USER_ID нет членства.
+    const ORPHAN_WS = 'ws_oldaccount00000000000000000000';
+    liveDb!.run(
+      `INSERT INTO workspaces (uuid, name, kind, sort_order, created_at, updated_at, version)
+       VALUES (?, 'Мои задачи', 'personal', 0, 't', 't', 1)`,
+      [ORPHAN_WS],
+    );
+    liveDb!.run(
+      `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, joined_at, created_at, updated_at, version)
+       VALUES ('wsm-old', ?, 'old-user-uuid', 'owner', 't', 't', 't', 1)`,
+      [ORPHAN_WS],
+    );
+    // Плюс валидный shared, где у текущего пользователя есть членство — не трогаем.
+    const SHARED_WS = 'ws_sharedteam0000000000000000000';
+    liveDb!.run(
+      `INSERT INTO workspaces (uuid, name, kind, sort_order, created_at, updated_at, version)
+       VALUES (?, 'Team', 'shared', 0, 't', 't', 1)`,
+      [SHARED_WS],
+    );
+    liveDb!.run(
+      `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, joined_at, created_at, updated_at, version)
+       VALUES ('wsm-shared', ?, ?, 'editor', 't', 't', 't', 1)`,
+      [SHARED_WS, USER_ID],
+    );
+
+    const did = reconcilePersonalWorkspace(USER_ID);
+    expect(did).toBe(true);
+
+    // Осиротевшая personal погашена локально (soft delete).
+    const orphan = liveDb!.exec(`SELECT deleted_at FROM workspaces WHERE uuid=?`, [ORPHAN_WS])[0].values[0][0];
+    expect(orphan).not.toBeNull();
+    // Каноническая personal текущего пользователя жива.
+    const mine = liveDb!.exec(`SELECT deleted_at FROM workspaces WHERE uuid=?`, [WS])[0].values[0][0];
+    expect(mine).toBeNull();
+    // Shared НЕ тронут.
+    const shared = liveDb!.exec(`SELECT deleted_at FROM workspaces WHERE uuid=?`, [SHARED_WS])[0].values[0][0];
+    expect(shared).toBeNull();
+    // Осиротевшая personal НЕ ушла в outbox как удаление (чужие данные под другим user_id).
+    const obForOrphan = liveDb!.exec(
+      `SELECT COUNT(*) FROM sync_outbox WHERE entity_uuid=?`, [ORPHAN_WS],
+    )[0].values[0][0];
+    expect(obForOrphan).toBe(0);
+    // Идемпотентность: повторный вызов уже погашенную строку не находит.
+    expect(reconcilePersonalWorkspace(USER_ID)).toBe(false);
   });
 });
 

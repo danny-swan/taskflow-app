@@ -101,8 +101,60 @@ export function reconcilePersonalWorkspace(userId: string): boolean {
 
   let changed = reconcileLocalPlaceholder(userId, target);
   if (ensurePersonalWorkspaceRow(userId, target)) changed = true;
+  if (dedupePersonalWorkspaces(userId, target)) changed = true;
   if (pinWorkspacePointers(userId, target)) changed = true;
   return changed;
+}
+
+/**
+ * Самолечение дубля личного пространства (Bug B).
+ *
+ * Симптом: в сайдбаре появляется второй пустой «Мои задачи». Причина —
+ * осиротевшая локальная personal-строка от ПРОШЛОГО аккаунта (`ws_<olduid>`),
+ * оставшаяся в локальном зеркале после смены аккаунта / аварийного reload
+ * (краш Bug A прерывал загрузку на середине). Канонический personal текущего
+ * пользователя — детерминированный `target` (`ws_<uid>`); все прочие
+ * personal-kind строки, где у текущего пользователя НЕТ живого членства, —
+ * чужой мусор и должны быть погашены локально.
+ *
+ * Гасим ТОЛЬКО локально (soft delete зеркала), БЕЗ enqueueOutbox: это чужие
+ * строки под другим user_id, их нельзя пушить как удаление на сервер. Shared-ws
+ * не трогаем никогда. Строго идемпотентно: WHERE deleted_at IS NULL → повторный
+ * вызов уже погашенные строки не находит (no-op).
+ *
+ * @returns true, если хотя бы одну строку погасили.
+ */
+function dedupePersonalWorkspaces(userId: string, target: string): boolean {
+  try {
+    const orphans = db.all<{ uuid: string }>(
+      `SELECT uuid FROM workspaces
+        WHERE kind='personal' AND uuid IS NOT NULL AND uuid<>? AND deleted_at IS NULL`,
+      [target],
+    );
+    let changed = false;
+    for (const o of orphans) {
+      // Если у текущего пользователя есть живое членство в этой personal-ws —
+      // это НЕ чужой мусор (крайне маловероятно для personal, но безопаснее
+      // перестраховаться и не трогать).
+      if (hasLocalMembership(userId, o.uuid)) continue;
+      db.run(
+        `UPDATE workspaces SET deleted_at=CURRENT_TIMESTAMP WHERE uuid=? AND deleted_at IS NULL`,
+        [o.uuid],
+      );
+      // Гасим локальные членства этой осиротевшей ws (тоже только зеркало).
+      db.run(
+        `UPDATE workspace_members SET deleted_at=CURRENT_TIMESTAMP
+          WHERE workspace_id=? AND deleted_at IS NULL`,
+        [o.uuid],
+      );
+      changed = true;
+      logger.info(`[sync/workspace] dedupe: погашена осиротевшая personal-ws ${o.uuid}`);
+    }
+    return changed;
+  } catch (e) {
+    logger.warn('[sync/workspace] dedupePersonalWorkspaces failed:', e);
+    return false;
+  }
 }
 
 /**

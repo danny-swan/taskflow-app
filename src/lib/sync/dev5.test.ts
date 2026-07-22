@@ -230,7 +230,9 @@ describe('overdue_events push (v0.9.35-dev.5)', () => {
     expect(payload.user_id).toBe('user-1');
     expect(payload.deadline_snapshot).toBe('2026-06-15');
     expect(payload.event_date).toBe('2026-06-16');
-    expect(payload.client_id).toBe('test-client');    // из локальной строки
+    // F13/Fix C: маппер ВСЕГДА ставит ТЕКУЩИЙ (зарегистрированный) client_id,
+    // а НЕ протухший row.client_id стороннего устройства — иначе FK sync_*.client_id → sync_devices(id) (23503).
+    expect(payload.client_id).toBe('client-1');       // текущее устройство, не row.client_id
   });
 
   it('push overdue: append-only, идёт через upsert в sync_overdue_events', async () => {

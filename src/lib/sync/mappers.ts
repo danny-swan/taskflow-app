@@ -139,7 +139,7 @@ export function taskToCloudPayload(
     updated_at: row.updated_at,
     deleted_at: row.deleted_at,
     version: row.version,
-    client_id: row.client_id ?? clientId,
+    client_id: clientId,
   };
 }
 
@@ -204,7 +204,7 @@ export function statusToCloudPayload(
     updated_at: row.updated_at,
     deleted_at: row.deleted_at,
     version: row.version,
-    client_id: row.client_id ?? clientId,
+    client_id: clientId,
   };
 }
 
@@ -254,7 +254,7 @@ export function tagToCloudPayload(
     updated_at: row.updated_at,
     deleted_at: row.deleted_at,
     version: row.version,
-    client_id: row.client_id ?? clientId,
+    client_id: clientId,
   };
 }
 
@@ -313,7 +313,7 @@ export function templateToCloudPayload(
     updated_at: row.updated_at,
     deleted_at: row.deleted_at,
     version: row.version,
-    client_id: row.client_id ?? clientId,
+    client_id: clientId,
   };
 }
 
@@ -393,7 +393,7 @@ export function overdueEventToCloudPayload(
     event_date: row.event_date,
     created_at: row.created_at,
     deleted_at: row.deleted_at,
-    client_id: row.client_id ?? clientId,
+    client_id: clientId,
   };
 }
 
@@ -452,7 +452,7 @@ export function holdPeriodToCloudPayload(
     updated_at: row.updated_at,
     deleted_at: row.deleted_at,
     version: row.version,
-    client_id: row.client_id ?? clientId,
+    client_id: clientId,
   };
 }
 
@@ -522,7 +522,7 @@ export function workspaceToCloudPayload(
     updated_at: row.updated_at,
     deleted_at: row.deleted_at,
     version: row.version,
-    client_id: row.client_id ?? clientId,
+    client_id: clientId,
   };
 }
 
@@ -576,7 +576,7 @@ export function memberToCloudPayload(
     updated_at: row.updated_at,
     deleted_at: row.deleted_at,
     version: row.version,
-    client_id: row.client_id ?? clientId,
+    client_id: clientId,
   };
 }
 
@@ -619,7 +619,7 @@ export function settingToCloudPayload(
     updated_at: row.updated_at,
     deleted_at: row.deleted_at,
     version: row.version,
-    client_id: row.client_id ?? clientId,
+    client_id: clientId,
   };
 }
 
