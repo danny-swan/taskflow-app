@@ -226,3 +226,40 @@ workspace_members.user_id`, `workspaces.uuid`, `workspace_members.uuid`,
   [ADR 0009](0009-accept-invite-upsert-membership.md)) остаётся открытым —
   вероятная связь с битым `client_id` на повреждённых базах не подтверждена
   в этом фиксе.
+
+## Обновление (F17, 22.07.2026, ADR 0011)
+
+**F16-эскалация 2067→corruption пересмотрена и откачена.** Живая диагностика
+под ролью приглашённого (прод-SQL) показала, что `UNIQUE constraint failed:
+workspace_members.workspace_id, workspace_members.user_id` (code 2067) —
+**НЕ признак порчи** локальной SQLite: `integrity_check` возвращает `ok`,
+строки физически на месте, индекс не рассинхронизирован. Настоящая причина —
+рассинхрон **идентичности** строки членства: при accept-invite клиент создаёт
+локальную строку со своим случайным `uuidv7`, а сервер (`accept_invite`,
+F15/[ADR 0009](0009-accept-invite-upsert-membership.md), миграция 0040) хранит
+свой канонический uuid для той же пары `(workspace_id, user_id)`. Матчинг
+`applyCloudRowMembers` только по uuid промахивался → INSERT → 2067 на
+не-partial индексе `idx_workspace_members_ws_user`.
+
+Следствия для этого ADR:
+
+- Четыре UNIQUE-паттерна (`workspace_members.workspace_id, user_id`,
+  `workspaces.uuid`, `workspace_members.uuid`, `task_activity_log.uuid`)
+  **удалены** из `isSqliteCorruptionMessage()` (`src/lib/sync/pull.ts`).
+  Теперь эта функция ловит только настоящую порчу: `database disk image is
+  malformed`, `code: 11`, `SQLITE_CORRUPT`. Раздел «Решение → 2.1» и
+  соответствующие упоминания в разделе «Решение → 1» (F16 escalation про
+  четыре сигнатуры) считать **отменёнными** — оставлены в тексте только как
+  исторический контекст.
+- `__corruption_probe` (веб-ветка `detectAndRecoverCorruption`, `src/lib/db.ts`)
+  **сохранён** — он тестирует реальную порчу индекса на СВОЕЙ изолированной
+  temp-таблице и не связан с бизнес-коллизией 2067 на `workspace_members`
+  (в код добавлен поясняющий комментарий).
+- Сама коллизия перенесена из «сброс всей локальной БД» в точечный
+  fallback-матчинг по `(workspace_id, user_id)` с переклейкой uuid на
+  серверный — см. [ADR 0011](0011-membership-uuid-mismatch-reconcile.md)
+  и roadmap §7.17.
+
+Всё остальное в этом ADR (детект настоящей порчи по `integrity_check`,
+`withCorruptionGuard` на сигнатуры malformed/code 11/SQLITE_CORRUPT,
+prune-skip, тост + reload) остаётся в силе.

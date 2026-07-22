@@ -77,22 +77,16 @@ export class SqliteCorruptError extends Error {
  * явное упоминание SQLITE_CORRUPT, либо code: 11 в сообщении драйвера.
  */
 function isSqliteCorruptionMessage(msg: string): boolean {
+  // F17 (ADR 0011): откат F16-эскалации. UNIQUE fail на
+  // workspace_members(workspace_id, user_id) (code 2067) — это НЕ порча БД, а
+  // штатная коллизия из-за рассинхрона локального uuid с серверным при
+  // accept-invite. Теперь она чинится fallback-матчером в applyCloudRowMembers,
+  // а не сбросом всей локальной SQLite. Поэтому четыре UNIQUE-паттерна убраны;
+  // здесь остаются только настоящие признаки физической порчи.
   return (
     /database disk image is malformed/i.test(msg) ||
     /code:?\s*11\b/i.test(msg) ||
-    /SQLITE_CORRUPT/i.test(msg) ||
-    // F16 escalation: серверных дубликатов по (workspace_id, user_id) НЕТ
-    // (RLS + UNIQUE на sync_workspace_members + реконсиль accept_invite F15
-    // гарантируют это). Значит UNIQUE fail на этом индексе при INSERT-пути
-    // (uuid не найден локальным матчером, хотя строка с тем же (ws, user)
-    // физически уже есть) — признак битого локального uuid-индекса, а не
-    // бизнес-коллизии. Трактуем как corruption.
-    /UNIQUE constraint failed: workspace_members\.workspace_id,\s*workspace_members\.user_id/i.test(msg) ||
-    // Аналогично workspaces.uuid / workspace_members.uuid / task_activity_log.uuid —
-    // все три наблюдались в прод-логах пользователя как спутники malformed (code 11).
-    /UNIQUE constraint failed: workspaces\.uuid/i.test(msg) ||
-    /UNIQUE constraint failed: workspace_members\.uuid/i.test(msg) ||
-    /UNIQUE constraint failed: task_activity_log\.uuid/i.test(msg)
+    /SQLITE_CORRUPT/i.test(msg)
   );
 }
 
@@ -532,14 +526,26 @@ function applyCloudRowWorkspaces(row: CloudRow): boolean {
   return true;
 }
 
-/** workspace_members: matched по uuid (серверный id). LWW по updated_at. */
+/**
+ * workspace_members: сначала matched по uuid (серверный id), затем fallback
+ * по натуральному ключу (workspace_id, user_id). LWW по updated_at.
+ *
+ * F17 (ADR 0011): при accept-invite клиент создаёт локальный membership со
+ * СВОИМ случайным uuid (uuidv7), а сервер хранит СВОЙ канонический uuid для той
+ * же пары (workspace_id, user_id). Матчинг только по uuid промахивался мимо
+ * локальной строки → applier уходил в INSERT → ловил
+ * `UNIQUE constraint failed: workspace_members.workspace_id, workspace_members.user_id`
+ * (code 2067), т.к. локальный uuid-индекс НЕ partial и (ws, user) уже занята.
+ * Fallback по паре ловит эту строку и переклеивает uuid на серверный (он —
+ * каноническая идентичность членства).
+ */
 function applyCloudRowMembers(row: CloudRow): boolean {
-  const local = db.get<{ id: number; updated_at: string }>(
+  const byUuid = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM workspace_members WHERE uuid=?',
     [row.id],
   );
-  if (local) {
-    if (local.updated_at >= row.updated_at) return false;
+  if (byUuid) {
+    if (byUuid.updated_at >= row.updated_at) return false;
     db.run(
       `UPDATE workspace_members
        SET workspace_id=?, user_id=?, role=?, invited_by=?, joined_at=?,
@@ -550,6 +556,64 @@ function applyCloudRowMembers(row: CloudRow): boolean {
     );
     return true;
   }
+
+  // F17: по uuid не нашли — ищем ту же пару (workspace_id, user_id). Если она
+  // локально есть, это тот же membership с локальным uuid ≠ серверный. НЕ
+  // вставляем (иначе 2067), а переклеиваем uuid на серверный + LWW по полям.
+  const byPair = db.get<{ id: number; uuid: string | null; updated_at: string }>(
+    'SELECT id, uuid, updated_at FROM workspace_members WHERE workspace_id=? AND user_id=?',
+    [row.workspace_id, row.user_id],
+  );
+  if (byPair) {
+    // Edge case: серверный uuid уже занят ДРУГОЙ локальной строкой (например,
+    // остаток от прошлой неудачной переклейки). Уникальный индекс на uuid не
+    // даст выставить его на byPair — сначала убираем дубликат.
+    const uuidOwner = db.get<{ id: number }>(
+      'SELECT id FROM workspace_members WHERE uuid=? AND id<>?',
+      [row.id, byPair.id],
+    );
+    if (uuidOwner) {
+      db.run('DELETE FROM workspace_members WHERE id=?', [byPair.id]);
+      logger.warn(
+        `[sync/pull] F17: серверный uuid ${row.id} уже принадлежит строке id=${uuidOwner.id}; ` +
+        `удалён дубликат byPair id=${byPair.id} для (ws=${row.workspace_id}, user=${row.user_id})`,
+      );
+      // uuidOwner — каноническая строка (у неё уже серверный uuid). Применяем к
+      // ней LWW, как если бы нашли по uuid.
+      const owner = db.get<{ updated_at: string }>(
+        'SELECT updated_at FROM workspace_members WHERE id=?',
+        [uuidOwner.id],
+      );
+      if (owner && owner.updated_at < row.updated_at) {
+        db.run(
+          `UPDATE workspace_members
+           SET workspace_id=?, user_id=?, role=?, invited_by=?, joined_at=?,
+               updated_at=?, deleted_at=?, version=?, client_id=?
+           WHERE id=?`,
+          [row.workspace_id, row.user_id, row.role, row.invited_by, row.joined_at,
+           row.updated_at, row.deleted_at, row.version, row.client_id, uuidOwner.id],
+        );
+      }
+      return true;
+    }
+
+    // uuid=row.id ВСЕГДА выставляем (серверная идентичность каноническая).
+    // Остальные поля — по LWW: свежее облако → обновляем всё; иначе только uuid.
+    if (byPair.updated_at < row.updated_at) {
+      db.run(
+        `UPDATE workspace_members
+         SET uuid=?, workspace_id=?, user_id=?, role=?, invited_by=?, joined_at=?,
+             updated_at=?, deleted_at=?, version=?, client_id=?
+         WHERE id=?`,
+        [row.id, row.workspace_id, row.user_id, row.role, row.invited_by, row.joined_at,
+         row.updated_at, row.deleted_at, row.version, row.client_id, byPair.id],
+      );
+    } else {
+      db.run('UPDATE workspace_members SET uuid=? WHERE id=?', [row.id, byPair.id]);
+    }
+    return true;
+  }
+
   db.run(
     `INSERT INTO workspace_members
       (uuid, workspace_id, user_id, role, invited_by, joined_at,

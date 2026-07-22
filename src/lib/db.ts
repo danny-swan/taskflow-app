@@ -1025,13 +1025,18 @@ export async function detectAndRecoverCorruption(): Promise<CorruptionCheckResul
           }
 
           // F16 escalation: integrity_check иногда возвращает 'ok', пока порча
-          // ограничена рассинхроном одного uuid-индекса с таблицей (см. прод-кейс
-          // с 2067 на workspace_members/workspaces/task_activity_log ДО того, как
-          // sql.js окончательно помечает базу malformed). integrity_check это не
-          // всегда ловит. Пробуем вставить/удалить строку во временную таблицу с
-          // UNIQUE-индексом на битой базе — любое исключение (в т.ч. обычный
-          // UNIQUE constraint failed) на такой тривиальной операции — верный
-          // признак рассинхрона индекса с данными, т.е. corruption.
+          // ограничена рассинхроном одного uuid-индекса с таблицей. integrity_check
+          // это не всегда ловит. Пробуем вставить/удалить строку в ИЗОЛИРОВАННУЮ
+          // временную таблицу с UNIQUE-индексом — любое исключение на такой
+          // тривиальной операции указывает на физический рассинхрон индекса с
+          // данными, т.е. настоящую corruption.
+          //
+          // F17 (ADR 0011): этот probe НЕ связан с UNIQUE-коллизией 2067 на
+          // workspace_members(workspace_id, user_id). Та коллизия — штатный
+          // рассинхрон локального uuid с серверным при accept-invite и чинится
+          // fallback-матчером в pull.ts::applyCloudRowMembers, а не сбросом БД.
+          // Здесь probe работает на СВОЕЙ таблице __corruption_probe и ловит
+          // только реальную порчу движка/страниц, независимую от бизнес-данных.
           if (!reason) {
             try {
               probe.exec("CREATE TEMP TABLE IF NOT EXISTS __corruption_probe (id INTEGER PRIMARY KEY, k TEXT UNIQUE)");
