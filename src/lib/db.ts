@@ -930,12 +930,213 @@ export async function ensureWelcomeTaskIfNeeded(_userId?: string): Promise<boole
   return true;
 }
 
+// ─── F16: авто-обнаружение и восстановление битой локальной SQLite ──────────
+// (ADR 0010, roadmap §7.16). Root cause: у части пользователей локальная
+// SQLite физически повреждается («database disk image is malformed», code 11)
+// или её индексы расходятся с данными (code 2067 UNIQUE constraint failed на
+// уже отсутствующих строках). Applier тогда не находит строку по SELECT
+// uuid=?, уходит в ветку INSERT, а unique-индекс всё равно её видит — падение.
+// Снаружи это выглядит как «pull возвращает 200, но ничего не применяется»,
+// а после рестарта prunePhantomWorkspaces подчищает ws без локального
+// membership — сайдбар пустеет. Детект — PRAGMA integrity_check при каждом
+// старте, ДО ensureSchema/migrate/hydrate, чтобы не работать поверх мусора.
+export interface CorruptionCheckResult {
+  recovered: boolean;
+  reason?: string;
+}
+
+/**
+ * Список локальных таблиц, которые нужно попытаться сбросить в Tauri-ветке,
+ * если native SQLite повреждена сильнее, чем можно починить точечно. Список
+ * синхронизирован с ensureSchema()/migrations.ts (все таблицы, которые
+ * когда-либо создавались локально).
+ */
+const KNOWN_TABLES = [
+  'statuses',
+  'tags',
+  'tasks',
+  'settings',
+  'task_templates',
+  'overdue_events',
+  'task_hold_periods',
+  'sync_outbox',
+  'workspaces',
+  'workspace_members',
+  'workspace_settings',
+  'task_activity_log',
+];
+
+function isCorruptionError(e: unknown): boolean {
+  const msg = String((e as any)?.message ?? e ?? '');
+  return (
+    /database disk image is malformed/i.test(msg) ||
+    /code:?\s*11\b/i.test(msg) ||
+    /SQLITE_CORRUPT/i.test(msg)
+  );
+}
+
+/**
+ * Обнаруживает битую локальную SQLite при старте и восстанавливает базу
+ * (сбрасывает локальное хранилище — облако остаётся источником истины для
+ * Pro-плана, следующий syncNow подтянет всё заново).
+ *
+ * Вызывается в самом начале initDb(), ДО ensureSchema/migrate/hydrate.
+ */
+export async function detectAndRecoverCorruption(): Promise<CorruptionCheckResult> {
+  if (!IS_TAURI) {
+    // ── Web-ветка: sql.js + localStorage ──────────────────────────────────
+    const raw = tryStorage(() => localStorage.getItem(STORAGE_KEY), null);
+    if (!raw) return { recovered: false };
+
+    let reason: string | null = null;
+    try {
+      let bytes: Uint8Array;
+      try {
+        const arr = JSON.parse(raw) as number[];
+        bytes = new Uint8Array(arr);
+      } catch (e) {
+        reason = `invalid stored payload (JSON.parse failed): ${String((e as any)?.message ?? e)}`;
+        bytes = new Uint8Array();
+      }
+
+      if (!reason) {
+        if (!SQL) {
+          SQL = await initSqlJs({ locateFile: () => wasmUrl as string });
+        }
+        let probe: Database | null = null;
+        try {
+          probe = new SQL.Database(bytes);
+        } catch (e) {
+          reason = `invalid SQLite header (constructor threw): ${String((e as any)?.message ?? e)}`;
+        }
+        if (probe && !reason) {
+          try {
+            const res = probe.exec("PRAGMA integrity_check");
+            const value = res?.[0]?.values?.[0]?.[0];
+            if (String(value ?? '').toLowerCase() !== 'ok') {
+              reason = `PRAGMA integrity_check returned: ${String(value)}`;
+            }
+          } catch (e) {
+            if (isCorruptionError(e)) {
+              reason = `integrity_check threw SQLITE_CORRUPT: ${String((e as any)?.message ?? e)}`;
+            } else {
+              reason = `integrity_check threw: ${String((e as any)?.message ?? e)}`;
+            }
+          }
+
+          // F16 escalation: integrity_check иногда возвращает 'ok', пока порча
+          // ограничена рассинхроном одного uuid-индекса с таблицей (см. прод-кейс
+          // с 2067 на workspace_members/workspaces/task_activity_log ДО того, как
+          // sql.js окончательно помечает базу malformed). integrity_check это не
+          // всегда ловит. Пробуем вставить/удалить строку во временную таблицу с
+          // UNIQUE-индексом на битой базе — любое исключение (в т.ч. обычный
+          // UNIQUE constraint failed) на такой тривиальной операции — верный
+          // признак рассинхрона индекса с данными, т.е. corruption.
+          if (!reason) {
+            try {
+              probe.exec("CREATE TEMP TABLE IF NOT EXISTS __corruption_probe (id INTEGER PRIMARY KEY, k TEXT UNIQUE)");
+              probe.exec("INSERT INTO __corruption_probe (k) VALUES ('probe_' || abs(random()))");
+              probe.exec("DROP TABLE __corruption_probe");
+            } catch (e) {
+              reason = `unique-probe failed: ${String((e as any)?.message ?? e)}`;
+            }
+          }
+
+          try { probe.close(); } catch { /* noop */ }
+        }
+      }
+    } catch (e) {
+      reason = `unexpected error probing local SQLite: ${String((e as any)?.message ?? e)}`;
+    }
+
+    if (reason) {
+      console.error('[db][corruption] detected, will reset:', reason);
+      tryStorage(() => { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(STORAGE_KEY_TS); return null; }, null);
+      return { recovered: true, reason };
+    }
+    return { recovered: false };
+  }
+
+  // ── Tauri-ветка: native SQLite через @tauri-apps/plugin-sql ──────────────
+  let reason: string | null = null;
+  let d: any = null;
+  try {
+    d = await getTauriDb();
+  } catch (e) {
+    reason = `getTauriDb() failed: ${String((e as any)?.message ?? e)}`;
+  }
+
+  if (d && !reason) {
+    try {
+      const rows: any[] = await d.select('PRAGMA integrity_check');
+      const value = rows?.[0]?.integrity_check ?? Object.values(rows?.[0] ?? {})[0];
+      if (String(value ?? '').toLowerCase() !== 'ok') {
+        reason = `PRAGMA integrity_check returned: ${String(value)}`;
+      }
+    } catch (e) {
+      if (isCorruptionError(e)) {
+        reason = `integrity_check threw SQLITE_CORRUPT: ${String((e as any)?.message ?? e)}`;
+      } else {
+        reason = `integrity_check threw: ${String((e as any)?.message ?? e)}`;
+      }
+    }
+  }
+
+  if (!reason) return { recovered: false };
+
+  console.error('[db][corruption] detected, will reset:', reason);
+  let dropFailed = false;
+  try {
+    const dd = d ?? (await getTauriDb());
+    for (const table of KNOWN_TABLES) {
+      try {
+        await dd.execute(`DROP TABLE IF EXISTS ${table}`);
+      } catch (e) {
+        dropFailed = true;
+        console.error(`[db][corruption] failed to drop table ${table}:`, e);
+      }
+    }
+    tauriDb = null; // форсируем переоткрытие соединения на следующем getTauriDb()
+  } catch (e) {
+    dropFailed = true;
+    console.error('[db][corruption] failed to reset Tauri DB:', e);
+  }
+
+  if (dropFailed && typeof window !== 'undefined') {
+    // БД не поддаётся восстановлению точечными DROP — просим пользователя
+    // переустановить. Отдельный флаг (не тот же, что recovered), чтобы
+    // компонент App показал другой (более настойчивый) toast при необходимости.
+    (window as any).__taskflow_corruption_unrecoverable = true;
+  }
+
+  if (typeof window !== 'undefined') (window as any).__taskflow_corruption_recovered = reason;
+  return { recovered: true, reason };
+}
+
 // ─── PUBLIC init ──────────────────────────────────────────────────────────────
 export async function initDb(): Promise<void> {
   // Always initialise the in-memory sql.js database as a synchronous cache layer.
   // In Tauri mode we additionally set up the native SQLite and sync data into webDb.
   if (!SQL) {
     SQL = await initSqlJs({ locateFile: () => wasmUrl as string });
+  }
+
+  // F16 (ADR 0010, roadmap §7.16): проверяем целостность локальной SQLite ДО
+  // ensureSchema/migrate/hydrate — иначе миграции/сид работают поверх битой
+  // базы и просто маскируют проблему до следующего рестарта.
+  const corruption = await detectAndRecoverCorruption();
+  if (corruption.recovered) {
+    if (typeof window !== 'undefined') {
+      (window as any).__taskflow_corruption_recovered = corruption.reason ?? 'sqlite_corruption';
+    }
+    // Локальное хранилище уже сброшено внутри detectAndRecoverCorruption(),
+    // поэтому bound_user_id (живёт в settings — самой таблице, которую мы
+    // только что стёрли/пересоздадим) автоматически потеряется вместе с ней.
+    // Следующий успешный syncNow() привяжет базу к аккаунту заново.
+    // Дополнительно снимаем возможный webDb-кэш в памяти (веб-ветка) — иначе
+    // ниже `if (webDb) return;` вернёт управление раньше, чем мы пересоздадим
+    // базу из чистого localStorage.
+    webDb = null;
   }
 
   if (IS_TAURI) {

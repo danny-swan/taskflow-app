@@ -142,6 +142,23 @@ function App() {
       'font-weight:bold', 'color:#888');
   }, [init]);
 
+  // F16 (ADR 0010, roadmap §7.16): detectAndRecoverCorruption() в initDb() могла
+  // сбросить локальную SQLite до того, как приложение успело отрисоваться. При монте
+  // проверяем флаг и сообщаем пользователю, что данные будут перетянуты из облака
+  // следующим syncNow(). Гасится один раз на монте — pull.ts тоже ставит этот флаг
+  // во время runtime-порчи — в этом случае sync/index.ts (handlePullCorruption) уже показывает
+  // свой тоаст и делает reload до того, как этот эффект успел бы сработать.
+  useEffect(() => {
+    const reason = (window as any).__taskflow_corruption_recovered;
+    if (reason) {
+      pushToast(lang === 'ru'
+        ? 'Локальная база была повреждена и восстановлена из облака. Загружаем ваши данные...'
+        : 'Local database was corrupted and restored from the cloud. Loading your data...');
+      delete (window as any).__taskflow_corruption_recovered;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // v0.9.28: catch-up автоочистки выполненных задач после инициализации БД.
   // Если сегодня прошёл выбранный день недели и last_run старее — тихо архивируем.
   // Показываем toast с Undo (5 сек), если что-то реально было архивировано.

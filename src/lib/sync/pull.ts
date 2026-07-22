@@ -54,6 +54,86 @@ export class DeferRowError extends Error {
 }
 
 /**
+ * F16 (ADR 0010, roadmap §7.16) — маркер «локальная SQLite повреждена».
+ *
+ * В отличие от DeferRowError (ожидаемое отложение до прихода parent'а), это
+ * НАСТОЯЩАЯ фатальная ошибка: applier наткнулся на признак физической
+ * порчи локальной базы (malformed image / SQLITE_CORRUPT) или на расхождение
+ * unique-индекса с данными (SELECT WHERE uuid=? не находит строку, но INSERT
+ * в неё же ловит 2067). Продолжать применять строки поверх такой базы
+ * бессмысленно и опасно — pullAll должен прервать цикл apply и НЕ звать
+ * prunePhantomWorkspaces (иначе он дочистит остатки ещё не восстановленной
+ * базы и снесёт ws, у которых просто не успело появиться membership).
+ */
+export class SqliteCorruptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SqliteCorruptError';
+  }
+}
+
+/**
+ * Признак повреждения SQLite в тексте ошибки: malformed image (code 11),
+ * явное упоминание SQLITE_CORRUPT, либо code: 11 в сообщении драйвера.
+ */
+function isSqliteCorruptionMessage(msg: string): boolean {
+  return (
+    /database disk image is malformed/i.test(msg) ||
+    /code:?\s*11\b/i.test(msg) ||
+    /SQLITE_CORRUPT/i.test(msg) ||
+    // F16 escalation: серверных дубликатов по (workspace_id, user_id) НЕТ
+    // (RLS + UNIQUE на sync_workspace_members + реконсиль accept_invite F15
+    // гарантируют это). Значит UNIQUE fail на этом индексе при INSERT-пути
+    // (uuid не найден локальным матчером, хотя строка с тем же (ws, user)
+    // физически уже есть) — признак битого локального uuid-индекса, а не
+    // бизнес-коллизии. Трактуем как corruption.
+    /UNIQUE constraint failed: workspace_members\.workspace_id,\s*workspace_members\.user_id/i.test(msg) ||
+    // Аналогично workspaces.uuid / workspace_members.uuid / task_activity_log.uuid —
+    // все три наблюдались в прод-логах пользователя как спутники malformed (code 11).
+    /UNIQUE constraint failed: workspaces\.uuid/i.test(msg) ||
+    /UNIQUE constraint failed: workspace_members\.uuid/i.test(msg) ||
+    /UNIQUE constraint failed: task_activity_log\.uuid/i.test(msg)
+  );
+}
+
+/**
+ * Оборачивает applyCloudRow* — если внутри вылетело исключение с признаком
+ * порчи SQLite, поднимает флаг для App.tsx/syncNow и перебрасывает исключение
+ * как SqliteCorruptError (чтобы pullAll отличил его от обычной ошибки строки
+ * и от DeferRowError).
+ */
+function withCorruptionGuard(
+  tableName: string,
+  fn: (row: CloudRow) => boolean,
+): (row: CloudRow) => boolean {
+  return (row: CloudRow): boolean => {
+    try {
+      return fn(row);
+    } catch (e) {
+      if (e instanceof DeferRowError || e instanceof SqliteCorruptError) throw e;
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isSqliteCorruptionMessage(msg)) {
+        if (typeof window !== 'undefined') {
+          (window as any).__taskflow_corruption_recovered = 'runtime_during_pull';
+          // F16: сбрасываем возможно битую БД из LocalStorage СРАЗУ, до того как
+          // scheduleSave() (дебаунс 200ms в db.ts) успеет записать текущее битое
+          // состояние обратно. Без этого reload перечитает ту же битую SQLite
+          // и цикл повторится.
+          try {
+            for (const k of ['taskflow.sqlite.v1', 'taskflow.sqlite.v1.ts']) {
+              try { window.localStorage.removeItem(k); } catch { /* noop */ }
+            }
+          } catch { /* noop */ }
+        }
+        logger.warn(`[sync/pull] SQLITE_CORRUPT detected while applying ${tableName} row ${row.id}:`, msg);
+        throw new SqliteCorruptError(`${tableName}: ${msg}`);
+      }
+      throw e;
+    }
+  };
+}
+
+/**
  * Ключ settings для last_pulled cursor.
  *
  * Wave A PR-2: per-ws-per-table формат `sync_last_pulled_<ws>_<cloudTable>`.
@@ -543,18 +623,25 @@ function applyCloudRowActivityLog(row: CloudRow): boolean {
   return true;
 }
 
-/** Карта applier'ов по имени облачной таблицы. */
+/**
+ * Карта applier'ов по имени облачной таблицы.
+ *
+ * F16 (ADR 0010, roadmap §7.16): каждый applier обёрнут withCorruptionGuard —
+ * любая ошибка с признаком физической порчи локальной SQLite (malformed
+ * image / SQLITE_CORRUPT / расхождение unique-индекса с данными) поднимается
+ * как SqliteCorruptError, а не тонет как обычная ошибка строки.
+ */
 const APPLIERS: Record<string, (row: CloudRow) => boolean> = {
-  sync_workspaces: applyCloudRowWorkspaces,
-  sync_workspace_members: applyCloudRowMembers,
-  sync_workspace_settings: applyCloudRowSettings,
-  sync_tasks: applyCloudRowTasks,
-  sync_statuses: applyCloudRowStatuses,
-  sync_tags: applyCloudRowTags,
-  sync_task_templates: applyCloudRowTemplates,
-  sync_overdue_events: applyCloudRowOverdueEvents,
-  sync_task_hold_periods: applyCloudRowHoldPeriods,
-  sync_task_activity_log: applyCloudRowActivityLog,
+  sync_workspaces: withCorruptionGuard('sync_workspaces', applyCloudRowWorkspaces),
+  sync_workspace_members: withCorruptionGuard('sync_workspace_members', applyCloudRowMembers),
+  sync_workspace_settings: withCorruptionGuard('sync_workspace_settings', applyCloudRowSettings),
+  sync_tasks: withCorruptionGuard('sync_tasks', applyCloudRowTasks),
+  sync_statuses: withCorruptionGuard('sync_statuses', applyCloudRowStatuses),
+  sync_tags: withCorruptionGuard('sync_tags', applyCloudRowTags),
+  sync_task_templates: withCorruptionGuard('sync_task_templates', applyCloudRowTemplates),
+  sync_overdue_events: withCorruptionGuard('sync_overdue_events', applyCloudRowOverdueEvents),
+  sync_task_hold_periods: withCorruptionGuard('sync_task_hold_periods', applyCloudRowHoldPeriods),
+  sync_task_activity_log: withCorruptionGuard('sync_task_activity_log', applyCloudRowActivityLog),
 };
 
 /**
@@ -596,6 +683,11 @@ export interface PullResult {
    * PULL_BATCH_SIZE строк от epoch.
    */
   maxCursor?: string;
+  /**
+   * F16 (ADR 0010, roadmap §7.16): локальная SQLite оказалась повреждена во время
+   * apply. Когда true — pullAll НЕ вызывает prunePhantomWorkspaces за этот цикл.
+   */
+  corruption?: boolean;
 }
 
 /**
@@ -612,6 +704,7 @@ async function pullTable(
   opts?: { fullFrom?: string },
 ): Promise<PullResult> {
   const result: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
+  let _corruptError: SqliteCorruptError | null = null;
   const applier = APPLIERS[spec.cloud];
   if (!applier) {
     logger.warn(`[sync/pull] no applier for ${spec.cloud}, skipping`);
@@ -663,6 +756,15 @@ async function pullTable(
         const rowCursor = String((raw as any)[cursorCol] ?? '');
         if (!cursorFrozen && rowCursor > maxCursor) maxCursor = rowCursor;
       } catch (e) {
+        if (e instanceof SqliteCorruptError) {
+          // F16: фатально — прерываем цикл по этой таблице сразу. Не двигаем
+          // курсор (он и так не сдвинут — база повреждена, писать в settings опасно).
+          logger.error(`[sync/pull] ${spec.cloud} SQLITE_CORRUPT, aborting table apply:`, e.message);
+          result.corruption = true;
+          result.firstError = e.message;
+          _corruptError = e;
+          break;
+        }
         const msg = e instanceof Error ? e.message : String(e);
         if (e instanceof DeferRowError) {
           // ОЖИДАЕМОЕ отложение (parent ещё не пришёл) — НЕ считаем ошибкой sync.
@@ -678,6 +780,10 @@ async function pullTable(
         // заново на следующем pull (включая саму deferred-строку).
         cursorFrozen = true;
       }
+    }
+
+    if (_corruptError) {
+      return result; // F16: не сохраняем прогресс/курсор, флаг/error уже выставлены
     }
 
     // Сохраняем прогресс. Если applied+skipped == батч, возможно есть ещё —
@@ -707,39 +813,53 @@ async function pullTable(
 export async function pullAll(userId: string): Promise<PullResult> {
   const total: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
 
-  // ── Фаза 1: членство (F14: ПОЛНЫЙ pull в двух скоупах, без инкремент-курсора) ─
-  // Проход A (вход в набор): свои строки членства (user_id=me), ПОЛНО — читаем от
-  // epoch, игнорируя сохранённый курсор. Строку членства в чужом shared-ws создаёт
-  // серверный accept_invite (user_id=me). Полнота чинит симптом 3: локально
-  // погашенные/удалённые prune'ом свои membership-строки восстанавливаются на
-  // КАЖДОМ старте (инкрементальный курсор «в будущем» их больше не приносил).
-  await pullSpecPaged(userId, WORKSPACE_MEMBERS_SPEC, listMembershipWorkspaceIds(userId), total, { full: true });
+  try {
+    // ── Фаза 1: членство (F14: ПОЛНЫЙ pull в двух скопах, без инкремент-курсора) ─
+    // Проход A (вход в набор): свои строки членства (user_id=me), ПОЛНО — читаем от
+    // epoch, игнорируя сохранённый курсор. Строку членства в чужом shared-ws создаёт
+    // серверный accept_invite (user_id=me). Полнота чинит симптом 3: локально
+    // погашенные/удалённые prune'ом свои membership-строки восстанавливаются на
+    // КАЖДОМ старте (инкрементальный курсор «в будущем» их больше не приносил).
+    await pullSpecPaged(userId, WORKSPACE_MEMBERS_SPEC, listMembershipWorkspaceIds(userId), total, { full: true });
+    if (total.corruption) return total;
 
-  // ── Набор пространств ──────────────────────────────────────────────────────
-  // Пересчитываем ПОСЛЕ прохода A из СВЕЖЕподтянутого членства (а не из локальной
-  // таблицы workspaces) — так чужой ws попадает в набор, разрывая chicken-and-egg.
-  const workspaceIds = listMembershipWorkspaceIds(userId);
+    // ── Набор пространств ──────────────────────────────────────────────────────
+    // Пересчитываем ПОСЛЕ прохода A из СВЕЖЕподтянутого членства (а не из локальной
+    // таблицы workspaces) — так чужой ws попадает в набор, разрывая chicken-and-egg.
+    const workspaceIds = listMembershipWorkspaceIds(userId);
 
-  // Проход B (со-участники): членство по `workspace_id IN (мои ws)`, тоже ПОЛНО.
-  // Даёт строки owner/других editor'ов того же ws (чинит симптом 1 — участники
-  // shared не видны). Серверный RLS (has_workspace_role viewer+) отдаёт их —
-  // подтверждено прод-пробой. Клон spec с pullScope='workspace_id'.
-  const membersByWorkspaceSpec: TableSpec = { ...WORKSPACE_MEMBERS_SPEC, pullScope: 'workspace_id' };
-  await pullSpecPaged(userId, membersByWorkspaceSpec, workspaceIds, total, { full: true });
+    // Проход B (со-участники): членство по `workspace_id IN (мои ws)`, тоже ПОЛНО.
+    // Даёт строки owner/других editor'ов того же ws (чинит симптом 1 — участники
+    // shared не видны). Серверный RLS (has_workspace_role viewer+) отдаёт их —
+    // подтверждено прод-пробой. Клон spec с pullScope='workspace_id'.
+    const membersByWorkspaceSpec: TableSpec = { ...WORKSPACE_MEMBERS_SPEC, pullScope: 'workspace_id' };
+    await pullSpecPaged(userId, membersByWorkspaceSpec, workspaceIds, total, { full: true });
+    if (total.corruption) return total;
 
-  // ── Фаза 2: пространства и их данные ────────────────────────────────────────
-  // Тянем каждое пространство ОТДЕЛЬНО, чтобы у каждого был свой per-ws курсор:
-  // иначе свежедобавленный shared-ws со «старыми» updated_at был бы отсечён общим
-  // курсором ведущего ws (его lastPulled уже «в будущем» относительно тех строк).
-  const phase2 = PULL_ORDER.filter(s => s.cloud !== WORKSPACE_MEMBERS_SPEC.cloud);
-  for (const ws of workspaceIds) {
-    for (const spec of phase2) {
-      await pullSpecPaged(userId, spec, [ws], total);
+    // ── Фаза 2: пространства и их данные ────────────────────────────────────────
+    // Тянем каждое пространство ОТДЕЛЬНО, чтобы у каждого был свой per-ws курсор:
+    // иначе свежедобавленный shared-ws со «старыми» updated_at был бы отсечён общим
+    // курсором ведущего ws (его lastPulled уже «в будущем» относительно тех строк).
+    const phase2 = PULL_ORDER.filter(s => s.cloud !== WORKSPACE_MEMBERS_SPEC.cloud);
+    for (const ws of workspaceIds) {
+      for (const spec of phase2) {
+        await pullSpecPaged(userId, spec, [ws], total);
+        if (total.corruption) return total;
+      }
     }
-  }
 
-  prunePhantomWorkspaces(userId);
-  return total;
+    prunePhantomWorkspaces(userId);
+    return total;
+  } catch (e) {
+    // F16 (ADR 0010, roadmap §7.16): страховочная сетка — если SqliteCorruptError
+    // всё же долетит сюда напрямую (а не через total.corruption), не даём pullAll
+    // упасть с необработанным исключением и не зовём prunePhantomWorkspaces.
+    if (e instanceof SqliteCorruptError) {
+      logger.error('[sync/pull] pullAll aborted: SqliteCorruptError:', e.message);
+      return { ...total, corruption: true, firstError: e.message };
+    }
+    throw e;
+  }
 }
 
 /**
@@ -768,6 +888,14 @@ async function pullSpecPaged(
     total.skipped += r.skipped;
     total.deferred += r.deferred;
     if (!total.firstError && r.firstError) total.firstError = r.firstError;
+    if (r.corruption) {
+      // F16 (ADR 0010, roadmap §7.16): локальная SQLite повреждена — прерываем
+      // пагинацию этого spec сразу, поднимаем флаг в total — pullAll проверяет
+      // его после каждого вызова pullSpecPaged и останавливается, не дойдя
+      // до prunePhantomWorkspaces.
+      total.corruption = true;
+      return;
+    }
     if (r.applied + r.skipped < PULL_BATCH_SIZE) break;
     // Иначе — было batch_size, возможно есть ещё.
     if (opts?.full && r.maxCursor) fullCursor = r.maxCursor;
@@ -794,6 +922,16 @@ async function pullSpecPaged(
  * @returns число удалённых строк из таблицы `workspaces` (для логов/тестов).
  */
 function prunePhantomWorkspaces(userId: string): number {
+  // F16 (ADR 0010, roadmap §7.16): если в текущем цикле pull локальная SQLite
+  // оказалась повреждена (флаг ставится в detectAndRecoverCorruption/withCorruptionGuard),
+  // не чистим фантомные ws прямо после того, как база была битой — ещё нет
+  // подтверждения, что membership успело восстановиться, и pruning снесёт рабочие
+  // shared workspaces (исходный симптом F16 — пустой сайдбар после рестарта).
+  if (typeof window !== 'undefined' && (window as any).__taskflow_corruption_recovered) {
+    logger.warn('[sync/pull] prunePhantomWorkspaces skipped: DB was corrupt this cycle');
+    return 0;
+  }
+
   const allowed = new Set<string>([computeWorkspaceId(userId), LOCAL_WS_ID]);
   try {
     const rows = db.all<{ workspace_id: string | null }>(

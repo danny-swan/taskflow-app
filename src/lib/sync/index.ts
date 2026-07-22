@@ -45,6 +45,46 @@ export { resubscribeRealtime } from './realtime';
 import { setBoundUserId, getBoundUserId } from '../snapshots';
 
 /**
+ * F16 (ADR 0010, roadmap §7.16): pullAll() вернул `{corruption:true}` — локальная
+ * SQLite была повреждена во время apply и уже сброшена/сбудет сброшена
+ * ниже (detectAndRecoverCorruption на следующем initDb). Показываем тоаст и
+ * перезагружаем страницу (веб) — чтобы initDb отработал свой путь с самого
+ * начала на чистом состоянии. Не пушим в этом цикле — push после битой базы опасен
+ * (могли бы улететь мусор из ещё не восстановленной/пустой локальной базы).
+ */
+async function handlePullCorruption(): Promise<void> {
+  logger.error('[sync/orchestrator] pull reported corruption:true, reloading to recover');
+  try {
+    const mod = await import('../../store/useStore');
+    const state = mod.useStore.getState();
+    if (typeof state.pushToast === 'function') {
+      const lang = state.language;
+      state.pushToast(
+        lang === 'ru'
+          ? 'Локальная база была повреждена, восстановление...'
+          : 'Local database was corrupted, recovering...',
+      );
+    }
+  } catch (e) {
+    logger.warn('[sync/orchestrator] failed to show corruption toast:', e);
+  }
+
+  // Веб: просто перезагружаем — следующий initDb() на старте сам вызовет
+  // detectAndRecoverCorruption() и увидит чистое состояние (localStorage уже
+  // очищен на этапе detectAndRecoverCorruption/withCorruptionGuard). В Tauri (не-веб)
+  // window.location тоже доступен (webview) — перезагрузка страницы там тоже
+  // перезагружает renderer и вызовет initDb() заново — отдельная ветка
+  // для “форс-ретрай initDb() без релоада” не требуется.
+  try {
+    if (typeof window !== 'undefined' && typeof window.location?.reload === 'function') {
+      window.location.reload();
+    }
+  } catch (e) {
+    logger.warn('[sync/orchestrator] window.location.reload failed:', e);
+  }
+}
+
+/**
  * v0.9.35-dev.5: вызываем useStore.refresh() после успешного pull, чтобы
  * UI увидел пришедшие из облака данные без перезапуска. Lazy import,
  * чтобы избежать цикла и чтобы в unit-тестах можно было не вызывать его.
@@ -277,6 +317,13 @@ export async function syncNow(): Promise<SyncResult> {
     let pullResult: PullResult | null = null;
     try {
       pullResult = await pullAll(userId);
+      if (pullResult.corruption) {
+        // F16 (ADR 0010, roadmap §7.16): база повреждена во время apply. Тоаст +
+        // релоад и НЕ пушим в этом цикле (push после битой базы опасен).
+        setState({ status: 'error', lastSyncedAt: currentState.lastSyncedAt, lastError: pullResult.firstError ?? 'sqlite_corruption' });
+        await handlePullCorruption();
+        return { ...emptyResult, skipped: false, pullResult, error: pullResult.firstError ?? 'sqlite_corruption' };
+      }
       if (pullResult.firstError) {
         // Pull частично упал, но не фатально — идём дальше.
         logger.warn('[sync/orchestrator] pull had errors:', pullResult.firstError);
@@ -333,6 +380,13 @@ export async function syncNow(): Promise<SyncResult> {
     let finalPullResult: PullResult | null = null;
     try {
       finalPullResult = await pullAll(userId);
+      if (finalPullResult.corruption) {
+        // F16: база повредилась уже на финальном pull'е (после push). Аналогично:
+        // тоаст + релоад. push в этом цикле уже ушёл выше, повторный цикл не запускается.
+        setState({ status: 'error', lastSyncedAt: currentState.lastSyncedAt, lastError: finalPullResult.firstError ?? 'sqlite_corruption' });
+        await handlePullCorruption();
+        return { ...emptyResult, ok: false, skipped: false, pullResult, pushResult, finalPullResult, error: finalPullResult.firstError ?? 'sqlite_corruption' };
+      }
       await refreshStoreAfterPull(finalPullResult.applied);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

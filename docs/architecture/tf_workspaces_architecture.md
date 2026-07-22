@@ -3,6 +3,7 @@
 > Living architecture document для эпика workspaces. Обновляется в каждом PR Wave A/B/C с фактическими решениями.
 > История правок:
 > — 2026-07-13: изначальный импорт (охватывает PR-1..PR-6 Wave A + §7.4-факт PR-5 лимитов).
+> — 2026-07-22: += §1.2 авто-восстановление битой локальной SQLite при старте (F16, ADR 0010, roadmap §7.16).
 
 > **Статус документа:** анализ и рекомендация. Реализацию по этому документу НЕ начинаем — сначала обсуждение.
 > **База анализа:** отчёт-разведка `tf_arch_recon.md` (main, коммит `667426e`).
@@ -25,6 +26,7 @@
 - **Outbox** — локальная `sync_outbox`, grain row-level по `(entity_table, entity_uuid)`, payload не хранится — push перечитывает свежую строку.
 - **Realtime** — подписка на 6 sync-таблиц с фильтром `user_id=eq.<uid>`; сам payload не применяется, только триггерит debounced `pullAll(600мс)`.
 - **Гейт:** весь sync-цикл платный — блокируется в `index.ts:215` через `isProOrTrial`, статус `'paywalled'`.
+- **Восстановление после порчи локальной БД (F16, ADR 0010):** локальная SQLite (веб — sql.js, сериализованный в LocalStorage; Tauri — нативный SQLite-файл) может физически повредиться (`PRAGMA integrity_check` ≠ `'ok'`, либо `SQLITE_CORRUPT`/code 11 «database disk image is malformed»). Битые индексы на битой базе давали ложный путь в `applyCloudRow*` (`SELECT WHERE uuid=?` не находит строку → `INSERT` → `UNIQUE constraint failed`, code 2067), из-за чего shared-пространства «пропадали» после рестарта (`prunePhantomWorkspaces` удалял ws без восстановившегося membership). `detectAndRecoverCorruption()` (`src/lib/db.ts`) проверяет целостность в начале `initDb()`, до `ensureSchema`/`migrate`/`hydrate`; при порче — сбрасывает локальное хранилище и показывает тост. Каждый `applyCloudRow*` в `pull.ts` обёрнут `withCorruptionGuard` (бросает `SqliteCorruptError` при сигнатуре порчи); `pullAll`/`pullSpecPaged` пропагируют `corruption:true` и пропускают `prunePhantomWorkspaces` и push в этом цикле синка. Подробности и альтернативы — [ADR 0010](../adr/0010-sqlite-corruption-auto-recovery.md), roadmap §7.16.
 
 ### 1.3 Задачи, статусы, теги, дедлайны — где источник истины
 - **Задачи** (`sync_tasks`): `id`, `title`, `status_id text` (ссылка на статус, **без FK**), `tag_id text` (без FK), даты, `sort_order`, `archived`, sync-метаданные.
