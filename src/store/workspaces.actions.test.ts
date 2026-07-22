@@ -242,4 +242,38 @@ describe('updateWorkspaceMemberRole / removeWorkspaceMember', () => {
     expect(del?.[1]).toEqual(expect.arrayContaining(['m1']));
     expect(outboxCalls()).toContainEqual(['workspace_members', 'delete']);
   });
+
+  // F14 (симптом 2): leave собственного членства ТЕКУЩЕГО ws должен обновить
+  // сайдбар (покинутое ws уходит) и переключить current на дефолт (personal).
+  it('F14: leave текущего ws → сайдбар без покинутого + current → personal', () => {
+    const SHARED = 'ws_shared_f14';
+    const PERSONAL = SYSTEM_WS;
+    useStore.setState({
+      workspaces: [wsRow(PERSONAL, 'personal'), wsRow(SHARED, 'shared')],
+      currentWorkspaceId: SHARED,
+      boundUserId: UID,
+    });
+    // SELECT строки членства перед гашением → своя строка в SHARED.
+    dbGet.mockImplementation((sql: string) => {
+      if (/SELECT workspace_id, user_id FROM workspace_members WHERE uuid=/.test(sql)) {
+        return { workspace_id: SHARED, user_id: UID };
+      }
+      return undefined;
+    });
+    // После гашения readWorkspacesFromDb видит только personal (членство в SHARED
+    // погашено → EXISTS-фильтр его отсекает).
+    dbAll.mockImplementation((sql: string) => {
+      if (/FROM workspaces/.test(sql)) {
+        return [{ uuid: PERSONAL, name: 'personal', kind: 'personal', owner_id: UID, sort_order: 0 }];
+      }
+      return [];
+    });
+
+    useStore.getState().removeWorkspaceMember('my-membership');
+
+    // Покинутое ws ушло из набора сайдбара.
+    expect(useStore.getState().workspaces.some(w => w.id === SHARED)).toBe(false);
+    // current переключён на дефолт (personal), а не завис на покинутом.
+    expect(useStore.getState().currentWorkspaceId).toBe(PERSONAL);
+  });
 });

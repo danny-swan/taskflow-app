@@ -260,3 +260,115 @@ describe('P0: приглашённый подтягивает чужое shared-
     expect(cnt).toBe(1);
   });
 });
+
+// ── F14 симптом 1: участники shared не видны owner/editor ────────────────────
+// Проход B pull'а членства по `workspace_id IN (мои ws)` должен принести строки
+// со-участников того же ws. До фикса членство тянулось ТОЛЬКО по user_id=me →
+// локально была лишь своя строка, MembersTab показывал одного «вас».
+describe('F14 симптом 1: pull членства по workspace_id приносит со-участников', () => {
+  it('editor видит и свою, и owner-строку членства того же ws', async () => {
+    H.store = {
+      sync_workspace_members: [
+        {
+          id: 'm-me', workspace_id: SHARED, user_id: ME, role: 'editor',
+          invited_by: OTHER, joined_at: T, created_at: T, updated_at: T,
+          deleted_at: null, version: 1, client_id: 'c',
+        },
+        {
+          id: 'm-owner', workspace_id: SHARED, user_id: OTHER, role: 'owner',
+          invited_by: OTHER, joined_at: T, created_at: T, updated_at: T,
+          deleted_at: null, version: 1, client_id: 'c',
+        },
+      ],
+      sync_workspaces: [
+        {
+          id: PERSONAL, user_id: ME, owner_id: ME, name: 'Мои задачи', kind: 'personal',
+          sort_order: 0, created_at: T, updated_at: T, deleted_at: null, version: 1, client_id: 'c',
+        },
+        {
+          id: SHARED, user_id: OTHER, owner_id: OTHER, name: 'Команда', kind: 'shared',
+          sort_order: 0, created_at: T, updated_at: T, deleted_at: null, version: 1, client_id: 'c',
+        },
+      ],
+      sync_statuses: [], sync_tasks: [], sync_tags: [], sync_task_templates: [],
+      sync_overdue_events: [], sync_task_hold_periods: [], sync_workspace_settings: [],
+      sync_task_activity_log: [],
+    };
+    const { pullAll } = await import('./pull');
+    await pullAll(ME);
+
+    // Обе строки членства ws должны оказаться локально (проход B по workspace_id).
+    const cnt = liveDb!.exec(
+      `SELECT COUNT(*) FROM workspace_members WHERE workspace_id=? AND deleted_at IS NULL`,
+      [SHARED],
+    )[0].values[0][0];
+    expect(cnt).toBe(2);
+
+    // Строка owner-со-участника (user_id=OTHER) присутствует.
+    const owner = liveDb!.exec(
+      `SELECT role FROM workspace_members WHERE user_id=? AND workspace_id=?`,
+      [OTHER, SHARED],
+    )[0]?.values[0];
+    expect(owner?.[0]).toBe('owner');
+  });
+});
+
+// ── F14 симптом 3: рестарт → ws исчезают и не возвращаются ───────────────────
+// Полный pull членства (от epoch, игнорируя сохранённый курсор) восстанавливает
+// локально погашенную/удалённую свою строку членства даже когда per-ws курсор
+// членства «в будущем». До фикса Phase 1 была инкрементальной (.gt(курсор)) →
+// при будущем курсоре 0 строк → prunePhantomWorkspaces вычищал shared-ws.
+describe('F14 симптом 3: полный pull членства восстанавливает ws при рестарте', () => {
+  it('членство подтягивается при курсоре «в будущем» → ws не вычищается prune', async () => {
+    // Локальное состояние «после прошлой сессии»: строка ws SHARED есть, но своя
+    // membership-строка отсутствует (была удалена prune'ом), курсор — «в будущем».
+    liveDb!.run(
+      `INSERT INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, version)
+       VALUES (?,?,?,?,?,?,?,1)`,
+      [SHARED, 'Команда', 'shared', OTHER, 0, T, T],
+    );
+    liveDb!.run(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+      [`sync_last_pulled_${PERSONAL}_sync_workspace_members`, '2999-01-01T00:00:00Z'],
+    );
+    H.store = {
+      sync_workspace_members: [
+        {
+          id: 'm-me', workspace_id: SHARED, user_id: ME, role: 'editor',
+          invited_by: OTHER, joined_at: T, created_at: T, updated_at: T,
+          deleted_at: null, version: 1, client_id: 'c',
+        },
+      ],
+      sync_workspaces: [
+        {
+          id: PERSONAL, user_id: ME, owner_id: ME, name: 'Мои задачи', kind: 'personal',
+          sort_order: 0, created_at: T, updated_at: T, deleted_at: null, version: 1, client_id: 'c',
+        },
+        {
+          id: SHARED, user_id: OTHER, owner_id: OTHER, name: 'Команда', kind: 'shared',
+          sort_order: 0, created_at: T, updated_at: T, deleted_at: null, version: 1, client_id: 'c',
+        },
+      ],
+      sync_statuses: [], sync_tasks: [], sync_tags: [], sync_task_templates: [],
+      sync_overdue_events: [], sync_task_hold_periods: [], sync_workspace_settings: [],
+      sync_task_activity_log: [],
+    };
+    const { pullAll } = await import('./pull');
+    await pullAll(ME);
+
+    // Своя строка членства восстановлена, несмотря на «будущий» курсор.
+    const mem = liveDb!.exec(
+      `SELECT COUNT(*) FROM workspace_members WHERE workspace_id=? AND user_id=? AND deleted_at IS NULL`,
+      [SHARED, ME],
+    )[0].values[0][0];
+    expect(mem).toBe(1);
+
+    // ws SHARED НЕ вычищен prune (членство восстановлено ДО prunePhantomWorkspaces).
+    const ws = liveDb!.exec(
+      `SELECT COUNT(*) FROM workspaces WHERE uuid=? AND deleted_at IS NULL`,
+      [SHARED],
+    )[0].values[0][0];
+    expect(ws).toBe(1);
+  });
+});

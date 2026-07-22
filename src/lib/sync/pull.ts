@@ -589,6 +589,13 @@ export interface PullResult {
   deferred: number;
   /** Первая ошибка. */
   firstError: string | null;
+  /**
+   * F14: максимальный курсор, достигнутый в этом батче. Нужен для in-memory
+   * пагинации ПОЛНОГО pull (когда курсор в settings НЕ продвигается) — чтобы
+   * следующий батч читал с `.gt(maxCursor)`, а не бесконечно перечитывал первые
+   * PULL_BATCH_SIZE строк от epoch.
+   */
+  maxCursor?: string;
 }
 
 /**
@@ -598,7 +605,12 @@ export interface PullResult {
  * (sync_workspace_settings) — по workspace_id IN (<мои ws>). Курсор хранится
  * per-ws (ключ по первому/personal ws — в Wave A он один).
  */
-async function pullTable(userId: string, spec: TableSpec, workspaceIds: string[]): Promise<PullResult> {
+async function pullTable(
+  userId: string,
+  spec: TableSpec,
+  workspaceIds: string[],
+  opts?: { fullFrom?: string },
+): Promise<PullResult> {
   const result: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
   const applier = APPLIERS[spec.cloud];
   if (!applier) {
@@ -608,7 +620,13 @@ async function pullTable(userId: string, spec: TableSpec, workspaceIds: string[]
 
   const cursorCol = cursorColumnFor(spec.cloud);
   const cursorWs = workspaceIds[0] ?? null;
-  const lastPulled = getLastPulledAt(spec.cloud, cursorCol, cursorWs);
+  // F14: ПОЛНЫЙ pull (fullFrom задан) читает от переданного курсора (для первого
+  // батча — epoch) и НЕ трогает сохранённый в settings курсор. Так членство на
+  // каждом старте перечитывается целиком (чинит симптомы 1 и 3), а data-таблицы
+  // остаются инкрементальными по своему per-ws курсору.
+  const full = opts?.fullFrom !== undefined;
+  const lastPulled = full ? opts!.fullFrom! : getLastPulledAt(spec.cloud, cursorCol, cursorWs);
+  result.maxCursor = lastPulled;
   try {
     // Скоуп-фильтр первым. P0: почти всё тянем по пространству (workspace_id IN
     // <мои ws> для data-таблиц; id IN <мои ws> для самой sync_workspaces, где id
@@ -663,8 +681,11 @@ async function pullTable(userId: string, spec: TableSpec, workspaceIds: string[]
     }
 
     // Сохраняем прогресс. Если applied+skipped == батч, возможно есть ещё —
-    // orchestrator позовёт нас снова.
-    setLastPulledAt(spec.cloud, maxCursor, cursorWs);
+    // orchestrator позовёт нас снова. F14: при ПОЛНОМ pull курсор в settings НЕ
+    // продвигаем (иначе следующий старт снова станет инкрементальным); отдаём
+    // maxCursor вызывающему для in-memory пагинации этого же прохода.
+    result.maxCursor = maxCursor;
+    if (!full) setLastPulledAt(spec.cloud, maxCursor, cursorWs);
     logger.info(
       `[sync/pull] ${spec.cloud}: +${result.applied} applied, ${result.skipped} skipped, ${result.deferred} deferred`,
     );
@@ -686,16 +707,25 @@ async function pullTable(userId: string, spec: TableSpec, workspaceIds: string[]
 export async function pullAll(userId: string): Promise<PullResult> {
   const total: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
 
-  // ── Фаза 1: членство ──────────────────────────────────────────────────────
-  // P0: строку членства в чужом shared-ws создаёт серверный accept_invite
-  // (user_id=me). Тянем её ПЕРВОЙ и строго по своему user_id — это единственный
-  // «вход» в набор пространств. Курсор членства ведём по personal-ws.
-  await pullSpecPaged(userId, WORKSPACE_MEMBERS_SPEC, listMembershipWorkspaceIds(userId), total);
+  // ── Фаза 1: членство (F14: ПОЛНЫЙ pull в двух скоупах, без инкремент-курсора) ─
+  // Проход A (вход в набор): свои строки членства (user_id=me), ПОЛНО — читаем от
+  // epoch, игнорируя сохранённый курсор. Строку членства в чужом shared-ws создаёт
+  // серверный accept_invite (user_id=me). Полнота чинит симптом 3: локально
+  // погашенные/удалённые prune'ом свои membership-строки восстанавливаются на
+  // КАЖДОМ старте (инкрементальный курсор «в будущем» их больше не приносил).
+  await pullSpecPaged(userId, WORKSPACE_MEMBERS_SPEC, listMembershipWorkspaceIds(userId), total, { full: true });
 
   // ── Набор пространств ──────────────────────────────────────────────────────
-  // Пересчитываем ПОСЛЕ фазы 1 из СВЕЖЕподтянутого членства (а не из локальной
+  // Пересчитываем ПОСЛЕ прохода A из СВЕЖЕподтянутого членства (а не из локальной
   // таблицы workspaces) — так чужой ws попадает в набор, разрывая chicken-and-egg.
   const workspaceIds = listMembershipWorkspaceIds(userId);
+
+  // Проход B (со-участники): членство по `workspace_id IN (мои ws)`, тоже ПОЛНО.
+  // Даёт строки owner/других editor'ов того же ws (чинит симптом 1 — участники
+  // shared не видны). Серверный RLS (has_workspace_role viewer+) отдаёт их —
+  // подтверждено прод-пробой. Клон spec с pullScope='workspace_id'.
+  const membersByWorkspaceSpec: TableSpec = { ...WORKSPACE_MEMBERS_SPEC, pullScope: 'workspace_id' };
+  await pullSpecPaged(userId, membersByWorkspaceSpec, workspaceIds, total, { full: true });
 
   // ── Фаза 2: пространства и их данные ────────────────────────────────────────
   // Тянем каждое пространство ОТДЕЛЬНО, чтобы у каждого был свой per-ws курсор:
@@ -721,15 +751,26 @@ async function pullSpecPaged(
   spec: TableSpec,
   workspaceIds: string[],
   total: PullResult,
+  opts?: { full?: boolean },
 ): Promise<void> {
+  // F14: при ПОЛНОМ pull курсор в settings не продвигается, поэтому пагинацию
+  // ведём in-memory — от epoch, затем от maxCursor предыдущего батча. Иначе при
+  // >PULL_BATCH_SIZE строк мы бы бесконечно перечитывали первый батч.
+  let fullCursor = opts?.full ? initialCursorValue(spec.cloud) : undefined;
   for (let i = 0; i < 5; i++) {
-    const r = await pullTable(userId, spec, workspaceIds);
+    const r = await pullTable(
+      userId,
+      spec,
+      workspaceIds,
+      opts?.full ? { fullFrom: fullCursor } : undefined,
+    );
     total.applied += r.applied;
     total.skipped += r.skipped;
     total.deferred += r.deferred;
     if (!total.firstError && r.firstError) total.firstError = r.firstError;
     if (r.applied + r.skipped < PULL_BATCH_SIZE) break;
     // Иначе — было batch_size, возможно есть ещё.
+    if (opts?.full && r.maxCursor) fullCursor = r.maxCursor;
   }
 }
 

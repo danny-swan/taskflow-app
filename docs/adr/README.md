@@ -20,3 +20,5 @@ ADR — это запись одного значимого архитектур
 | 0004 | rate limiting — table-based счётчик в Postgres на публичных эндпоинтах (N13) | accepted | 0004-rate-limiting-table-based.md |
 | 0005 | shared workspaces — роли/инвайты по TF-ID + `workspace_id` text→uuid + FK + ON DELETE CASCADE (Wave B) | accepted | 0005-shared-workspaces.md |
 | 0006 | F12 (P4): admin-список пользователей — SECURITY DEFINER RPC `get_admin_users_summary` с admin-гейтом вместо GRANT на view; view дополнен `public_user_id` | accepted | 0006-admin-users-list-security-definer-rpc.md |
+| 0007 | F13: краш открытия задачи в shared (стабильная `EMPTY_RECORDS` в zustand-селекторе) + FK `client_id` (push всегда текущее устройство) + дедуп осиротевших personal-ws | accepted | 0007-workspace-crash-clientid-dedup.md |
+| 0008 | F14: полный pull членства в двух скоупах (`user_id` + `workspace_id`) — участники shared видны, ws восстанавливаются при рестарте; refresh сайдбара при leave | accepted | 0008-workspace-members-full-pull-leave-refresh.md |

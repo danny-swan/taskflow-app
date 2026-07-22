@@ -877,12 +877,35 @@ export const useStore = create<State>((set, get) => ({
 
   removeWorkspaceMember(memberId) {
     const now = new Date().toISOString();
+    // F14 (симптом 2): захватываем ws/владельца строки ДО гашения и текущее
+    // пространство — чтобы понять, покинул ли текущий пользователь ТЕКУЩЕЕ ws
+    // (leave собственного членства) и переключить сайдбар на дефолт.
+    const prevCurrent = get().currentWorkspaceId;
+    const row = db.get<{ workspace_id: string | null; user_id: string | null }>(
+      'SELECT workspace_id, user_id FROM workspace_members WHERE uuid=?',
+      [memberId],
+    );
     db.run(
       `UPDATE workspace_members SET deleted_at=?, updated_at=?, version=COALESCE(version,0)+1 WHERE uuid=?`,
       [now, now, memberId],
     );
     enqueueOutbox('workspace_members', memberId, 'delete');
     get().loadWorkspaceMembers();
+    // Перечитываем сайдбар: покинутое ws уходит по EXISTS-фильтру
+    // readWorkspacesFromDb (членство погашено). Без этого меню не обновлялось до
+    // следующего createWorkspace.
+    get().loadWorkspaces();
+    // Если покинули ТЕКУЩЕЕ пространство своим членством — переключаемся на
+    // дефолт (personal), как это делает deleteWorkspace.
+    const boundUserId = get().boundUserId ?? readSetting('bound_user_id');
+    const leftCurrentSelf =
+      row?.workspace_id != null &&
+      row.workspace_id === prevCurrent &&
+      (row.user_id ?? null) === (boundUserId ?? null);
+    if (leftCurrentSelf) {
+      const target = pickDefaultWorkspaceId(readWorkspacesFromDb());
+      if (target && target !== prevCurrent) get().switchWorkspace(target);
+    }
   },
 
   switchWorkspace(id) {
