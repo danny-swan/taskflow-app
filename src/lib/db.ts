@@ -1185,6 +1185,19 @@ export async function initDb(): Promise<void> {
     let holdPeriods: any[] = [];
     try { holdPeriods = await d.select('SELECT * FROM task_hold_periods'); }
     catch (e) { console.warn('[initDb] task_hold_periods not available yet:', e); }
+    // F18 (ADR 0012): workspaces / workspace_members появляются после миграции
+    // v11. РАНЬШЕ эти таблицы НЕ гидрировались в webDb-зеркало — при рестарте
+    // зеркало стартовало ПУСТЫМ по членству, applyCloudRowMembers не находил
+    // существующую (native) строку → INSERT → 2067 в нативной data.db →
+    // prunePhantomWorkspaces сносил shared-ws → пустой сайдбар. Это истинный
+    // корень «shared пропадают после рестарта» (F14–F17 чинили симптом).
+    // Правило §11.3 арх-дока: любая ws-scoped таблица ОБЯЗАНА гидрироваться.
+    let workspaces: any[] = [];
+    try { workspaces = await d.select('SELECT * FROM workspaces ORDER BY sort_order, id'); }
+    catch (e) { console.warn('[initDb] workspaces not available yet:', e); }
+    let members: any[] = [];
+    try { members = await d.select('SELECT * FROM workspace_members ORDER BY id'); }
+    catch (e) { console.warn('[initDb] workspace_members not available yet:', e); }
 
     webDb = new SQL!.Database();
     ensureSchema(webDb);
@@ -1250,6 +1263,21 @@ export async function initDb(): Promise<void> {
       webDb.run(
         `INSERT OR REPLACE INTO task_hold_periods (id, task_id, started_at, ended_at, created_at, updated_at, uuid, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
         [h.id, h.task_id, h.started_at, h.ended_at ?? null, h.created_at, h.updated_at ?? h.created_at, ...syncCols(h), h.workspace_id ?? null]
+      );
+    }
+    // F18 (ADR 0012): гидрация workspaces + workspace_members в зеркало.
+    // Без неё applyCloudRowMembers на рестарте видит пустую таблицу → INSERT →
+    // 2067 в нативной БД. INSERT OR REPLACE по PK id безопасен (webDb пуст).
+    for (const w of workspaces) {
+      webDb.run(
+        `INSERT OR REPLACE INTO workspaces (id, uuid, name, kind, owner_id, sort_order, created_at, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [w.id, w.uuid ?? null, w.name, w.kind ?? 'personal', w.owner_id ?? null, w.sort_order ?? 0, w.created_at, w.updated_at ?? w.created_at, w.deleted_at ?? null, w.version ?? 1, w.client_id ?? null]
+      );
+    }
+    for (const m of members) {
+      webDb.run(
+        `INSERT OR REPLACE INTO workspace_members (id, uuid, workspace_id, user_id, role, invited_by, joined_at, created_at, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [m.id, m.uuid ?? null, m.workspace_id, m.user_id ?? null, m.role ?? 'owner', m.invited_by ?? null, m.joined_at ?? m.created_at, m.created_at, m.updated_at ?? m.created_at, m.deleted_at ?? null, m.version ?? 1, m.client_id ?? null]
       );
     }
   } else {

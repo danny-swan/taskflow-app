@@ -725,7 +725,28 @@ _N1/N2/N3 в текущий заход не включены по явному �
 
 Схема таблиц не менялась → ERD не трогаем, миграций нет.
 
+> **⚠️ Постскриптум (31.07.2026, F18/ADR 0012):** F17 НЕ устранил баг на реальном Tauri.
+> Логика matcher’а верна, но она читает webDb-зеркало, которое при рестарте стартовало
+> **пустым по `workspace_members`** (эта таблица не гидрировалась из нативной data.db) →
+> matcher находил 0 строк → INSERT → 2067 в нативной БД. Истинный корень закрыт в **§7.18**.
+
 **Верификация:** vitest `src/lib/sync/pull.twophase.test.ts` += 3 F17-кейса: (1) локальный случайный uuid ≠ серверный → одна строка, uuid стал серверным, без 2067; (2) LWW-ветка (локальная строка свежее → uuid переклеен, поля не перезаписаны); (3) регрессия uuid-match (совпадение по uuid → UPDATE по LWW, как раньше). `./node_modules/.bin/vitest run src/lib/sync/pull.twophase.test.ts --pool=forks --poolOptions.forks.maxForks=2` — 7/7 зелёные; `db.corruption.test.ts` (4/4) + `pull.test.ts` (13/13) зелёные; `./node_modules/.bin/tsc --noEmit` — 0 ошибок. См. [ADR 0011](../adr/0011-membership-uuid-mismatch-reconcile.md).
+
+---
+
+### 7.18. Пространства — гидрация `workspaces`/`workspace_members` в зеркало при старте (F18, ✅ в `feat/workspaces`, 31.07.2026) — ИСТИННЫЙ КОРЕНЬ
+
+Баг (см. §5 — **F18**): тот же симптом, что у F14–F17 — shared-пространства пропадают из сайдбара после каждого перезапуска (консоль: `2067 UNIQUE constraint failed: workspace_members.workspace_id, workspace_members.user_id` + `TypeError: Cannot create property '_id' on number '<N>'`). Четыре предыдущие «фикса» (F14–F17) чинили СИМПТОМ. После установки F17-сборки на реальном десктопе баг сохранился.
+
+**Корень (доказан кодом `src/lib/db.ts`).** В Tauri-режиме две БД: нативная `data.db` (`@tauri-apps/plugin-sql`) и зеркало в памяти (`webDb`, sql.js). `db.run()` пишет синхронно в зеркало и fire-and-forget в нативную БД; все чтения (`db.get`/`db.all`) — ТОЛЬКО из зеркала. При старте `initDb()` создаёт пустое зеркало и hydrate-ит в него из нативной БД только `statuses, tags, tasks, settings, task_templates, overdue_events, task_hold_periods`. **`workspaces` и `workspace_members` в hydrate НЕ входили** (grep пуст). Следствие: после рестарта зеркало пустое по членству, а в нативной `data.db` строки есть → `applyCloudRowMembers` (и F17-matcher тоже) читает пустое зеркало → `byUuid`/`byPair` промах → `INSERT` → fire-and-forget-копия уходит в нативную БД, где строка уже есть → **2067 в нативном SQLite** → `prunePhantomWorkspaces` не видит живого членства в зеркале → сносит shared-ws → пустой сайдбар.
+
+Это объясняет, почему баг был **только на десктопе (Tauri)** и никогда в web (там одна БД sql.js, рассинхрона нет), и почему vitest-тесты F17 были зелёными (один движок), а на устройстве фикс не работал. Правило §11.3 арх-дока (введённое ещё в PR #104) прямо предупреждало: любая ws-scoped таблица ОБЯЗАНА гидрироваться — `workspaces`/`workspace_members` это нарушали.
+
+**Фикс (клиентский, без миграций; ADR 0012).** В Tauri-ветку `initDb()` (`src/lib/db.ts`) добавлена гидрация обеих таблиц: `SELECT * FROM workspaces` / `SELECT * FROM workspace_members` (в `try/catch` — таблицы с v11) + заливка в зеркало через `INSERT OR REPLACE` по PK `id` с переносом всех колонок (`uuid`, `workspace_id`, `user_id`, `role`, `deleted_at`, `version`, `client_id`). Теперь при рестарте зеркало = нативная БД по членству → F17-matcher видит строку → UPDATE/переклейка вместо INSERT → 2067 не возникает → shared-ws остаются. Схема не менялась → ERD/миграции не трогаем.
+
+`TypeError: Cannot create property '_id' on number '<N>'` — вторичный шум (минифицированное имя, предположительно Sentry/PostgREST-обёртка); кодом не адресуется, follow-up наблюдение.
+
+**Верификация:** новый `src/lib/db.workspaceHydrate.test.ts` гоняет РЕАЛЬНЫЙ Tauri-путь `db.ts` с персистентным sql.js-адаптером, переживающим «рестарт»: shared-ws + membership пишутся в нативную БД, после повторного `initDb()` проверяется, что зеркало содержит эти строки и lookup по `(ws, user)` находит серверный uuid. Тест КРАСНЫЙ без hydrate, ЗЕЛЁНЫЙ с ним (red-check выполнен). Регресс: `db.firstWorkspaceSeed`, `pull.twophase`, `pull.test`, `workspaces-sync`, `db.corruption` — 45/45 зелёные; `tsc --noEmit` — 0 ошибок. См. [ADR 0012](../adr/0012-tauri-hydrate-workspaces-members.md).
 
 ---
 
