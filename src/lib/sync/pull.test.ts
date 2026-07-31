@@ -332,6 +332,45 @@ describe('pull worker: applier tasks', () => {
     expect(row[0]).toBe('ok task');
   });
 
+  // F19 (ADR 0013): dedupeSeedStatuses гасит «проигравшее» поколение сида
+  // локальным soft-delete'ом, но в облаке оно остаётся, и облачные задачи всё
+  // ещё ссылаются на его uuid. Без tombstone-фолбэка такие задачи навсегда
+  // висли бы в deferred (status_id не резолвится ни во что).
+  it('задача облака, ссылающаяся на погашенный сид-статус, едет на выжившего близнеца', async () => {
+    const { _internals } = await import('./pull');
+    liveDb!.run(
+      `INSERT INTO statuses (name, color, sort_order, behavior, is_seed, uuid, version, client_id, updated_at, deleted_at, workspace_id)
+       VALUES ('Важно', '#111', 0, 'top', 1, 'st-loser', 1, 'test', '2026-07-05T10:00:00Z', '2026-07-05T11:00:00Z', 'ws_1')`,
+    );
+    liveDb!.run(
+      `INSERT INTO statuses (name, color, sort_order, behavior, is_seed, uuid, version, client_id, updated_at, workspace_id)
+       VALUES ('Важно', '#111', 0, 'top', 1, 'st-keeper', 1, 'test', '2026-07-05T10:00:00Z', 'ws_1')`,
+    );
+    const keeperId = liveDb!.exec(`SELECT id FROM statuses WHERE uuid='st-keeper'`)[0].values[0][0];
+
+    const changed = _internals.applyCloudRowTasks({
+      id: 'tk-loser-gen',
+      title: 'task of losing seed generation',
+      comment: '',
+      status_id: 'st-loser',
+      tag_id: null,
+      start_date: null,
+      deadline: null,
+      finish_date: null,
+      sort_order: 0,
+      archived: false,
+      updated_at: '2026-07-05T12:00:00Z',
+      created_at: '2026-07-05T12:00:00Z',
+      deleted_at: null,
+      version: 1,
+      client_id: 'other',
+      workspace_id: 'ws_1',
+    });
+    expect(changed).toBe(true);
+    const statusId = liveDb!.exec(`SELECT status_id FROM tasks WHERE uuid='tk-loser-gen'`)[0].values[0][0];
+    expect(statusId).toBe(keeperId);
+  });
+
   it('last_pulled_at сохраняется через settings', async () => {
     const { _internals } = await import('./pull');
     expect(_internals.getLastPulledAt('sync_tasks')).toBe('1970-01-01T00:00:00Z');

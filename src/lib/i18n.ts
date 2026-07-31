@@ -315,10 +315,16 @@ const dict = {
     ws_history_load_more: 'Показать ещё',
     ws_history_empty: 'Нет записей истории',
     ws_history_task_deleted: '(удалена)',
+    // Кнопка-иконка «перечитать журнал из локального зеркала» (история задачи и
+    // история пространства). Только aria-label/title — подписи в UI нет.
+    ws_activity_refresh: 'Обновить',
     // Wave C PR-c-05 — read-only UI polish для роли viewer.
     ws_viewer_readonly_tooltip: 'Только просмотр. Обратитесь к владельцу или редактору.',
     // Bug #5 — справочник/настройки пространства меняет только владелец.
     ws_owner_only_reference: 'Только владелец пространства может менять статусы, тэги, шаблоны и настройки.',
+    // Блокирующий оверлей старта (initDb → гидрация → первый pull пространств).
+    boot_loading_workspaces: 'Загрузка пространств…',
+    boot_loading_hint: 'Готовим локальную базу и подтягиваем ваши пространства',
   },
   en: {
     brand_sub: 'Task manager',
@@ -634,10 +640,16 @@ const dict = {
     ws_history_load_more: 'Show more',
     ws_history_empty: 'No history entries',
     ws_history_task_deleted: '(deleted)',
+    // Icon-only button "re-read the log from the local mirror" (task history and
+    // workspace history). aria-label/title only — no visible caption.
+    ws_activity_refresh: 'Refresh',
     // Wave C PR-c-05 — read-only UI polish for the viewer role.
     ws_viewer_readonly_tooltip: 'Read-only. Ask an owner or editor for changes.',
     // Bug #5 — workspace reference data / settings are owner-only.
     ws_owner_only_reference: 'Only the workspace owner can change statuses, tags, templates, and settings.',
+    // Blocking startup overlay (initDb → hydration → first workspaces pull).
+    boot_loading_workspaces: 'Loading workspaces…',
+    boot_loading_hint: 'Preparing the local database and fetching your workspaces',
   },
 } as const;
 

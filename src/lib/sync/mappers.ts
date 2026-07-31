@@ -89,6 +89,11 @@ export function resolveTagUuid(tagId: number | null, workspaceId?: string | null
  * Резолвит uuid статуса → локальный id. NULL/несуществующий → null.
  * Опц. workspaceId ограничивает поиск пространством задачи (защита от подхвата
  * статуса чужого ws при коллизиях; в Wave A ws один).
+ *
+ * F19 (ADR 0013): если uuid указывает на ПОГАШЕННЫЙ сид-статус (tombstone,
+ * оставленный dedupeSeedStatuses), доезжаем до его выжившего близнеца по
+ * (workspace_id, name). Без этого облачные задачи «проигравшего» поколения сида
+ * навсегда зависали в deferred: их status_id не резолвился ни во что.
  */
 export function resolveStatusIdByUuid(uuid: string | null, workspaceId?: string | null): number | null {
   if (!uuid) return null;
@@ -98,7 +103,20 @@ export function resolveStatusIdByUuid(uuid: string | null, workspaceId?: string 
         [uuid, workspaceId],
       )
     : db.get<{ id: number }>('SELECT id FROM statuses WHERE uuid=? AND deleted_at IS NULL', [uuid]);
-  return row?.id ?? null;
+  if (row) return row.id;
+
+  const tombstone = db.get<{ name: string; workspace_id: string | null }>(
+    'SELECT name, workspace_id FROM statuses WHERE uuid=? AND is_seed=1 AND deleted_at IS NOT NULL',
+    [uuid],
+  );
+  if (!tombstone) return null;
+  const twin = db.get<{ id: number }>(
+    `SELECT id FROM statuses
+      WHERE name=? AND is_seed=1 AND deleted_at IS NULL
+        AND (workspace_id IS ? OR workspace_id = ?)`,
+    [tombstone.name, tombstone.workspace_id, tombstone.workspace_id],
+  );
+  return twin?.id ?? null;
 }
 
 /** Резолвит uuid тега → локальный id. NULL → NULL. Опц. фильтр по ws. */

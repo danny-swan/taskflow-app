@@ -52,6 +52,29 @@ import { setBoundUserId, getBoundUserId } from '../snapshots';
  * начала на чистом состоянии. Не пушим в этом цикле — push после битой базы опасен
  * (могли бы улететь мусор из ещё не восстановленной/пустой локальной базы).
  */
+/**
+ * F19 (ADR 0013): после каждого pull схлопываем дубли сид-статусов.
+ *
+ * Именно pull приносит «второе поколение» сида (переустановка / второе
+ * устройство / clearUserData + бутстрап free-плана): матчер статусов работает
+ * по uuid, а uuid у каждого поколения свой. Дедуп ставим ДО refreshStore, чтобы
+ * пользователь не увидел даже кадра с 14 колонками. Идемпотентно, no-op на
+ * здоровой базе. Ошибки глотаем — самолечение вторично к sync-циклу.
+ */
+async function dedupeSeedStatusesAfterPull(): Promise<void> {
+  try {
+    const dbMod = await import('../db');
+    if (typeof dbMod.dedupeSeedStatuses === 'function') {
+      const removed = await dbMod.dedupeSeedStatuses();
+      if (removed > 0) {
+        logger.info(`[sync/orchestrator] F19: схлопнуто дублей сид-статусов: ${removed}`);
+      }
+    }
+  } catch (e) {
+    logger.warn('[sync/orchestrator] dedupeSeedStatuses failed:', e);
+  }
+}
+
 async function handlePullCorruption(): Promise<void> {
   logger.error('[sync/orchestrator] pull reported corruption:true, reloading to recover');
   try {
@@ -328,6 +351,7 @@ export async function syncNow(): Promise<SyncResult> {
         // Pull частично упал, но не фатально — идём дальше.
         logger.warn('[sync/orchestrator] pull had errors:', pullResult.firstError);
       }
+      await dedupeSeedStatusesAfterPull();
       // Если что-то реально применено — обновляем UI.
       await refreshStoreAfterPull(pullResult.applied);
 
@@ -387,6 +411,7 @@ export async function syncNow(): Promise<SyncResult> {
         await handlePullCorruption();
         return { ...emptyResult, ok: false, skipped: false, pullResult, pushResult, finalPullResult, error: finalPullResult.firstError ?? 'sqlite_corruption' };
       }
+      await dedupeSeedStatusesAfterPull();
       await refreshStoreAfterPull(finalPullResult.applied);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

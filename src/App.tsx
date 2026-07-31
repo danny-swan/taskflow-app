@@ -19,6 +19,7 @@ import { PasswordResetModal } from './components/PasswordResetModal';
 import { CommandPalette } from './components/CommandPalette';
 import { PaywallGate } from './components/PaywallModal';
 import { AccountSwitchGate } from './components/AccountSwitchGate';
+import { BootOverlay } from './components/BootOverlay';
 import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { pingSupabaseKeepAlive } from './lib/supabase';
@@ -240,15 +241,10 @@ function App() {
     return () => clearTimeout(t);
   }, [ready, autoUpdate, pushToast, lang, navigate]);
 
+  // Фаза 1 старта: БД ещё не готова / сессия ещё выясняется. Приложение не
+  // рендерим вообще — только блокирующий оверлей.
   if (!ready || auth.loading) {
-    return (
-      <div className="h-full flex items-center justify-center bg-bg text-muted">
-        <div className="text-center">
-          <div className="font-display text-[18px] font-bold mb-1">TaskFlow</div>
-          <div className="text-[12px]">{lang === 'ru' ? 'Загрузка...' : 'Loading...'}</div>
-        </div>
-      </div>
-    );
+    return <BootOverlay dbReady={ready} authLoading={auth.loading} waitForSync={false} />;
   }
 
   // v0.9.21: E2E-байпас AuthScreen для Playwright.
@@ -323,6 +319,13 @@ function App() {
         {!e2eBypass && <AccountSwitchGate />}
         {/* v0.9.29: Command Palette */}
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+        {/* F19 (ADR 0013): фаза 2 старта — БД готова, но первый pull пространств
+            ещё едет. Оверлей продолжает перекрывать UI, чтобы клик не попал в
+            список ws, который через секунду будет заменён облачным. Сам решает,
+            показываться ли, и снимается навсегда (см. BootOverlay). */}
+        {!e2eBypass && (
+          <BootOverlay dbReady={ready} authLoading={false} waitForSync={!!auth.session?.user} />
+        )}
       </div>
       </AppErrorBoundary>
     </ThemeProvider>

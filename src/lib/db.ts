@@ -826,6 +826,119 @@ export async function ensureSeededIfEmpty(): Promise<boolean> {
   return true;
 }
 
+// ─── F19 (ADR 0013): dedupeSeedStatuses — схлопывание дублей сид-статусов ────
+//
+// ПЕРВОПРИЧИНА дублей «Важно/В работе/…» в «Моих задачах»:
+// идентичность сид-справочника НЕ детерминирована. tauriSeed(), seed(),
+// ensureSeededIfEmpty() и store.seedDefaultStatuses() генерируют СВЕЖИЙ uuidv7()
+// на каждый запуск, а единственный ключ дедупа на стороне pull
+// (applyCloudRowStatuses) — это uuid. Все локальные guard'ы («сеем, только если
+// COUNT(*)=0») смотрят в ЛОКАЛЬНУЮ базу и не видят, что семантически тот же
+// набор уже лежит в облаке. Поэтому любое ВТОРОЕ поколение сида для того же
+// аккаунта — переустановка, второе устройство, clearUserData() + бутстрап
+// free-плана, resetDatabase() — уезжает в облако рядом с первым, и ближайший
+// pull приносит чужое поколение обратно: 14 статусов вместо 7.
+//
+// Тот же класс, что F17/ADR 0011 (workspace_members: логическая идентичность —
+// не uuid, а натуральный ключ). Для сид-статусов натуральный ключ —
+// (workspace_id, name) при is_seed=1.
+//
+// ЛЕЧЕНИЕ (локальное, без DDL и без изменений на сервере): в каждой группе
+// (workspace_id, name) оставляем строку с ЛЕКСИКОГРАФИЧЕСКИ МЕНЬШИМ uuid.
+// uuidv7 монотонен по времени, поэтому «меньший» = «более раннее поколение» —
+// и все устройства независимо приходят к ОДНОМУ И ТОМУ ЖЕ победителю
+// (конвергенция без координации). Проигравшие строки:
+//   * освобождаются от ссылок (tasks.status_id / task_templates.status_id
+//     переезжают на победителя);
+//   * гасятся soft-delete'ом ЛОКАЛЬНО, БЕЗ enqueueOutbox — по образцу
+//     dedupePersonalWorkspaces(): мы не знаем, не является ли это поколение
+//     живым для другого устройства, и не имеем права удалять его в облаке;
+//   * получают свежий updated_at, иначе следующий pull по LWW воскресит их.
+//
+// Облачные задачи, ссылающиеся на погашенное поколение, остаются разрешимыми:
+// resolveStatusIdByUuid() (sync/mappers.ts) умеет доехать от tombstone'а
+// сид-статуса до его выжившего близнеца по (workspace_id, name).
+//
+// Строго ИДЕМПОТЕНТНА: работает только по `is_seed=1 AND deleted_at IS NULL`,
+// группы из одной строки не трогает. Возвращает число погашенных строк.
+export async function dedupeSeedStatuses(): Promise<number> {
+  const selectAll = async (sql: string): Promise<any[]> => {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      return await d.select(sql);
+    }
+    if (!webDb) return [];
+    const stmt = webDb.prepare(sql);
+    const out: any[] = [];
+    while (stmt.step()) out.push(stmt.getAsObject());
+    stmt.free();
+    return out;
+  };
+  const execBoth = async (sql: string, params: any[] = []) => {
+    if (IS_TAURI) {
+      const d = await getTauriDb();
+      await d.execute(sql, params);
+    }
+    if (webDb) webDb.run(sql, params);
+  };
+
+  let rows: any[];
+  try {
+    rows = await selectAll(
+      `SELECT id, uuid, name, workspace_id FROM statuses
+        WHERE is_seed=1 AND deleted_at IS NULL ORDER BY id`,
+    );
+  } catch (e) {
+    console.warn('[dedupeSeedStatuses] read failed:', e);
+    return 0;
+  }
+
+  const groups = new Map<string, any[]>();
+  for (const r of rows) {
+    const key = `${r.workspace_id ?? ''} ${r.name}`;
+    const g = groups.get(key);
+    if (g) g.push(r); else groups.set(key, [r]);
+  }
+
+  const now = new Date().toISOString();
+  let removed = 0;
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    // Порядок: сначала строки с uuid (по возрастанию), затем безuuid'ные (их
+    // всё равно нельзя синхронизировать), в конце — по id для полной
+    // детерминированности.
+    const sorted = [...group].sort((a, b) => {
+      const au = a.uuid ?? null, bu = b.uuid ?? null;
+      if (au !== bu) {
+        if (au == null) return 1;
+        if (bu == null) return -1;
+        return au < bu ? -1 : 1;
+      }
+      return a.id - b.id;
+    });
+    const keeper = sorted[0];
+    for (const loser of sorted.slice(1)) {
+      try {
+        await execBoth('UPDATE tasks SET status_id=? WHERE status_id=?', [keeper.id, loser.id]);
+        await execBoth('UPDATE task_templates SET status_id=? WHERE status_id=?', [keeper.id, loser.id]);
+        await execBoth(
+          'UPDATE statuses SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL',
+          [now, now, loser.id],
+        );
+        removed++;
+      } catch (e) {
+        console.warn('[dedupeSeedStatuses] collapse failed:', e);
+      }
+    }
+  }
+
+  if (removed > 0) {
+    if (!IS_TAURI) save();
+    console.info(`[dedupeSeedStatuses] погашено дублей сид-статусов: ${removed}`);
+  }
+  return removed;
+}
+
 // ─── Fix 1 (fix-round2): ensureWelcomeTaskIfNeeded ───────────────────────────
 //
 // Гарантирует стартовую welcome-задачу для локального personal-пространства.
@@ -1119,7 +1232,25 @@ export async function detectAndRecoverCorruption(): Promise<CorruptionCheckResul
 }
 
 // ─── PUBLIC init ──────────────────────────────────────────────────────────────
-export async function initDb(): Promise<void> {
+/**
+ * Идёт ли прямо сейчас инициализация. F19 (ADR 0013): в Tauri-ветке initDb()
+ * НЕ была реентерабельной (в web-ветке защита есть — `if (webDb) return`). Два
+ * параллельных вызова на чистой базе успевали пройти `tauriIsEmpty()` до того,
+ * как соседний вызов дописал сид → сид выполнялся дважды. Теперь конкурентные
+ * вызовы разделяют один промис; последовательные (рестарт, тесты) — как раньше.
+ */
+let initDbInFlight: Promise<void> | null = null;
+
+export function initDb(): Promise<void> {
+  if (initDbInFlight) return initDbInFlight;
+  const p = initDbOnce().finally(() => {
+    if (initDbInFlight === p) initDbInFlight = null;
+  });
+  initDbInFlight = p;
+  return p;
+}
+
+async function initDbOnce(): Promise<void> {
   // Always initialise the in-memory sql.js database as a synchronous cache layer.
   // In Tauri mode we additionally set up the native SQLite and sync data into webDb.
   if (!SQL) {
@@ -1198,6 +1329,18 @@ export async function initDb(): Promise<void> {
     let members: any[] = [];
     try { members = await d.select('SELECT * FROM workspace_members ORDER BY id'); }
     catch (e) { console.warn('[initDb] workspace_members not available yet:', e); }
+    // F19 (ADR 0013): workspace_settings + task_activity_log — тот же класс,
+    // что F18. workspace_settings читается стором (overdue_mode текущего ws) и
+    // матчится пуллом по (workspace_id, key): пустое зеркало → INSERT → 2067 в
+    // нативной БД (fire-and-forget глотает ошибку) → режим просрочки на рестарте
+    // молча откатывался к глобальному. task_activity_log — источник вкладки
+    // «История»: без гидрации журнал исчезал из UI до следующего pull.
+    let wsSettings: any[] = [];
+    try { wsSettings = await d.select('SELECT * FROM workspace_settings ORDER BY id'); }
+    catch (e) { console.warn('[initDb] workspace_settings not available yet:', e); }
+    let activityLog: any[] = [];
+    try { activityLog = await d.select('SELECT * FROM task_activity_log ORDER BY id'); }
+    catch (e) { console.warn('[initDb] task_activity_log not available yet:', e); }
 
     webDb = new SQL!.Database();
     ensureSchema(webDb);
@@ -1280,6 +1423,23 @@ export async function initDb(): Promise<void> {
         [m.id, m.uuid ?? null, m.workspace_id, m.user_id ?? null, m.role ?? 'owner', m.invited_by ?? null, m.joined_at ?? m.created_at, m.created_at, m.updated_at ?? m.created_at, m.deleted_at ?? null, m.version ?? 1, m.client_id ?? null]
       );
     }
+    // F19 (ADR 0013): см. комментарий у SELECT выше.
+    for (const s of wsSettings) {
+      webDb.run(
+        `INSERT OR REPLACE INTO workspace_settings (id, uuid, workspace_id, key, value, created_at, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [s.id, s.uuid ?? null, s.workspace_id, s.key, s.value ?? null, s.created_at, s.updated_at ?? s.created_at, s.deleted_at ?? null, s.version ?? 1, s.client_id ?? null]
+      );
+    }
+    for (const a of activityLog) {
+      webDb.run(
+        `INSERT OR REPLACE INTO task_activity_log (id, uuid, task_id, workspace_id, user_id, kind, payload, created_at) VALUES (?,?,?,?,?,?,?,?)`,
+        [a.id, a.uuid ?? null, a.task_id, a.workspace_id, a.user_id, a.kind, a.payload ?? '{}', a.created_at]
+      );
+    }
+
+    // F19 (ADR 0013): самолечение дублей сид-статусов, приехавших из облака
+    // прошлыми запусками. Идемпотентно; на здоровой базе — no-op.
+    try { await dedupeSeedStatuses(); } catch (e) { console.warn('[initDb] dedupeSeedStatuses:', e); }
   } else {
     if (webDb) return;
     const stored = loadFromStorage();
@@ -1294,6 +1454,7 @@ export async function initDb(): Promise<void> {
       if (typeof window !== 'undefined') (window as any).__taskflow_init_error = String((e as any)?.message ?? e);
     }
     if (!stored) seed(webDb);
+    try { await dedupeSeedStatuses(); } catch (e) { console.warn('[initDb] dedupeSeedStatuses:', e); }
     save();
   }
 }

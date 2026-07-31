@@ -12,7 +12,7 @@
 // Render-логика одной записи (аватар/имя/действие/время) вынесена в общий
 // ActivityEntry.tsx и переиспользуется в WorkspaceHistoryTab (PR-c-04).
 import { useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { ActivityAuthorRow } from './ActivityEntry';
 import { useStore } from '../store/useStore';
 import { useTaskActivity } from '../store/useTaskActivityStore';
@@ -26,19 +26,49 @@ import { tr } from '../lib/i18n';
 export function TaskActivityLog({ taskUuid }: { taskUuid: string | null | undefined }) {
   const lang = useStore((s) => s.language);
   const [open, setOpen] = useState(false);
-  const { records, hasMore, loadMore } = useTaskActivity(open ? taskUuid : null);
+  const { records, hasMore, loadMore, reload } = useTaskActivity(open ? taskUuid : null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Перечитать журнал из локального зеркала. reload() синхронный, но оборачиваем
+  // в await — так `disabled` гарантированно держится весь цикл загрузки и
+  // защищает от даблклика (и переживёт переход reload на асинхронный).
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.resolve(reload());
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   return (
     <div className="mt-4 border-t border-border-soft pt-3">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-[11px] text-muted uppercase tracking-wider hover:text-text transition-colors"
-        aria-expanded={open}
-      >
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        {tr(lang, 'ws_activity_log_title')}
-      </button>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-center gap-1.5 text-[11px] text-muted uppercase tracking-wider hover:text-text transition-colors"
+          aria-expanded={open}
+        >
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          {tr(lang, 'ws_activity_log_title')}
+        </button>
+
+        {/* Обновить — только иконка (без подписи), доступное имя из aria-label. */}
+        {open && (
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={refreshing}
+            aria-label={tr(lang, 'ws_activity_refresh')}
+            title={tr(lang, 'ws_activity_refresh')}
+            className="p-1 rounded text-muted hover:text-text hover:bg-surface-alt transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+          </button>
+        )}
+      </div>
 
       {open && (
         <div className="mt-2">

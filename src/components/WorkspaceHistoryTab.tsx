@@ -14,7 +14,7 @@
 // Email нигде не показывается (см. ActivityEntry).
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, ListFilter } from 'lucide-react';
+import { ChevronDown, ListFilter, RefreshCw } from 'lucide-react';
 import { ActivityAuthorRow, eventText } from './ActivityEntry';
 import { useStore } from '../store/useStore';
 import { usePresenceStore } from '../store/usePresenceStore';
@@ -86,11 +86,26 @@ export function WorkspaceHistoryTab() {
     return ids;
   }, [taskQuery, taskByUuid]);
 
-  const { records, hasMore, loadMore, total } = useWorkspaceActivity(workspaceId, {
+  const { records, hasMore, loadMore, total, reload } = useWorkspaceActivity(workspaceId, {
     kinds,
     userId,
     taskIds,
   });
+
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Перечитать журнал пространства из локального зеркала. reload() синхронный, но
+  // оборачиваем в await — так `disabled` держится весь цикл загрузки (защита от
+  // даблклика) и код переживёт переход reload на асинхронный.
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.resolve(reload());
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Участники текущего пространства — для дропдауна фильтра «Участник».
   const memberOptions = useMemo(
@@ -142,7 +157,21 @@ export function WorkspaceHistoryTab() {
 
   return (
     <div className="max-w-2xl">
-      <h3 className="font-display text-[16px] font-semibold mb-3">{tr(lang, 'ws_history_tab_title')}</h3>
+      <div className="flex items-center gap-1.5 mb-3">
+        <h3 className="font-display text-[16px] font-semibold">{tr(lang, 'ws_history_tab_title')}</h3>
+
+        {/* Обновить — только иконка (без подписи), доступное имя из aria-label. */}
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          aria-label={tr(lang, 'ws_activity_refresh')}
+          title={tr(lang, 'ws_activity_refresh')}
+          className="p-1.5 rounded-lg text-muted hover:text-text hover:bg-surface-alt transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+        </button>
+      </div>
 
       {/* Фильтры */}
       <div className="flex flex-wrap items-center gap-2 mb-4">

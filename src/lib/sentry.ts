@@ -5,10 +5,24 @@
  *
  * v0.9.23 — Sentry (Frontend Error Tracking).
  *
- * Инициализация клиентского Sentry. Инит происходит только если задан
- * VITE_SENTRY_DSN (в dev — из .env.local, в CI — из GitHub Secrets через
- * envSubst в build.yml). Если DSN не задан, initSentry — no-op, и весь
- * прод-код (captureException и т.п.) продолжает работать без ошибок.
+ * Инициализация клиентского Sentry. Инит происходит только если ОДНОВРЕМЕННО:
+ *  1) VITE_SENTRY_ENABLED === 'true' | '1' (kill-switch, по умолчанию OFF);
+ *  2) задан VITE_SENTRY_DSN (в dev — из .env.local, в CI — из GitHub Secrets
+ *     через envSubst в build.yml).
+ * Иначе initSentry — no-op, и весь прод-код (captureException и т.п.)
+ * продолжает работать без ошибок.
+ *
+ * v1.0.3 — Sentry ВРЕМЕННО ВЫКЛЮЧЕН (закончился бесплатный период подписки).
+ * Транспорт Sentry блокируется CSP (в connect-src нет доменов Sentry), из-за
+ * чего в консоли сыпались CSP-ошибки и «Uncaught TypeError: Cannot create
+ * property '_id' on number 'N'» (SDK пытается пометить примитив в своей
+ * breadcrumb-инструментации при заблокированной отправке).
+ *
+ * Код SDK специально НЕ удалён. Чтобы вернуть Sentry, нужно:
+ *  1) выставить VITE_SENTRY_ENABLED=true (+ непустой VITE_SENTRY_DSN);
+ *  2) добавить домены Sentry (https://*.ingest.sentry.io и т.п.) в connect-src
+ *     CSP — см. src-tauri/tauri.conf.json → app.security.csp;
+ *  3) иметь активную подписку/квоту в Sentry.
  *
  * Privacy:
  * - sendDefaultPii = false — Sentry не собирает IP и user-agent сам.
@@ -27,6 +41,19 @@ let initialized = false;
 
 export function isSentryEnabled(): boolean {
   return initialized;
+}
+
+/**
+ * Kill-switch: Sentry включается ТОЛЬКО при VITE_SENTRY_ENABLED=true|1.
+ * По умолчанию (флаг не задан / любое другое значение) — выключен, чтобы SDK
+ * не поднимал транспорт и не инструментировал глобалы.
+ *
+ * Экспортируется для тестов и для диагностики в UI/логах.
+ */
+export function isSentryAllowed(): boolean {
+  const flag = import.meta.env.VITE_SENTRY_ENABLED as string | undefined;
+  const normalized = String(flag ?? '').trim().toLowerCase();
+  return normalized === 'true' || normalized === '1';
 }
 
 /**
@@ -66,6 +93,12 @@ function scrubEvent(event: Sentry.ErrorEvent): Sentry.ErrorEvent {
 }
 
 export function initSentry(): void {
+  // v1.0.3: ранний return по kill-switch — Sentry.init не вызывается вовсе,
+  // SDK не навешивает свои обёртки на fetch/XHR/console (источник TypeError
+  // «Cannot create property '_id'»), транспорт не стучится в заблокированный
+  // CSP-домен. Возврат: VITE_SENTRY_ENABLED=true.
+  if (!isSentryAllowed()) return;
+
   const dsn = import.meta.env.VITE_SENTRY_DSN as string | undefined;
   if (!dsn) {
     // В dev без .env.local это ок — просто ничего не отправляем.
