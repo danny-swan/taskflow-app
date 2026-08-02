@@ -28,6 +28,13 @@
  * нельзя ни при каких условиях — там источник истины облако (см. ADR 0014).
  * Модуль сам план не проверяет: гейт — на стороне вызывающего
  * (`AccountSwitchGate` free-ветка и `useLocalAccountAutosave`).
+ *
+ * F28 (ADR 0021): слот workspace-aware — `buildBackup` вызывается с
+ * `workspaces: true`, поэтому дамп несёт `workspaces`/`workspace_members` и
+ * `applyBackup` сохраняет исходный `workspace_id` каждой задачи вместо
+ * схлопывания всех пространств в одно текущее. Без этого второе вручную
+ * созданное личное пространство теряло owner-membership при восстановлении
+ * слота и гасилось `dedupePersonalWorkspaces` как чужой мусор.
  */
 import * as db from './db';
 import { logger } from './logger';
@@ -96,7 +103,8 @@ export async function saveLocalAccountData(userId: string | null): Promise<boole
   if (!userId) return false;
   let slot: LocalAccountSlot;
   try {
-    const payload = db.buildBackup({ tasks: true, tags: true, statuses: true });
+    // F28: workspaces:true — слот несёт пространства/членства вместе с задачами.
+    const payload = db.buildBackup({ tasks: true, tags: true, statuses: true, workspaces: true });
     if (!isNonEmpty(payload)) {
       logger.info(`[localAccountStore] nothing to save for ${userId} (empty db), slot kept as is`);
       return false;

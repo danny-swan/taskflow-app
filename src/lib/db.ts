@@ -1586,16 +1586,31 @@ export function isTauri() { return IS_TAURI; }
 export interface BackupPayload {
   version: string;
   exported_at: string;
-  include?: { tasks?: boolean; tags?: boolean; statuses?: boolean; templates?: boolean };
+  include?: { tasks?: boolean; tags?: boolean; statuses?: boolean; templates?: boolean; workspaces?: boolean };
   statuses?: any[];
   tags?: any[];
   tasks?: any[];
   /** v0.8.13+: user-defined task templates. Optional for backward compatibility with older backups. */
   templates?: any[];
+  /**
+   * F28 (ADR 0021): пространства + членства. Опционально — присутствие этих
+   * полей ПЕРЕКЛЮЧАЕТ applyBackup в workspace-aware режим (сохраняется
+   * исходный task.workspace_id вместо штамповки единым importWsId).
+   * Отсутствие полей = легаси-бэкап, старое поведение не меняется.
+   */
+  workspaces?: any[];
+  workspace_members?: any[];
 }
 
-/** Build a full backup JSON containing only the selected entity kinds */
-export function buildBackup(include: { tasks: boolean; tags: boolean; statuses: boolean }): BackupPayload {
+/**
+ * Build a full backup JSON containing only the selected entity kinds.
+ * `include.workspaces` (по умолчанию false — обратная совместимость со
+ * снимками/экспортом, которым workspaces не нужны) добавляет в дамп
+ * `workspaces`/`workspace_members`, что делает бэкап workspace-aware: их
+ * присутствие в payload — единственный сигнал для applyBackup сохранять
+ * исходный workspace_id задач, а не схлопывать всё в один importWsId.
+ */
+export function buildBackup(include: { tasks: boolean; tags: boolean; statuses: boolean; workspaces?: boolean }): BackupPayload {
   const payload: BackupPayload = {
     version: '0.8.13',
     exported_at: new Date().toISOString(),
@@ -1611,6 +1626,18 @@ export function buildBackup(include: { tasks: boolean; tags: boolean; statuses: 
     // table may not exist on very old DBs prior to v2 migration — ignore
     payload.templates = [];
   }
+  if (include.workspaces) {
+    try {
+      payload.workspaces = all('SELECT * FROM workspaces WHERE deleted_at IS NULL ORDER BY sort_order, id');
+    } catch {
+      payload.workspaces = [];
+    }
+    try {
+      payload.workspace_members = all('SELECT * FROM workspace_members WHERE deleted_at IS NULL ORDER BY id');
+    } catch {
+      payload.workspace_members = [];
+    }
+  }
   return payload;
 }
 
@@ -1622,14 +1649,20 @@ export function buildBackup(include: { tasks: boolean; tags: boolean; statuses: 
 export async function applyBackup(
   payload: BackupPayload,
   mode: 'replace' | 'merge'
-): Promise<{ statuses: number; tags: number; tasks: number; templates: number }> {
-  const counts = { statuses: 0, tags: 0, tasks: 0, templates: 0 };
+): Promise<{ statuses: number; tags: number; tasks: number; templates: number; workspaces: number; workspace_members: number }> {
+  const counts = { statuses: 0, tags: 0, tasks: 0, templates: 0, workspaces: 0, workspace_members: 0 };
   const has = {
     statuses: Array.isArray(payload.statuses),
     tags: Array.isArray(payload.tags),
     tasks: Array.isArray(payload.tasks),
     templates: Array.isArray(payload.templates),
+    // F28 (ADR 0021): присутствие workspaces в payload — сигнал workspace-aware
+    // формата. Именно ЭТО поле (а не отдельный флаг) переключает поведение
+    // applyBackup, чтобы легаси-бэкапы без него продолжали работать как раньше.
+    workspaces: Array.isArray(payload.workspaces),
+    workspace_members: Array.isArray(payload.workspace_members),
   };
+  const isWorkspaceAware = has.workspaces;
 
   // v0.9.35-dev.6.10.4: восстановленные строки обязаны сохранять свою
   // sync-идентичность (uuid/client_id/deleted_at/version) — иначе они
@@ -1637,14 +1670,21 @@ export async function applyBackup(
   // состояние из облака (баг: «снимок восстановлен, а задача не вернулась»).
   const nowIso = new Date().toISOString();
   const clientId = get<{ value: string }>(`SELECT value FROM settings WHERE key='client_id'`)?.value ?? null;
-  // Wave A: бэкапы (легаси-формат) не несут workspace_id — штампуем
-  // восстановленные строки текущим personal-пространством, иначе они выпадают
-  // из ws-scoped выборок UI (регрессия Wave A PR-3: импорт → пустой список).
+  // Wave A: легаси-бэкапы не несут workspace_id — штампуем восстановленные
+  // строки текущим personal-пространством, иначе они выпадают из ws-scoped
+  // выборок UI (регрессия Wave A PR-3: импорт → пустой список). F28: этот
+  // importWsId остаётся ТОЛЬКО фолбэком для легаси-формата и для строк
+  // workspace-aware бэкапа без собственного workspace_id — сам бэкап больше
+  // не схлопывает разные пространства в одно (см. resolveWsId ниже).
   const importWsId =
     get<{ value: string }>(`SELECT value FROM settings WHERE key='current_workspace_id'`)?.value
     ?? get<{ value: string }>(`SELECT value FROM settings WHERE key='personal_workspace_id'`)?.value
     ?? 'ws_local';
-  const restoredUuids: { table: 'statuses' | 'tags' | 'tasks' | 'task_templates'; uuid: string }[] = [];
+  // F28: в workspace-aware режиме сохраняем исходный workspace_id строки;
+  // в легаси-режиме (нет payload.workspaces) поведение НЕ меняется — всегда importWsId.
+  const resolveWsId = (rowWsId: unknown): string =>
+    isWorkspaceAware && typeof rowWsId === 'string' && rowWsId ? rowWsId : importWsId;
+  const restoredUuids: { table: 'statuses' | 'tags' | 'tasks' | 'task_templates' | 'workspaces' | 'workspace_members'; uuid: string }[] = [];
 
   // Helper to do the run in both Tauri and web modes
   const sync = async (sql: string, params: any[] = []) => {
@@ -1663,6 +1703,51 @@ export async function applyBackup(
     }
     if (has.tags) await sync('DELETE FROM tags');
     if (has.statuses) await sync('DELETE FROM statuses');
+    // F28 (ADR 0021): только в workspace-aware режиме — легаси-бэкап пространства не трогает.
+    if (has.workspace_members) {
+      try { await sync('DELETE FROM workspace_members'); } catch { /* table may not exist on old DBs */ }
+    }
+    if (has.workspaces) {
+      try { await sync('DELETE FROM workspaces'); } catch { /* table may not exist on old DBs */ }
+    }
+  }
+
+  // F28: восстанавливаем пространства ПЕРВЫМИ — задачи/статусы/теги ниже ссылаются на
+  // их workspace_id через resolveWsId. Сохраняем uuid/version/deleted_at/client_id —
+  // та же sync-идентичность, что и у таск/статусов/тегов (v0.9.35-dev.6.10.4).
+  if (has.workspaces) {
+    const existingWs = mode === 'merge'
+      ? new Set(all<any>('SELECT uuid FROM workspaces').map(r => String(r.uuid)))
+      : new Set<string>();
+    for (const w of payload.workspaces!) {
+      const uuid = typeof w.uuid === 'string' && w.uuid ? w.uuid : ('ws_' + uuidv7().replace(/-/g, ''));
+      if (mode === 'merge' && existingWs.has(uuid)) continue;
+      const version = typeof w.version === 'number' ? w.version + 1 : 1;
+      await sync(
+        `INSERT INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [uuid, String(w.name ?? 'Мои задачи'), String(w.kind ?? 'personal'), w.owner_id ?? null, w.sort_order ?? 0, w.created_at ?? nowIso, nowIso, w.deleted_at ?? null, version, w.client_id ?? clientId]
+      );
+      counts.workspaces++;
+      restoredUuids.push({ table: 'workspaces', uuid });
+    }
+  }
+
+  if (has.workspace_members) {
+    const existingMembers = mode === 'merge'
+      ? new Set(all<any>('SELECT uuid FROM workspace_members').map(r => String(r.uuid)))
+      : new Set<string>();
+    for (const m of payload.workspace_members!) {
+      const uuid = typeof m.uuid === 'string' && m.uuid ? m.uuid : uuidv7();
+      if (mode === 'merge' && existingMembers.has(uuid)) continue;
+      if (!m.workspace_id || !m.user_id) continue;
+      const version = typeof m.version === 'number' ? m.version + 1 : 1;
+      await sync(
+        `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, invited_by, joined_at, created_at, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [uuid, m.workspace_id, m.user_id, String(m.role ?? 'owner'), m.invited_by ?? null, m.joined_at ?? nowIso, m.created_at ?? nowIso, nowIso, m.deleted_at ?? null, version, m.client_id ?? clientId]
+      );
+      counts.workspace_members++;
+      restoredUuids.push({ table: 'workspace_members', uuid });
+    }
   }
 
   // Apply in order: statuses → tags → tasks (so referenced ids exist)
@@ -1680,7 +1765,7 @@ export async function applyBackup(
       await sync(
         `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed, uuid, updated_at, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [name, s.color ?? '#888', s.behavior ?? 'middle', s.sort_order ?? 0, s.is_seed ?? 0, s.is_technical ?? 0, s.hidden ?? 0, s.default_collapsed ?? 0,
-         uuid, nowIso, s.deleted_at ?? null, version, s.client_id ?? clientId, importWsId]
+         uuid, nowIso, s.deleted_at ?? null, version, s.client_id ?? clientId, resolveWsId(s.workspace_id)]
       );
       counts.statuses++;
       restoredUuids.push({ table: 'statuses', uuid });
@@ -1699,7 +1784,7 @@ export async function applyBackup(
       const version = typeof t.version === 'number' ? t.version + 1 : 1;
       await sync(
         `INSERT INTO tags (name, color, sort_order, uuid, updated_at, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?)`,
-        [name, t.color ?? '#888', t.sort_order ?? 0, uuid, nowIso, t.deleted_at ?? null, version, t.client_id ?? clientId, importWsId]
+        [name, t.color ?? '#888', t.sort_order ?? 0, uuid, nowIso, t.deleted_at ?? null, version, t.client_id ?? clientId, resolveWsId(t.workspace_id)]
       );
       counts.tags++;
       restoredUuids.push({ table: 'tags', uuid });
@@ -1772,7 +1857,7 @@ export async function applyBackup(
           t.deleted_at ?? null,
           version,
           t.client_id ?? clientId,
-          importWsId,
+          resolveWsId(t.workspace_id),
         ]
       );
       counts.tasks++;
@@ -1818,7 +1903,7 @@ export async function applyBackup(
         const version = typeof tpl.version === 'number' ? tpl.version + 1 : 1;
         await sync(
           `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, uuid, updated_at, deleted_at, version, client_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [name, String(tpl.title ?? ''), String(tpl.comment ?? ''), statusId, tagId, tpl.sort_order ?? 0, uuid, nowIso, tpl.deleted_at ?? null, version, tpl.client_id ?? clientId, importWsId]
+          [name, String(tpl.title ?? ''), String(tpl.comment ?? ''), statusId, tagId, tpl.sort_order ?? 0, uuid, nowIso, tpl.deleted_at ?? null, version, tpl.client_id ?? clientId, resolveWsId(tpl.workspace_id)]
         );
         counts.templates++;
         restoredUuids.push({ table: 'task_templates', uuid });

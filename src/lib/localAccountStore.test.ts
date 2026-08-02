@@ -19,11 +19,12 @@ import type { BackupPayload } from './db';
 let backup: BackupPayload = { version: 't', exported_at: 'now' };
 const applyBackupSpy = vi.fn(
   async (_payload: BackupPayload, _mode: 'replace' | 'merge') =>
-    ({ statuses: 0, tags: 0, tasks: 0, templates: 0 }),
+    ({ statuses: 0, tags: 0, tasks: 0, templates: 0, workspaces: 0, workspace_members: 0 }),
 );
+const buildBackupSpy = vi.fn((_include: any) => backup);
 
 vi.mock('./db', () => ({
-  buildBackup: () => backup,
+  buildBackup: (include: any) => buildBackupSpy(include),
   applyBackup: (payload: BackupPayload, mode: 'replace' | 'merge') => applyBackupSpy(payload, mode),
 }));
 
@@ -54,6 +55,7 @@ function payloadWith(taskTitle: string): BackupPayload {
 beforeEach(() => {
   localStorage.clear();
   applyBackupSpy.mockClear();
+  buildBackupSpy.mockClear();
   backup = payloadWith('task A');
 });
 
@@ -70,6 +72,13 @@ describe('localAccountStore — roundtrip', () => {
     const [payload, mode] = applyBackupSpy.mock.calls[0] as unknown as [BackupPayload, string];
     expect(mode).toBe('replace');
     expect(payload.tasks).toEqual([{ id: 1, title: 'task A', status_id: 1 }]);
+  });
+
+  it('F28: saveLocalAccountData вызывает buildBackup с workspaces:true (слот workspace-aware)', async () => {
+    await saveLocalAccountData(USER_A);
+    expect(buildBackupSpy).toHaveBeenCalledTimes(1);
+    const [include] = buildBackupSpy.mock.calls[0] as unknown as [{ tasks: boolean; tags: boolean; statuses: boolean; workspaces?: boolean }];
+    expect(include.workspaces).toBe(true);
   });
 
   it('повторный save перезаписывает слот (один слот на аккаунт)', async () => {
