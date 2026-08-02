@@ -24,6 +24,7 @@ import {
   type ActivityRecord,
 } from '../store/useTaskActivityStore';
 import { tr } from '../lib/i18n';
+import { syncNow } from '../lib/sync';
 
 const ORDERED_KINDS: ActivityKind[] = [
   'created',
@@ -94,15 +95,21 @@ export function WorkspaceHistoryTab() {
 
   const [refreshing, setRefreshing] = useState(false);
 
-  // Перечитать журнал пространства из локального зеркала. reload() синхронный, но
-  // оборачиваем в await — так `disabled` держится весь цикл загрузки (защита от
-  // даблклика) и код переживёт переход reload на асинхронный.
+  // Обновить журнал. v0.9.26: раньше reload() перечитывал ТОЛЬКО локальное
+  // зеркало — если свежие записи ещё не приехали через фоновый realtime-pull,
+  // кнопка казалась «не работающей» (нажимаешь — ничего). Теперь сначала
+  // дёргаем syncNow() (полный pull с сервера → наполняет зеркало), потом reload().
+  // syncNow защищён мьютексом (если sync уже идёт — дождёмся его). Ошибка сети
+  // не должна ломать обновление — в любом случае делаем локальный reload() в finally.
   const refresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await Promise.resolve(reload());
+      await syncNow();
+    } catch {
+      // Офлайн/ошибка сети — показываем то, что есть в зеркале (reload ниже).
     } finally {
+      reload();
       setRefreshing(false);
     }
   };

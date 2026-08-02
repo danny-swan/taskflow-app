@@ -17,6 +17,7 @@ import { ActivityAuthorRow } from './ActivityEntry';
 import { useStore } from '../store/useStore';
 import { useTaskActivity } from '../store/useTaskActivityStore';
 import { tr } from '../lib/i18n';
+import { syncNow } from '../lib/sync';
 
 /**
  * Секция истории. Рендерится вызывающим (TaskModal) ТОЛЬКО когда задача в
@@ -29,15 +30,20 @@ export function TaskActivityLog({ taskUuid }: { taskUuid: string | null | undefi
   const { records, hasMore, loadMore, reload } = useTaskActivity(open ? taskUuid : null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Перечитать журнал из локального зеркала. reload() синхронный, но оборачиваем
-  // в await — так `disabled` гарантированно держится весь цикл загрузки и
-  // защищает от даблклика (и переживёт переход reload на асинхронный).
+  // Обновить журнал. v0.9.26: раньше reload() перечитывал ТОЛЬКО локальное
+  // зеркало — если свежие записи ещё не приехали через фоновый realtime-pull,
+  // кнопка казалась «не работающей». Теперь сначала syncNow() (полный pull с
+  // сервера → наполняет зеркало), потом reload(). syncNow защищён мьютексом.
+  // Ошибка сети не ломает обновление — локальный reload() выполняется в finally.
   const refresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await Promise.resolve(reload());
+      await syncNow();
+    } catch {
+      // Офлайн/ошибка сети — показываем то, что есть в зеркале (reload ниже).
     } finally {
+      reload();
       setRefreshing(false);
     }
   };

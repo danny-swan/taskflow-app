@@ -16,6 +16,9 @@ let lastFilters: any;
 const loadMore = vi.fn();
 const navigate = vi.fn();
 const reload = vi.fn();
+// v0.9.26: кнопка «Обновить» теперь сначала дёргает syncNow() (pull с сервера),
+// потом reload() из зеркала. Мокаем syncNow — по умолчанию мгновенный resolve.
+const syncNow = vi.fn(async () => ({}) as any);
 
 vi.mock('../store/useStore', () => ({
   useStore: (selector: (s: any) => unknown) => selector(storeState),
@@ -31,6 +34,10 @@ vi.mock('../store/useTaskActivityStore', () => ({
     lastFilters = filters;
     return hookResult;
   },
+}));
+
+vi.mock('../lib/sync', () => ({
+  syncNow: () => syncNow(),
 }));
 
 import { WorkspaceHistoryTab } from './WorkspaceHistoryTab';
@@ -52,6 +59,8 @@ beforeEach(() => {
   loadMore.mockReset();
   navigate.mockReset();
   reload.mockReset();
+  syncNow.mockReset();
+  syncNow.mockImplementation(async () => ({}) as any);
   lastFilters = undefined;
   storeState = {
     language: 'ru',
@@ -161,9 +170,10 @@ describe('WorkspaceHistoryTab — кнопка «Обновить»', () => {
   });
 
   it('во время загрузки кнопка disabled со спиннером, повторный клик игнорируется', async () => {
-    // reload «висит» до ручного резолва — эмулируем длительную загрузку.
+    // v0.9.26: теперь длительная часть — syncNow (pull с сервера). «Висит» до ручного
+    // резолва — эмулируем длительный сетевой pull.
     let release!: () => void;
-    reload.mockImplementation(() => new Promise<void>((res) => { release = res; }));
+    syncNow.mockImplementation(() => new Promise<any>((res) => { release = () => res({}); }));
 
     render(<WorkspaceHistoryTab />);
     const btn = screen.getByRole('button', { name: 'Обновить' });
@@ -172,13 +182,15 @@ describe('WorkspaceHistoryTab — кнопка «Обновить»', () => {
     await waitFor(() => expect(btn).toBeDisabled());
     expect(btn.querySelector('svg')?.getAttribute('class')).toContain('animate-spin');
 
-    // Даблклик по disabled-кнопке не приводит ко второй загрузке.
+    // Даблклик по disabled-кнопке не приводит ко второму pull.
     fireEvent.click(btn);
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(syncNow).toHaveBeenCalledTimes(1);
 
     await act(async () => { release(); });
     expect(btn).not.toBeDisabled();
     expect(btn.querySelector('svg')?.getAttribute('class')).not.toContain('animate-spin');
+    // После завершения pull — локальный reload из зеркала.
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it('EN-локаль: aria-label/title = Refresh', () => {
