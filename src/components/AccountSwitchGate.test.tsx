@@ -43,6 +43,14 @@ vi.mock('../lib/sync/workspace', () => ({
   reconcilePersonalWorkspace: (...a: unknown[]) => reconcilePersonalWorkspace(...a),
 }));
 
+// F21 (ADR 0014): локальный per-account слот free-аккаунтов.
+const saveLocalAccountData = vi.fn(async (_uid: string | null) => true);
+const loadLocalAccountData = vi.fn(async (_uid: string | null) => false);
+vi.mock('../lib/localAccountStore', () => ({
+  saveLocalAccountData: (uid: string | null) => saveLocalAccountData(uid),
+  loadLocalAccountData: (uid: string | null) => loadLocalAccountData(uid),
+}));
+
 const clearUserData = vi.fn(async () => {});
 const ensureSeededIfEmpty = vi.fn(async () => {});
 const ensureWelcomeTaskIfNeeded = vi.fn(async (_userId?: string) => false);
@@ -89,6 +97,8 @@ beforeEach(() => {
   dbGet.mockReturnValue({ n: 0 });
   pushAll.mockResolvedValue({ pushed: 0, failed: 0 });
   cloudHasData.mockResolvedValue(true);
+  saveLocalAccountData.mockResolvedValue(true);
+  loadLocalAccountData.mockResolvedValue(false);
 });
 
 describe('AccountSwitchGate — free-tier перепривязка (Bug F)', () => {
@@ -139,6 +149,71 @@ describe('AccountSwitchGate — free-tier перепривязка (Bug F)', () 
     await waitFor(() => expect(checkAccountBinding).toHaveBeenCalled());
     expect(clearUserData).not.toHaveBeenCalled();
     expect(screen.queryByText('Вы вошли под другим аккаунтом')).toBeNull();
+  });
+});
+
+describe('AccountSwitchGate — локальный слот free-аккаунта (F21)', () => {
+  beforeEach(() => {
+    useAuthMock.mockReturnValue({ session: { user: { id: 'new-uid', email: 'a@b.c' } } });
+    checkAccountBinding.mockReturnValue({ mismatch: true, boundUserId: 'old-uid' });
+    getEntitlement.mockResolvedValue({ tier: 'free' });
+    isProOrTrial.mockReturnValue(false);
+  });
+
+  it('данные уходящего аккаунта сохраняются в его слот ДО очистки', async () => {
+    render(<AccountSwitchGate />);
+
+    await waitFor(() => expect(clearUserData).toHaveBeenCalledTimes(1));
+    // Сохраняем СТАРЫЙ boundUserId, а не сессионный.
+    expect(saveLocalAccountData).toHaveBeenCalledWith('old-uid');
+    expect(saveLocalAccountData).not.toHaveBeenCalledWith('new-uid');
+    expect(saveLocalAccountData.mock.invocationCallOrder[0])
+      .toBeLessThan(clearUserData.mock.invocationCallOrder[0]);
+  });
+
+  it('есть слот нового аккаунта: восстанавливаем, НЕ сеем', async () => {
+    loadLocalAccountData.mockResolvedValue(true);
+
+    render(<AccountSwitchGate />);
+
+    await waitFor(() => expect(loadLocalAccountData).toHaveBeenCalledWith('new-uid'));
+    expect(ensureSeededIfEmpty).not.toHaveBeenCalled();
+    expect(ensureWelcomeTaskIfNeeded).not.toHaveBeenCalled();
+    // Реконсиль personal-ws обязан пройти ДО applyBackup внутри восстановления.
+    expect(reconcilePersonalWorkspace.mock.invocationCallOrder[0])
+      .toBeLessThan(loadLocalAccountData.mock.invocationCallOrder[0]);
+    await waitFor(() =>
+      expect(pushToast).toHaveBeenCalledWith(
+        'Вы вошли под другим аккаунтом. Восстановлены локальные данные этого аккаунта.',
+      ),
+    );
+  });
+
+  it('слота нет: сев как раньше + прежний тост', async () => {
+    loadLocalAccountData.mockResolvedValue(false);
+
+    render(<AccountSwitchGate />);
+
+    await waitFor(() => expect(ensureSeededIfEmpty).toHaveBeenCalledTimes(1));
+    expect(ensureWelcomeTaskIfNeeded).toHaveBeenCalledWith('new-uid');
+    await waitFor(() =>
+      expect(pushToast).toHaveBeenCalledWith(
+        'Вы вошли под другим аккаунтом. Локальные данные очищены, снимок сохранён.',
+      ),
+    );
+  });
+
+  it('pro-ветка: локальный слот не читается и не пишется', async () => {
+    getEntitlement.mockResolvedValue({ tier: 'pro' });
+    isProOrTrial.mockReturnValue(true);
+
+    render(<AccountSwitchGate />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Вы вошли под другим аккаунтом')).toBeInTheDocument(),
+    );
+    expect(saveLocalAccountData).not.toHaveBeenCalled();
+    expect(loadLocalAccountData).not.toHaveBeenCalled();
   });
 });
 

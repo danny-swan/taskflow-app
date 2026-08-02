@@ -23,6 +23,7 @@ import { BootOverlay } from './components/BootOverlay';
 import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { pingSupabaseKeepAlive } from './lib/supabase';
+import { useLocalAccountAutosave } from './lib/useLocalAccountAutosave';
 import { TasksPage } from './pages/Tasks';
 // v0.8.6: AddTaskPage больше не подключается — заменена на NewTaskModal
 // v0.8.12 (п. 24 code splitting): второстепенные вкладки грузим лениво —
@@ -210,6 +211,14 @@ function App() {
       console.warn('[sync] initAutoSync failed:', err);
     });
   }, [ready, auth.session?.user]);
+
+  // F21 (ADR 0014): автосейв активного free-аккаунта в его локальный слот.
+  // Хук сам проверяет план (пишет только free) и привязку базы к сессии;
+  // до готовности БД не подключаем — сохранять ещё нечего.
+  useLocalAccountAutosave(
+    ready ? auth.session?.user?.id ?? null : null,
+    auth.session?.user?.email ?? null,
+  );
 
   // v0.9.9: телеметрия старта приложения (один раз на логин)
   useEffect(() => {

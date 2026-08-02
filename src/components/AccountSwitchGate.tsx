@@ -42,6 +42,7 @@ import {
   isWebSnapshotLimited,
 } from '../lib/snapshots';
 import { getEntitlement, isProOrTrial } from '../lib/entitlements';
+import { saveLocalAccountData, loadLocalAccountData } from '../lib/localAccountStore';
 import { reconcilePersonalWorkspace } from '../lib/sync/workspace';
 import { getClientId } from '../lib/clientId';
 import * as db from '../lib/db';
@@ -174,8 +175,14 @@ export function AccountSwitchGate() {
           // вариантами (cloud/local/merge) бессмысленно. Но оставлять локальные
           // данные ПРОШЛОГО аккаунта видимыми под новым нельзя — это утечка между
           // аккаунтами (баг F). Делаем локальную (без сети) перепривязку:
-          // снимок → очистка → bound_user_id=new → пересоздание personal-ws → сев.
+          // слот уходящего → снимок → очистка → bound_user_id=new →
+          // пересоздание personal-ws → слот нового (или сев, если слота нет).
           try {
+            // F21 (ADR 0014): сохраняем данные УХОДЯЩЕГО аккаунта в его
+            // персональный слот — до clearUserData и до смены bound_user_id.
+            // Это локальный аналог облака: при возврате на этот аккаунт данные
+            // подставятся обратно (ниже по коду), а не потеряются в ротации снимков.
+            await saveLocalAccountData(check.boundUserId);
             await createSnapshot('before_account_switch');
             // Fix 3: снимок — гарантированная защита несинхронизированных данных
             // уходящего аккаунта (создан выше). Сетевой долив здесь невозможен:
@@ -184,17 +191,27 @@ export function AccountSwitchGate() {
             await db.clearUserData();
             setBoundUserId(sessionUserId);
             reconcilePersonalWorkspace(sessionUserId);
-            await db.ensureSeededIfEmpty();
-            await db.ensureWelcomeTaskIfNeeded(sessionUserId);
+            // F21: реконсиль обязан пройти ДО восстановления — applyBackup
+            // штампует строки текущим current_workspace_id, то есть personal-ws
+            // НОВОГО аккаунта. Если слота нет — сеем как раньше.
+            const restored = await loadLocalAccountData(sessionUserId);
+            if (!restored) {
+              await db.ensureSeededIfEmpty();
+              await db.ensureWelcomeTaskIfNeeded(sessionUserId);
+            }
             if (!cancelled) {
               // Fix 2: сперва привязку (boundUserId + ws/members) — иначе
               // computeRole не увидит owner-роль нового personal-ws.
               try { useStore.getState().reloadAccountBinding?.(); } catch { /* best-effort */ }
               try { await Promise.resolve(useStore.getState().refresh?.()); } catch { /* best-effort */ }
               useStore.getState().pushToast(
-                langRef.current === 'ru'
-                  ? 'Вы вошли под другим аккаунтом. Локальные данные очищены, снимок сохранён.'
-                  : 'Signed in with a different account. Local data cleared, snapshot saved.',
+                restored
+                  ? (langRef.current === 'ru'
+                    ? 'Вы вошли под другим аккаунтом. Восстановлены локальные данные этого аккаунта.'
+                    : 'Signed in with a different account. Local data of this account has been restored.')
+                  : (langRef.current === 'ru'
+                    ? 'Вы вошли под другим аккаунтом. Локальные данные очищены, снимок сохранён.'
+                    : 'Signed in with a different account. Local data cleared, snapshot saved.'),
               );
             }
           } catch (e) {
