@@ -1680,10 +1680,56 @@ export async function applyBackup(
     get<{ value: string }>(`SELECT value FROM settings WHERE key='current_workspace_id'`)?.value
     ?? get<{ value: string }>(`SELECT value FROM settings WHERE key='personal_workspace_id'`)?.value
     ?? 'ws_local';
+  // F29 (ADR 0022): нормализация legacy/сиротских workspace_id ТОЛЬКО в
+  // workspace-aware режиме. F28 сохраняет исходный task.workspace_id строки —
+  // это обнажило старый рассинхрон: задачи первого личного пространства,
+  // созданные ДО переклейки ws_local→ws_<uid> (reconcileLocalPlaceholder,
+  // src/lib/sync/workspace.ts), несут legacy workspace_id='ws_local' (или иной
+  // осиротевший id), которого нет среди восстановленных payload.workspaces.
+  // filterByWorkspace (src/store/workspaceScope.ts) фильтрует строго по
+  // равенству workspace_id===currentWorkspaceId — legacy-строки не совпадают
+  // и выпадают из UI-выборок, хотя счётчики (не ws-scoped) их видят.
+  //
+  // Правило: если workspace_id строки ЕСТЬ среди восстановленных
+  // payload.workspaces — не трогаем (F28-поведение). Если его там НЕТ
+  // (legacy/сирота) — переназначаем на канонический personal ws.
+  const validWsIds = new Set<string>();
+  if (isWorkspaceAware) {
+    for (const w of payload.workspaces!) {
+      if (typeof w.uuid === 'string' && w.uuid) validWsIds.add(w.uuid);
+    }
+  }
+  // Канонический personal: settings-указатель, ЕСЛИ он входит в восстановленный
+  // набор, иначе personal-строка payload.workspaces с наименьшим sort_order
+  // (первое созданное личное пространство, «Мои задачи», sort_order=0). Не
+  // вычисляем computeWorkspaceId здесь — db.ts не тащит зависимость от
+  // sync/workspace (см. ADR 0022).
+  let canonicalPersonalWsId: string | null = null;
+  if (isWorkspaceAware) {
+    if (importWsId && validWsIds.has(importWsId)) {
+      canonicalPersonalWsId = importWsId;
+    } else {
+      let best: { uuid: string; sortOrder: number } | null = null;
+      for (const w of payload.workspaces!) {
+        if (w.kind !== 'personal') continue;
+        if (!(typeof w.uuid === 'string' && w.uuid)) continue;
+        const sortOrder = typeof w.sort_order === 'number' ? w.sort_order : 0;
+        if (!best || sortOrder < best.sortOrder) best = { uuid: w.uuid, sortOrder };
+      }
+      canonicalPersonalWsId = best?.uuid ?? null;
+    }
+  }
   // F28: в workspace-aware режиме сохраняем исходный workspace_id строки;
   // в легаси-режиме (нет payload.workspaces) поведение НЕ меняется — всегда importWsId.
-  const resolveWsId = (rowWsId: unknown): string =>
-    isWorkspaceAware && typeof rowWsId === 'string' && rowWsId ? rowWsId : importWsId;
+  // F29: в workspace-aware режиме, если исходный workspace_id строки — legacy/
+  // сирота (не входит в validWsIds), переназначаем на canonicalPersonalWsId
+  // (если он вычислен) вместо того, чтобы оставлять недостижимый id.
+  const resolveWsId = (rowWsId: unknown): string => {
+    if (!isWorkspaceAware) return importWsId;
+    if (typeof rowWsId !== 'string' || !rowWsId) return importWsId;
+    if (validWsIds.has(rowWsId)) return rowWsId;
+    return canonicalPersonalWsId ?? rowWsId;
+  };
   const restoredUuids: { table: 'statuses' | 'tags' | 'tasks' | 'task_templates' | 'workspaces' | 'workspace_members'; uuid: string }[] = [];
 
   // Helper to do the run in both Tauri and web modes
