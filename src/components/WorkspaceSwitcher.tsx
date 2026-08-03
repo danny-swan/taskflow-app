@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import {
-  useWorkspaces, useCurrentWorkspace, useCanEdit, useWorkspaceRoles,
+  useWorkspaces, useCurrentWorkspace, useWorkspaceRoles,
   type WorkspaceRole,
 } from '../store/workspaceScope';
 import { CreateWorkspaceModal } from './CreateWorkspaceModal';
@@ -45,7 +45,6 @@ export function WorkspaceSwitcher() {
   const workspaces = useWorkspaces();
   const current = useCurrentWorkspace();
   const switchWorkspace = useStore(s => s.switchWorkspace);
-  const canEdit = useCanEdit();
   const roles = useWorkspaceRoles();
 
   const auth = useAuth();
@@ -111,7 +110,7 @@ export function WorkspaceSwitcher() {
   const tfid = profile?.public_user_id ?? 'TF-……';
 
   return (
-    <div ref={ref} className="relative px-3 pb-2">
+    <div ref={ref} className="relative px-3 pb-2" data-onboarding="workspace-switcher">
       <button
         onClick={() => setOpen(o => !o)}
         aria-label={tr(lang, 'ws_switch_aria')}
@@ -156,17 +155,22 @@ export function WorkspaceSwitcher() {
               <Plus size={14} className="shrink-0" />
               <span className="flex-1">{tr(lang, 'ws_create')}</span>
             </button>
-            {/* Настройки пространства — только editor+ (viewer не видит). */}
-            {canEdit && (
-              <NavLink
-                to="/workspace-settings"
-                onClick={() => setOpen(false)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] text-muted hover:bg-surface-alt hover:text-text"
-              >
-                <Settings2 size={13} className="shrink-0" />
-                <span className="flex-1">{tr(lang, 'ws_nav_settings')}</span>
-              </NavLink>
-            )}
+            {/*
+              F44: ссылка видна ВСЕМ участникам, включая viewer'а. Раньше гейт `canEdit`
+              отрезал viewer'у единственный вход на экран настроек пространства, а вместе с ним и
+              вкладку «Участники» с кнопкой «Покинуть пространство» — наблюдатель оказывался заперт в
+              пространстве. Сам экран уже read-only для не-владельца (справочники гасятся
+              `useCanManageWorkspace`, переименование/удаление — только owner), поэтому отдельный
+              урезанный экран для viewer'а не нужен.
+            */}
+            <NavLink
+              to="/workspace-settings"
+              onClick={() => setOpen(false)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] text-muted hover:bg-surface-alt hover:text-text"
+            >
+              <Settings2 size={13} className="shrink-0" />
+              <span className="flex-1">{tr(lang, 'ws_nav_settings')}</span>
+            </NavLink>
           </div>
         </div>
       )}

@@ -435,15 +435,6 @@ const sectionsRu: HelpSection[] = [
         ),
       },
       {
-        q: 'Что такое «Вкладка по умолчанию» при переключении пространства?',
-        a: (
-          <>
-            <p>При переключении пространства (а также при входе в аккаунт) приложение автоматически переходит на вашу <strong>«Вкладку по умолчанию»</strong> — она задаётся в Настройки → Общие (Задачи, Календарь, Дашборд или Статистика). Это сделано, чтобы не оставаться, например, на вкладке «Статистика» после перехода в другое пространство.</p>
-            <p className="mt-2">На первом запуске приложения этот переход не срабатывает нарочно — маршрут уже разрешает роутер; переход происходит только когда действительно сменился пользователь или пространство.</p>
-          </>
-        ),
-      },
-      {
         q: 'Как пригласить участника в общее пространство?',
         a: (
           <>
@@ -980,15 +971,6 @@ const sectionsEn: HelpSection[] = [
           <>
             <p>The workspace switcher sits at the top of the sidebar (a button with the current name and an arrow). The list has two groups — "Personal" and "Shared"; the active workspace is always shown first in its group, the rest are sorted alphabetically. In shared workspaces you'll see your role (a badge for editor/viewer; owners and personal workspaces show no badge). If you have no shared workspaces yet, a hint in the list shows your TF-id so others can invite you.</p>
             <p className="mt-2">From the same menu you can create a new workspace (the "Create" button) or open its settings (the "Workspace settings" link is visible if your role is editor or higher).</p>
-          </>
-        ),
-      },
-      {
-        q: 'What is the "Default tab" when switching workspaces?',
-        a: (
-          <>
-            <p>When you switch workspaces (and also when you sign in), the app automatically navigates to your <strong>"Default tab"</strong> — set in Settings → General (Tasks, Calendar, Dashboard or Stats). This exists so you don't get stuck, say, on the "Stats" tab after moving to another workspace.</p>
-            <p className="mt-2">On the very first app launch this redirect intentionally doesn't fire — the router already resolves the initial route; the jump only happens when the user or workspace actually changed.</p>
           </>
         ),
       },

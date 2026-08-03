@@ -82,18 +82,18 @@ const STEPS: Step[] = [
     icon: Sparkles,
     title: { ru: 'Добро пожаловать в TaskFlow', en: 'Welcome to TaskFlow' },
     body: {
-      ru: 'Лёгкий менеджер задач. Работает офлайн, все данные хранятся локально в SQLite. Проведу короткий тур по возможностям — около минуты.',
-      en: 'A lightweight task manager. Fully offline, everything is stored locally in SQLite. Let me walk you through the main features — takes about a minute.',
+      ru: 'Лёгкий менеджер задач. Задачи хранятся локально в SQLite и доступны без интернета; на платном тарифе добавляется синхронизация между устройствами и общие пространства. Проведу короткий тур — около минуты.',
+      en: 'A lightweight task manager. Tasks are stored locally in SQLite and stay available without a network; a paid plan adds sync across devices and shared workspaces. Let me walk you through it — takes about a minute.',
     },
   },
   {
-    target: null,
+    target: 'workspace-switcher',
     route: '/tasks',
     icon: Users,
     title: { ru: 'Пространства', en: 'Workspaces' },
     body: {
-      ru: 'Задачи живут внутри пространств (workspace) — переключатель вверху сайдбара. У вас всегда есть личное пространство, а на Pro/Trial можно создавать общие и приглашать туда других по вашему TF-id (его видно в Настройки → Аккаунт).',
-      en: 'Tasks live inside workspaces — the switcher is at the top of the sidebar. You always have a personal workspace, and on Pro/Trial you can create shared ones and invite others using your TF-id (visible in Settings → Account).',
+      ru: 'Задачи живут внутри пространств (workspace) — переключатель подсвечен вверху сайдбара. У вас всегда есть личное пространство, а на Pro/Trial можно создавать общие и приглашать туда других по вашему TF-id (его видно в Настройки → Аккаунт).',
+      en: 'Tasks live inside workspaces — the highlighted switcher at the top of the sidebar. You always have a personal workspace, and on Pro/Trial you can create shared ones and invite others using your TF-id (visible in Settings → Account).',
     },
   },
   {
@@ -172,8 +172,8 @@ const STEPS: Step[] = [
     icon: HelpCircle,
     title: { ru: 'Помощь и горячие клавиши', en: 'Help & hotkeys' },
     body: {
-      ru: 'Полная справка, FAQ, список изменений и кнопка «Пройти тур заново». Клавиши: 1–6 — вкладки, N — новая задача, / — поиск.',
-      en: 'Full reference, FAQ, changelog and a «Re-run the tour» button. Hotkeys: 1–6 tabs, N — new task, / — search.',
+      ru: 'Полная справка, FAQ и список изменений. Этот тур можно запустить снова из вопроса «Как перезапустить приветственный тур?». Клавиши: 1–6 — вкладки, N — новая задача, / — поиск.',
+      en: 'Full reference, FAQ and changelog. You can replay this tour from the «How do I re-run the welcome tour?» entry. Hotkeys: 1–6 tabs, N — new task, / — search.',
     },
   },
   {
@@ -182,8 +182,8 @@ const STEPS: Step[] = [
     icon: Layers,
     title: { ru: 'Готово', en: 'All set' },
     body: {
-      ru: 'Приятной работы. TaskFlow полностью офлайн — данные никуда не отправляются, всё хранится локально. Синхронизация с облаком (Supabase) — опциональная, включается на экране входа.',
-      en: 'Enjoy. TaskFlow is fully offline — no data leaves your machine, everything is stored locally. Cloud sync (Supabase) is optional and enabled via the sign-in screen.',
+      ru: 'Приятной работы. Без входа в аккаунт и на бесплатном тарифе всё остаётся только на этом устройстве. На платном тарифе задачи и пространства синхронизируются через облако (Supabase) и при этом продолжают работать офлайн — изменения уйдут в облако, как только появится сеть.',
+      en: 'Enjoy. Signed out and on the free plan everything stays on this device only. On a paid plan tasks and workspaces sync through the cloud (Supabase) and still work offline — changes are pushed as soon as the network is back.',
     },
   },
 ];
