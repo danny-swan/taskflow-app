@@ -38,7 +38,74 @@ import { pushAll, type PushResult } from './push';
 import { pullAll, type PullResult } from './pull';
 import { subscribeRealtime, unsubscribeRealtime } from './realtime';
 import { getEntitlement, isProOrTrial } from '../entitlements';
+
+// Wave A (workspaces): переподписка realtime при смене набора/текущего ws
+// (используется store.switchWorkspace через ленивый import '../lib/sync').
+export { resubscribeRealtime } from './realtime';
 import { setBoundUserId, getBoundUserId } from '../snapshots';
+
+/**
+ * F16 (ADR 0010, roadmap §7.16): pullAll() вернул `{corruption:true}` — локальная
+ * SQLite была повреждена во время apply и уже сброшена/сбудет сброшена
+ * ниже (detectAndRecoverCorruption на следующем initDb). Показываем тоаст и
+ * перезагружаем страницу (веб) — чтобы initDb отработал свой путь с самого
+ * начала на чистом состоянии. Не пушим в этом цикле — push после битой базы опасен
+ * (могли бы улететь мусор из ещё не восстановленной/пустой локальной базы).
+ */
+/**
+ * F19 (ADR 0013): после каждого pull схлопываем дубли сид-статусов.
+ *
+ * Именно pull приносит «второе поколение» сида (переустановка / второе
+ * устройство / clearUserData + бутстрап free-плана): матчер статусов работает
+ * по uuid, а uuid у каждого поколения свой. Дедуп ставим ДО refreshStore, чтобы
+ * пользователь не увидел даже кадра с 14 колонками. Идемпотентно, no-op на
+ * здоровой базе. Ошибки глотаем — самолечение вторично к sync-циклу.
+ */
+async function dedupeSeedStatusesAfterPull(): Promise<void> {
+  try {
+    const dbMod = await import('../db');
+    if (typeof dbMod.dedupeSeedStatuses === 'function') {
+      const removed = await dbMod.dedupeSeedStatuses();
+      if (removed > 0) {
+        logger.info(`[sync/orchestrator] F19: схлопнуто дублей сид-статусов: ${removed}`);
+      }
+    }
+  } catch (e) {
+    logger.warn('[sync/orchestrator] dedupeSeedStatuses failed:', e);
+  }
+}
+
+async function handlePullCorruption(): Promise<void> {
+  logger.error('[sync/orchestrator] pull reported corruption:true, reloading to recover');
+  try {
+    const mod = await import('../../store/useStore');
+    const state = mod.useStore.getState();
+    if (typeof state.pushToast === 'function') {
+      const lang = state.language;
+      state.pushToast(
+        lang === 'ru'
+          ? 'Локальная база была повреждена, восстановление...'
+          : 'Local database was corrupted, recovering...',
+      );
+    }
+  } catch (e) {
+    logger.warn('[sync/orchestrator] failed to show corruption toast:', e);
+  }
+
+  // Веб: просто перезагружаем — следующий initDb() на старте сам вызовет
+  // detectAndRecoverCorruption() и увидит чистое состояние (localStorage уже
+  // очищен на этапе detectAndRecoverCorruption/withCorruptionGuard). В Tauri (не-веб)
+  // window.location тоже доступен (webview) — перезагрузка страницы там тоже
+  // перезагружает renderer и вызовет initDb() заново — отдельная ветка
+  // для “форс-ретрай initDb() без релоада” не требуется.
+  try {
+    if (typeof window !== 'undefined' && typeof window.location?.reload === 'function') {
+      window.location.reload();
+    }
+  } catch (e) {
+    logger.warn('[sync/orchestrator] window.location.reload failed:', e);
+  }
+}
 
 /**
  * v0.9.35-dev.5: вызываем useStore.refresh() после успешного pull, чтобы
@@ -53,6 +120,16 @@ async function refreshStoreAfterPull(applied: number): Promise<void> {
     const state = mod.useStore.getState();
     if (typeof state.refresh === 'function') {
       state.refresh();
+      // Перечитываем in-memory ws-состав/указатель: pull мог создать personal-ws
+      // и/или reconcilePersonalWorkspace переставил current_workspace_id в БД.
+      // Без этого UI фильтрует по устаревшему currentWorkspaceId (ws_local /
+      // ws_<чужой>) → пустой экран до перезапуска. Только при applied>0.
+      if (typeof state.loadWorkspaces === 'function') state.loadWorkspaces();
+      if (typeof state.loadWorkspaceMembers === 'function') state.loadWorkspaceMembers();
+      // Fix 2: перечитываем boundUserId из settings в стор. Без этого computeRole
+      // видит устаревший (или null) boundUserId → своя строка членства не находится
+      // → owner получает «Только владелец пространства может менять статусы…».
+      if (typeof state.reloadAccountBinding === 'function') state.reloadAccountBinding();
       logger.info(`[sync/orchestrator] store refreshed (${applied} rows applied)`);
     }
   } catch (e) {
@@ -200,25 +277,62 @@ export async function syncNow(): Promise<SyncResult> {
       return { ...emptyResult, error: err };
     }
 
-    // 2.5. Entitlement-гейт (v0.9.35-dev.6).
+    // 2.5. Согласование personal-пространства (Wave A, PR-2) — ВСЕГДА, до гейта.
     //
-    // Sync — платная фича. Free-план и истёкший trial блокируются здесь,
-    // до всяких сетевых операций. Если кэш пуст (первый запуск, БД недоступна) —
-    // тоже считаем free (безопасный дефолт: пропустить sync проще, чем потом
-    // объяснять пользователю, почему он видит чужие данные).
+    // Fix-round2 (Fix 1): локальный bootstrap personal-пространства НЕ является
+    // платной фичей. Free-план обязан получить рабочее personal-ws офлайн —
+    // поэтому reconcile выполняется для ЛЮБОГО плана, ДО entitlement-гейта.
+    // Локально-only база (создана без входа) держит personal-ws под placeholder-id
+    // `ws_local`; reconcile переименовывает все ссылки в детерминированный
+    // `ws_<uid>` (совпадает с серверным backfill'ом 0027). Идемпотентно и дёшево:
+    // если placeholder'а уже нет — быстрый no-op. Ошибки не должны валить sync.
+    try {
+      const { reconcilePersonalWorkspace } = await import('./workspace');
+      reconcilePersonalWorkspace(userId);
+    } catch (e) {
+      logger.warn('[sync/orchestrator] reconcilePersonalWorkspace failed:', e);
+    }
+
+    // 2.6. Entitlement-гейт (v0.9.35-dev.6; split в fix-round2 Fix 1).
     //
-    // На сервере всё дополнительно защищено RLS: даже если клиент попытается
-    // пушить с free, INSERT/UPDATE в sync_* пройдёт (RLS не отличает планы),
-    // но UI гейт даёт пользователю понятный CTA вместо тихой траты трафика.
+    // Гейт режет ТОЛЬКО сеть (pull/push/realtime/shared-ws). Локальный bootstrap
+    // (reconcile выше + seed/welcome ниже) для free уже сделан. Если кэш
+    // entitlement пуст (первый запуск, БД недоступна) — считаем free: безопасный
+    // дефолт, при котором пользователь всё равно получает рабочее локальное
+    // пространство, но мы не льём его данные в облако без подтверждённого плана.
     const userEmail = sessionData?.session?.user?.email ?? null;
     const ent = await getEntitlement(userId, userEmail);
     if (!isProOrTrial(ent)) {
-      logger.info('[sync/orchestrator] paywalled (plan=' + ent.effectivePlan + '), skipping');
+      // Free / истёкший trial: сеть выключена. Досеваем базовый справочник и
+      // welcome-задачу (локальный bootstrap), привязываем базу к аккаунту
+      // локально (чтобы computeRole сразу видел owner-роль и сработал детект
+      // смены аккаунта), обновляем стор и выходим БЕЗ pull/push.
+      try {
+        const dbMod = await import('../db');
+        if (typeof dbMod.ensureSeededIfEmpty === 'function') await dbMod.ensureSeededIfEmpty();
+        if (typeof dbMod.ensureWelcomeTaskIfNeeded === 'function') {
+          await dbMod.ensureWelcomeTaskIfNeeded(userId);
+        }
+      } catch (e) {
+        logger.warn('[sync/orchestrator] free-plan local bootstrap failed:', e);
+      }
+      try {
+        if (getBoundUserId() !== userId) {
+          setBoundUserId(userId);
+          logger.info(`[sync/orchestrator] bound local DB to user ${userId} (free, local-only)`);
+        }
+      } catch (e) {
+        logger.warn('[sync/orchestrator] free-plan bind failed:', e);
+      }
+      // applied=1 форсит refresh: UI должен увидеть локально созданные
+      // ws/статусы/теги/welcome + подхватить boundUserId (Fix 2).
+      await refreshStoreAfterPull(1);
+      logger.info('[sync/orchestrator] free plan: local bootstrap done, network sync paywalled');
       setState({ status: 'paywalled', lastSyncedAt: currentState.lastSyncedAt, lastError: null });
       return emptyResult;
     }
 
-    // 3. Регистрируем устройство (idempotent).
+    // 3. Регистрируем устройство (idempotent) — только pro/trial (сетевой шаг).
     await ensureDeviceRegistered(userId, clientId);
 
     // 4. Первый pull — забираем изменения из облака.
@@ -226,10 +340,18 @@ export async function syncNow(): Promise<SyncResult> {
     let pullResult: PullResult | null = null;
     try {
       pullResult = await pullAll(userId);
+      if (pullResult.corruption) {
+        // F16 (ADR 0010, roadmap §7.16): база повреждена во время apply. Тоаст +
+        // релоад и НЕ пушим в этом цикле (push после битой базы опасен).
+        setState({ status: 'error', lastSyncedAt: currentState.lastSyncedAt, lastError: pullResult.firstError ?? 'sqlite_corruption' });
+        await handlePullCorruption();
+        return { ...emptyResult, skipped: false, pullResult, error: pullResult.firstError ?? 'sqlite_corruption' };
+      }
       if (pullResult.firstError) {
         // Pull частично упал, но не фатально — идём дальше.
         logger.warn('[sync/orchestrator] pull had errors:', pullResult.firstError);
       }
+      await dedupeSeedStatusesAfterPull();
       // Если что-то реально применено — обновляем UI.
       await refreshStoreAfterPull(pullResult.applied);
 
@@ -282,6 +404,14 @@ export async function syncNow(): Promise<SyncResult> {
     let finalPullResult: PullResult | null = null;
     try {
       finalPullResult = await pullAll(userId);
+      if (finalPullResult.corruption) {
+        // F16: база повредилась уже на финальном pull'е (после push). Аналогично:
+        // тоаст + релоад. push в этом цикле уже ушёл выше, повторный цикл не запускается.
+        setState({ status: 'error', lastSyncedAt: currentState.lastSyncedAt, lastError: finalPullResult.firstError ?? 'sqlite_corruption' });
+        await handlePullCorruption();
+        return { ...emptyResult, ok: false, skipped: false, pullResult, pushResult, finalPullResult, error: finalPullResult.firstError ?? 'sqlite_corruption' };
+      }
+      await dedupeSeedStatusesAfterPull();
       await refreshStoreAfterPull(finalPullResult.applied);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

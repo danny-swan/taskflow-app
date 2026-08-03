@@ -21,6 +21,9 @@ import {
 } from '@dnd-kit/core';
 import { ChevronLeft, ChevronRight, CalendarDays, ChevronUp, ChevronDown } from 'lucide-react';
 import { useStore, Task, Status, Tag } from '../store/useStore';
+import {
+  useCurrentWorkspaceTasks, useCurrentWorkspaceStatuses, useCurrentWorkspaceTags,
+} from '../store/workspaceScope';
 import { tr, Lang, Dict } from '../lib/i18n';
 import { TaskModal } from '../components/TaskModal';
 
@@ -97,9 +100,9 @@ type CalView = 'week' | 'month';
 
 export function CalendarPage() {
   const lang = useStore(s => s.language);
-  const tasks = useStore(s => s.tasks);
-  const statuses = useStore(s => s.statuses);
-  const tags = useStore(s => s.tags);
+  const tasks = useCurrentWorkspaceTasks();
+  const statuses = useCurrentWorkspaceStatuses();
+  const tags = useCurrentWorkspaceTags();
   const updateTask = useStore(s => s.updateTask);
 
   const [view, setView] = useState<CalView>('week'); // v0.9.5: по умолчанию неделя

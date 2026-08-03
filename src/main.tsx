@@ -7,7 +7,8 @@ import { initSentry } from './lib/sentry';
 
 // v0.9.23: Sentry первым — чтобы ловить всё, что упадёт ниже
 // (installGlobalErrorHandlers, App-рендер, ленивые импорты).
-// В dev без VITE_SENTRY_DSN — тихо no-op.
+// v1.0.3: по умолчанию тихо no-op — нужен VITE_SENTRY_ENABLED=true
+// и непустой VITE_SENTRY_DSN (детали в src/lib/sentry.ts).
 initSentry();
 
 // v0.8.12: подключаем глобальные обработчики ошибок и пишем «app start»

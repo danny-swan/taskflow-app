@@ -29,6 +29,7 @@ on:
     branches:
       - develop
       - main
+      - feat/workspaces
     paths:
       - 'supabase/**'
   workflow_dispatch:
@@ -136,4 +137,16 @@ jobs:
             supabase/tests/05_wave4_test.sql \
             supabase/tests/06_wave4_rate_limit_test.sql \
             supabase/tests/07_task_hold_periods_test.sql \
-            supabase/tests/08_profile_test.sql
+            supabase/tests/08_profile_test.sql \
+            supabase/tests/09_workspaces_test.sql \
+            supabase/tests/10_workspace_management_test.sql \
+            supabase/tests/11_workspace_limits_test.sql \
+            supabase/tests/12_workspaces_regression_test.sql \
+            supabase/tests/13_workspace_id_integrity_test.sql \
+            supabase/tests/14_workspace_rls_roles_test.sql \
+            supabase/tests/15_workspace_invites_test.sql \
+            supabase/tests/16_workspace_regression_test.sql \
+            supabase/tests/17_task_activity_log_test.sql \
+            supabase/tests/18_upsert_returning_bootstrap_test.sql \
+            supabase/tests/19_admin_users_summary_test.sql \
+            supabase/tests/20_accept_invite_reactivation_test.sql

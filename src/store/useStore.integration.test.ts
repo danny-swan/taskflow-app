@@ -389,3 +389,23 @@ describe('store integration — deleteTag cascade', () => {
     expect(affectedUuids.includes(uuidC)).toBe(false);
   });
 });
+
+describe('store integration — readWorkspacesFromDb всегда показывает personal (Bug D/E)', () => {
+  const UID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const PERSONAL = 'ws_' + UID.toLowerCase().replace(/-/g, '');
+
+  it('personal-ws виден в сайдбаре даже при пустом workspace_members и рассинхроне bound_user_id', () => {
+    // Рассинхрон: bound_user_id = UID, но членства этого пользователя нет вовсе
+    // (как сразу после clearUserData / до первого pull). Раньше сайдбар пустел.
+    liveDb!.run(`INSERT OR REPLACE INTO settings (key, value) VALUES ('bound_user_id', ?)`, [UID]);
+    liveDb!.run(`DELETE FROM workspace_members`);
+    liveDb!.run(`DELETE FROM workspaces`);
+
+    useStore.getState().loadWorkspaces();
+
+    const ids = useStore.getState().workspaces.map(w => w.id);
+    expect(ids).toContain(PERSONAL);
+    const personal = useStore.getState().workspaces.find(w => w.id === PERSONAL)!;
+    expect(personal.kind).toBe('personal');
+  });
+});

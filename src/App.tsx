@@ -13,14 +13,17 @@ import { Topbar } from './components/Topbar';
 import { ToastStack } from './components/Toast';
 import { Onboarding } from './components/Onboarding';
 import { OnboardingErrorBoundary } from './components/OnboardingErrorBoundary';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { AuthScreen } from './components/AuthScreen';
 import { PasswordResetModal } from './components/PasswordResetModal';
 import { CommandPalette } from './components/CommandPalette';
 import { PaywallGate } from './components/PaywallModal';
 import { AccountSwitchGate } from './components/AccountSwitchGate';
+import { BootOverlay } from './components/BootOverlay';
 import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { pingSupabaseKeepAlive } from './lib/supabase';
+import { useLocalAccountAutosave } from './lib/useLocalAccountAutosave';
 import { TasksPage } from './pages/Tasks';
 // v0.8.6: AddTaskPage больше не подключается — заменена на NewTaskModal
 // v0.8.12 (п. 24 code splitting): второстепенные вкладки грузим лениво —
@@ -30,6 +33,7 @@ const DashboardPage = lazy(() => import('./pages/Dashboard').then(m => ({ defaul
 const CalendarPage = lazy(() => import('./pages/Calendar').then(m => ({ default: m.CalendarPage })));
 const StatsPage = lazy(() => import('./pages/Stats').then(m => ({ default: m.StatsPage })));
 const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })));
+const WorkspaceSettingsPage = lazy(() => import('./pages/WorkspaceSettings').then(m => ({ default: m.WorkspaceSettingsPage })));
 const HelpPage = lazy(() => import('./pages/Help').then(m => ({ default: m.HelpPage })));
 // v0.9.35-dev.6.4: страница подписки для оплаты через ЮKassa.
 const CheckoutPage = lazy(() => import('./pages/Checkout').then(m => ({ default: m.CheckoutPage })));
@@ -140,6 +144,23 @@ function App() {
       'font-weight:bold', 'color:#888');
   }, [init]);
 
+  // F16 (ADR 0010, roadmap §7.16): detectAndRecoverCorruption() в initDb() могла
+  // сбросить локальную SQLite до того, как приложение успело отрисоваться. При монте
+  // проверяем флаг и сообщаем пользователю, что данные будут перетянуты из облака
+  // следующим syncNow(). Гасится один раз на монте — pull.ts тоже ставит этот флаг
+  // во время runtime-порчи — в этом случае sync/index.ts (handlePullCorruption) уже показывает
+  // свой тоаст и делает reload до того, как этот эффект успел бы сработать.
+  useEffect(() => {
+    const reason = (window as any).__taskflow_corruption_recovered;
+    if (reason) {
+      pushToast(lang === 'ru'
+        ? 'Локальная база была повреждена и восстановлена из облака. Загружаем ваши данные...'
+        : 'Local database was corrupted and restored from the cloud. Loading your data...');
+      delete (window as any).__taskflow_corruption_recovered;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // v0.9.28: catch-up автоочистки выполненных задач после инициализации БД.
   // Если сегодня прошёл выбранный день недели и last_run старее — тихо архивируем.
   // Показываем toast с Undo (5 сек), если что-то реально было архивировано.
@@ -191,6 +212,14 @@ function App() {
     });
   }, [ready, auth.session?.user]);
 
+  // F21 (ADR 0014): автосейв активного free-аккаунта в его локальный слот.
+  // Хук сам проверяет план (пишет только free) и привязку базы к сессии;
+  // до готовности БД не подключаем — сохранять ещё нечего.
+  useLocalAccountAutosave(
+    ready ? auth.session?.user?.id ?? null : null,
+    auth.session?.user?.email ?? null,
+  );
+
   // v0.9.9: телеметрия старта приложения (один раз на логин)
   useEffect(() => {
     if (auth.session?.user && ready) {
@@ -221,15 +250,10 @@ function App() {
     return () => clearTimeout(t);
   }, [ready, autoUpdate, pushToast, lang, navigate]);
 
+  // Фаза 1 старта: БД ещё не готова / сессия ещё выясняется. Приложение не
+  // рендерим вообще — только блокирующий оверлей.
   if (!ready || auth.loading) {
-    return (
-      <div className="h-full flex items-center justify-center bg-bg text-muted">
-        <div className="text-center">
-          <div className="font-display text-[18px] font-bold mb-1">TaskFlow</div>
-          <div className="text-[12px]">{lang === 'ru' ? 'Загрузка...' : 'Loading...'}</div>
-        </div>
-      </div>
-    );
+    return <BootOverlay dbReady={ready} authLoading={auth.loading} waitForSync={false} />;
   }
 
   // v0.9.21: E2E-байпас AuthScreen для Playwright.
@@ -255,6 +279,7 @@ function App() {
 
   return (
     <ThemeProvider>
+      <AppErrorBoundary>
       <div className="flex h-full bg-bg text-text">
         <Sidebar />
         <main className="flex-1 flex flex-col overflow-hidden relative">
@@ -277,6 +302,7 @@ function App() {
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/stats" element={statsEnabled ? <StatsPage /> : <Navigate to="/tasks" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/workspace-settings" element={<WorkspaceSettingsPage />} />
               <Route path="/help" element={<HelpPage />} />
               {/* v0.9.35-dev.6.4: Checkout — открытая страница оплаты подписки. */}
               <Route path="/checkout" element={<CheckoutPage />} />
@@ -302,7 +328,15 @@ function App() {
         {!e2eBypass && <AccountSwitchGate />}
         {/* v0.9.29: Command Palette */}
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+        {/* F19 (ADR 0013): фаза 2 старта — БД готова, но первый pull пространств
+            ещё едет. Оверлей продолжает перекрывать UI, чтобы клик не попал в
+            список ws, который через секунду будет заменён облачным. Сам решает,
+            показываться ли, и снимается навсегда (см. BootOverlay). */}
+        {!e2eBypass && (
+          <BootOverlay dbReady={ready} authLoading={false} waitForSync={!!auth.session?.user} />
+        )}
       </div>
+      </AppErrorBoundary>
     </ThemeProvider>
   );
 }

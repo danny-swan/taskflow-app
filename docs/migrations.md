@@ -58,6 +58,24 @@ COMMIT;
 
 Единственное исключение — публичные таблицы, если такие появятся (feature flags, публичный каталог). Каждый такой случай — явно документируем в миграции.
 
+### upsert + RETURNING проверяет ВСЕ три политики (INSERT + UPDATE + SELECT)
+
+_Добавлено 15.07.2026 после инцидента 403 на upsert новых пространств (миграция 0037, PR #103; см. `audit/roadmap.md` §5 F7 / §7.8)._
+
+Клиент (supabase-js) пишет через PostgREST `upsert` с `Prefer: return=representation` → в SQL это `INSERT ... ON CONFLICT DO UPDATE ... RETURNING *`. Такой запрос проверяет **три политики сразу**:
+
+- **INSERT** (`WITH CHECK`) — для вставки;
+- **UPDATE** (`USING` + `WITH CHECK`) — для ветки `ON CONFLICT DO UPDATE`;
+- **SELECT** (`USING`) — для `RETURNING *` (чтобы вернуть вставленную/обновлённую строку).
+
+Если **любая** из них = false — весь запрос падает с `42501` / HTTP 403, даже если сама вставка разрешена. Классическая ловушка: SELECT-политика завязана на строку в ДРУГОЙ таблице (напр. членство), которой ещё нет в момент первого INSERT.
+
+**Выводы для будущих миграций:**
+
+1. Проектируя RLS для таблицы, в которую клиент пишет через `upsert`, ОБЯЗАТЕЛЬНО проверяй SELECT-политику на «свежей» строке (ещё без связанных записей).
+2. Тестируй тем же путём, что и клиент — `INSERT ... RETURNING`/upsert, а НЕ чистым `INSERT` (он не трогает SELECT-политику и скроет баг). В pgTAP — `lives_ok`/`throws_ok` на `INSERT ... RETURNING`.
+3. `SECURITY DEFINER`-хелпер, читающий **ту же** таблицу, НЕ увидит in-flight строку во время её же RETURNING — такое условие нужно выражать **инлайн** в теле политики (по колонкам самой строки), а не через функцию-подзапрос.
+
 ## Trigger-функции (SECURITY DEFINER или обычные)
 
 Trigger-функции не должны быть вызваны через PostgREST напрямую:
@@ -79,10 +97,20 @@ REVOKE EXECUTE ON FUNCTION public.my_trigger_fn() FROM anon, authenticated, PUBL
 
 Триггер продолжит работать после REVOKE, потому что триггеры исполняются от имени владельца таблицы независимо от GRANT EXECUTE.
 
+### `CREATE OR REPLACE` для RPC сохраняет GRANT/REVOKE, но их всё равно повторяем
+
+_Добавлено 21.07.2026 после переопределения `accept_invite` (миграция 0038, PR #105; см. `audit/roadmap.md` §5 F11 / §7.11)._
+
+При переопределении существующего RPC через `CREATE OR REPLACE FUNCTION` существующие GRANT/REVOKE НЕ сбрасываются (в отличие от `DROP`+`CREATE`). Но в миграции всё равно явно повторяем `revoke ... from anon, public` + `grant execute ... to authenticated` — для идемпотентности и явности (читатель видит итоговый контракт прав прямо в файле). Меняем ТОЛЬКО то, что нужно (тело/гейт), остальные проверки и атомарность сохраняем дословно.
+
+**Урок про лимиты (от F11):** счётчики, различающие «своё» и «чужое», должны опираться на роль/владение (`sync_workspaces.owner_id` или `role='owner'`), а НЕ на факт членства: у каждого владеемого ws есть self-членство `role='owner'` (0027), и `count(членств)` даёт двойной учёт — собственные ws ложно расходовали лимит на приём чужих инвайтов (платный с 7 своими ws не мог принять ни одного). Лимит на создание (`enforce_workspace_limit`, 0029) и гейт на приём (`accept_invite`, 0038) — это РАЗНЫЕ бюджеты: создание по `owner_id`, приём по плану (`get_workspace_limit(uid,'shared')>0`).
+
 ## Проверка перед применением в prod
 
 1. **Локально** — прогнать `pg_prove supabase/tests/*.sql` через docker-compose с ванильным Postgres (см. `.github/workflows/db-tests.yml`).
-2. **CI** — на push в develop workflow `DB tests (pgTAP)` проходит автоматически.
+2. **CI** — workflow `DB tests (pgTAP)` запускается на push в `develop`/`main` и на PR в `develop`/`main`/`feat/workspaces`, только по путям `supabase/**`.
+
+   ⚠️ **Ловушка (F34, 03.08.2026):** прямые пуши в фича-ветку БЕЗ PR не запускают этот workflow. Тесты `19_admin_users_summary_test.sql` и `20_accept_invite_reactivation_test.sql` пролежали красными с 21–22.07 до 03.08, потому что их ни разу не исполнил CI. **Правило: после добавления новой миграции или нового pgTAP-теста прямым пушем — вручную дёрнуть** `gh workflow run db-tests.yml --repo danny-swan/taskflow-app --ref <ветка>` **и дождаться зелёного, не откладывая до мержа.**
 3. **Верификация в prod после apply** — выполнить в SQL-редакторе:
 
    ```sql
@@ -97,8 +125,11 @@ REVOKE EXECUTE ON FUNCTION public.my_trigger_fn() FROM anon, authenticated, PUBL
 
 ## Как применять миграции в prod
 
-- Через Supabase Management API (POST `/v1/projects/{ref}/database/query`) — так делает CI при мерже в main.
+⚠️ **Уточнение 03.08.2026 (ADR 0027) — здесь раньше было записано неверно.** Прежняя формулировка гласила, что миграции применяет CI при мерже в `main`. Это не так и никогда так не работало: в `.github/workflows/` есть только `build.yml`, `db-tests.yml`, `test.yml`, `supabase-ping.yml`, `generate-updater-keys.yml`, и **ни один из них не обращается к прод-БД** — нет ни вызова Management API, ни `SUPABASE_ACCESS_TOKEN`, ни `supabase db push`. `db-tests.yml` накатывает `supabase/migrations/*.sql` только на эфемерный vanilla Postgres 15 внутри раннера. Следствие: **мерж в `main` не меняет прод-БД**, а применение миграций — всегда явное ручное действие.
+
+- Через Supabase Management API (POST `/v1/projects/{ref}/database/query`) или MCP `apply_migration` — **вручную, с `confirm_action` перед каждым применением на прод**.
 - Через Dashboard SQL Editor — если нужен интерактивный контроль.
+- Порядок работы: миграция попадает в ветку → pgTAP зелёный → применяем на прод вручную → верификация (ниже) → мерж кода. Прод может опережать `main` — это нормально и ожидаемо.
 - **Никогда не через `supabase db push`** локально из Windows — CLI не всегда доступен без Docker Desktop.
 
 ## Rollback

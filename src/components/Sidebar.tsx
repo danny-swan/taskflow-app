@@ -1,9 +1,12 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import { MyInvitesSection } from './MyInvitesSection';
 import { tr } from '../lib/i18n';
-import { usePendingSyncCount } from '../lib/pendingSync';
+import { usePendingSyncCount, shouldHidePendingChip } from '../lib/pendingSync';
+import { isWorkspaceLimitError } from '../lib/workspaceLimits';
 import {
-  ListChecks, Plus, LayoutDashboard, BarChart3, Settings, HelpCircle,
+  ListChecks, LayoutDashboard, BarChart3, Settings, HelpCircle,
   Sun, Moon, Sparkles, Leaf, Palette, ChevronDown, CalendarDays, Cloud, X, Clock,
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
@@ -59,6 +62,12 @@ export function Sidebar() {
         <div className="text-[11px] text-muted mt-0.5 ml-[2px] tracking-wide">{tr(lang, 'brand_sub')}</div>
         <div className="text-[10px] text-faint mt-0.5 ml-[2px] tracking-wider tabular mono">v{__APP_VERSION__}</div>
       </div>
+
+      {/* Wave A (PR-3): переключатель пространств. */}
+      <WorkspaceSwitcher />
+
+      {/* Wave B (PR-b-04): входящие приглашения в общие пространства. */}
+      <MyInvitesSection />
 
       {/* v0.9.35-dev.6: баннер статуса подписки (trial / free-CTA / expired). */}
       <SubscriptionBanner />
@@ -194,10 +203,11 @@ function PendingSyncChip() {
     };
   }, []);
 
-  // Скрываем chip в prod, когда всё тихо (в dev всегда показываем).
+  // Скрываем chip, когда sync недоступен (paywalled/нет сессии) или, для
+  // Pro/trial, когда в prod ничего не происходит (в dev показываем всегда).
   const isBusy = syncStatus === 'pulling' || syncStatus === 'pushing';
   const isError = syncStatus === 'error';
-  if (!isDev && count === 0 && !isBusy && !isError) return null;
+  if (shouldHidePendingChip(syncStatus, count, isDev)) return null;
 
   // Формируем label + цвет.
   let label: string;
@@ -223,9 +233,16 @@ function PendingSyncChip() {
     valueColor = count > 0 ? 'text-accent font-semibold tabular' : 'text-faint tabular';
   }
 
+  // Fallback-апселл при race: если серверный триггер отклонил создание
+  // пространства (workspace_limit_exceeded), показываем тарифное сообщение,
+  // а не сырой текст ошибки sync.
+  const isLimitError = isError && isWorkspaceLimitError(syncError);
+  const errorText = isLimitError
+    ? tr(lang, 'ws_limit_sync_error')
+    : (syncError ?? (lang === 'ru' ? 'неизвестно' : 'unknown'));
   const title = lang === 'ru'
-    ? (isError ? `Ошибка: ${syncError ?? 'неизвестно'}` : `В очереди: ${count}, статус: ${syncStatus}`)
-    : (isError ? `Error: ${syncError ?? 'unknown'}` : `Queued: ${count}, status: ${syncStatus}`);
+    ? (isError ? `Ошибка: ${errorText}` : `В очереди: ${count}, статус: ${syncStatus}`)
+    : (isError ? `Error: ${errorText}` : `Queued: ${count}, status: ${syncStatus}`);
 
   return (
     <div

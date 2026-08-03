@@ -31,6 +31,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { AlertTriangle, CloudDownload, HardDrive, GitMerge, X, Loader2 } from 'lucide-react';
 import { Modal } from './Modal';
+import { ConfirmDialog } from './ConfirmDialog';
 import { useStore } from '../store/useStore';
 import { Lang } from '../lib/i18n';
 import { useAuth } from '../lib/auth';
@@ -38,10 +39,51 @@ import {
   checkAccountBinding,
   createSnapshot,
   setBoundUserId,
+  getBoundUserId,
   isWebSnapshotLimited,
+  readRegistry,
+  restoreSnapshot,
 } from '../lib/snapshots';
 import { getEntitlement, isProOrTrial } from '../lib/entitlements';
+import { saveLocalAccountData, loadLocalAccountData } from '../lib/localAccountStore';
+import { reconcilePersonalWorkspace } from '../lib/sync/workspace';
+import { getClientId } from '../lib/clientId';
 import * as db from '../lib/db';
+import { logger } from '../lib/logger';
+
+/**
+ * F30 (ADR 0023): пустой файловый снимок — база сразу после clearUserData()
+ * первого входа под этим аккаунтом. SQLite-файл без данных весит ровно 4096
+ * байт (заголовок страницы), а `taskCount` в этом случае 0. Такой снимок не
+ * несёт данных аккаунта — восстанавливать его как fallback нельзя (иначе мы
+ * молча подменили бы «нет данных» на «пустая база восстановлена», и seed
+ * welcome-задачи никогда бы не сработал для реально нового аккаунта).
+ */
+const EMPTY_SNAPSHOT_SIZE = 4096;
+
+function isNonEmptySnapshot(meta: { size: number; taskCount?: number }): boolean {
+  if ((meta.taskCount ?? 0) > 0) return true;
+  if ((meta.taskCount ?? 0) === 0) return false; // known count, точно пусто
+  return meta.size > EMPTY_SNAPSHOT_SIZE; // taskCount отсутствует (старый снимок) — судим по размеру
+}
+
+/**
+ * F30 (ADR 0023): последний непустой файловый снимок `before_account_switch`
+ * для ВХОДЯЩЕГО аккаунта (sessionUserId). Вызывается ПОСЛЕ setBoundUserId(sessionUserId)
+ * (строка 192 ниже), поэтому readRegistry()/getBoundUserId() уже относятся к
+ * входящему аккаунту — доп. привязка по id не нужна, но boundUserId записи
+ * всё равно сверяется явно (safety-снимок уходящего аккаунта, созданный чуть
+ * выше в этом же проходе, несёт boundUserId ВЫХОДЯЩЕГО и будет отфильтрован).
+ */
+function findLatestAccountSnapshot(sessionUserId: string) {
+  const list = readRegistry();
+  const candidates = list.filter(
+    (m) => m.label === 'before_account_switch' && m.boundUserId === sessionUserId && isNonEmptySnapshot(m),
+  );
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => (b.createdAt < a.createdAt ? -1 : b.createdAt > a.createdAt ? 1 : 0));
+  return candidates[0];
+}
 
 // ─── i18n локально (компактный диф, как в PaywallModal) ───────────────────────
 type L10nKey =
@@ -131,6 +173,10 @@ export function AccountSwitchGate() {
   const [error, setError] = useState<string | null>(null);
   // Если true — облако пустое, показываем предупреждение перед стиранием.
   const [cloudEmptyWarning, setCloudEmptyWarning] = useState(false);
+  // F30 (ADR 0023): true, когда auto-restore из файлового снимка (fallback
+  // при пустом localStorage-слоте) вернул needsRestart:true (Tauri) — тот же
+  // паттерн, что и restartAfterRestore в Settings.tsx (handleRestoreSnapshot).
+  const [restartAfterAutoRestore, setRestartAfterAutoRestore] = useState(false);
   // Защита от повторного открытия для той же сессии (после выбора).
   const handledForUserRef = useRef<string | null>(null);
 
@@ -167,8 +213,106 @@ export function AccountSwitchGate() {
         const ent = await getEntitlement(sessionUserId, sessionUserEmail);
         if (cancelled) return;
         if (!isProOrTrial(ent)) {
-          // Free-аккаунт: синхронизации нет — окно не нужно. Помечаем сессию
-          // обработанной, чтобы не дёргать getEntitlement повторно.
+          // Free-аккаунт: облака/синхронизации у него нет, поэтому окно с тремя
+          // вариантами (cloud/local/merge) бессмысленно. Но оставлять локальные
+          // данные ПРОШЛОГО аккаунта видимыми под новым нельзя — это утечка между
+          // аккаунтами (баг F). Делаем локальную (без сети) перепривязку:
+          // слот уходящего → снимок → очистка → bound_user_id=new →
+          // пересоздание personal-ws → слот нового (или сев, если слота нет).
+          try {
+            // F21 (ADR 0014): сохраняем данные УХОДЯЩЕГО аккаунта в его
+            // персональный слот — до clearUserData и до смены bound_user_id.
+            // Это локальный аналог облака: при возврате на этот аккаунт данные
+            // подставятся обратно (ниже по коду), а не потеряются в ротации снимков.
+            const savedSlot = await saveLocalAccountData(check.boundUserId);
+            if (!savedSlot) {
+              // F30: раньше результат тихо отбрасывался — сбой сохранения слота
+              // проходил незамеченным, и диагностика "почему restore не сработал"
+              // не видела эту причину. Не критично (файловый снимок ниже страхует
+              // и уходящий, и входящий аккаунт), но должно быть видно в логах.
+              logger.warn(
+                `[AccountSwitchGate] saveLocalAccountData(${check.boundUserId}) вернул false — слот уходящего аккаунта не сохранён (пусто/localStorage недоступен)`,
+              );
+            }
+            await createSnapshot('before_account_switch');
+            // Fix 3: снимок — гарантированная защита несинхронизированных данных
+            // уходящего аккаунта (создан выше). Сетевой долив здесь невозможен:
+            // сессия уже принадлежит новому пользователю (bound !== session),
+            // а push под чужой сессией нарушил бы изоляцию (Fix F). Снимок покрывает.
+            await db.clearUserData();
+            setBoundUserId(sessionUserId);
+            reconcilePersonalWorkspace(sessionUserId);
+            // F21: реконсиль обязан пройти ДО восстановления — applyBackup
+            // штампует строки текущим current_workspace_id, то есть personal-ws
+            // НОВОГО аккаунта.
+            //
+            // F30 (ADR 0023): порядок восстановления — slot → файловый снимок → seed.
+            // 1) localStorage-слот (loadLocalAccountData) — как раньше, быстрый путь
+            //    без перезапуска, обратная совместимость.
+            // 2) Если слота нет/пуст — ПРЕЖДЕ чем сеять welcome, пробуем последний
+            //    непустой файловый снимок 'before_account_switch' ВХОДЯЩЕГО аккаунта
+            //    (findLatestAccountSnapshot фильтрует по boundUserId===sessionUserId
+            //    и taskCount/size, так что safety-снимок УХОДЯЩЕГО аккаунта, созданный
+            //    строкой выше, сюда не попадёт — у него boundUserId=check.boundUserId).
+            //    В Tauri restoreSnapshot требует перезапуска приложения (заменить
+            //    открытый data.db на лету нельзя) — это ADR 0023, пересмотр
+            //    альтернативы C из ADR 0014 (перезапуск теперь приемлем ради
+            //    сохранности данных). Seed НЕ вызываем — после рестарта приложение
+            //    поднимется уже с восстановленной data.db.
+            // 3) Если файлового снимка тоже нет (реально новый аккаунт) — сеем
+            //    welcome, как раньше.
+            let restored = await loadLocalAccountData(sessionUserId);
+            let restoredFromFileSnapshot = false;
+            let needsRestart = false;
+            if (!restored) {
+              const snap = findLatestAccountSnapshot(sessionUserId);
+              if (snap) {
+                try {
+                  const result = await restoreSnapshot(snap.id);
+                  restored = true;
+                  restoredFromFileSnapshot = true;
+                  needsRestart = result.needsRestart;
+                } catch (e) {
+                  logger.warn(
+                    `[AccountSwitchGate] restoreSnapshot(${snap.id}) для sessionUserId=${sessionUserId} провалился, сеем welcome:`,
+                    e,
+                  );
+                }
+              }
+            }
+            if (!restored) {
+              await db.ensureSeededIfEmpty();
+              await db.ensureWelcomeTaskIfNeeded(sessionUserId);
+            }
+            if (needsRestart) {
+              // Не сеем welcome, не трогаем стор — после рестарта приложение
+              // поднимется уже с восстановленной data.db (тот же механизм, что
+              // Settings.tsx handleRestoreSnapshot → setRestartAfterRestore).
+              if (!cancelled) setRestartAfterAutoRestore(true);
+            } else if (!cancelled) {
+              // Fix 2: сперва привязку (boundUserId + ws/members) — иначе
+              // computeRole не увидит owner-роль нового personal-ws.
+              try { useStore.getState().reloadAccountBinding?.(); } catch { /* best-effort */ }
+              try { await Promise.resolve(useStore.getState().refresh?.()); } catch { /* best-effort */ }
+              useStore.getState().pushToast(
+                restoredFromFileSnapshot
+                  ? (langRef.current === 'ru'
+                    ? 'Вы вошли под другим аккаунтом. Данные восстановлены из снимка (веб).'
+                    : 'Signed in with a different account. Data restored from a snapshot (web).')
+                  : restored
+                    ? (langRef.current === 'ru'
+                      ? 'Вы вошли под другим аккаунтом. Восстановлены локальные данные этого аккаунта.'
+                      : 'Signed in with a different account. Local data of this account has been restored.')
+                    : (langRef.current === 'ru'
+                      ? 'Вы вошли под другим аккаунтом. Локальные данные очищены, снимок сохранён.'
+                      : 'Signed in with a different account. Local data cleared, snapshot saved.'),
+              );
+            }
+          } catch (e) {
+            // Не зацикливаем: помечаем сессию обработанной даже при ошибке.
+            // eslint-disable-next-line no-console
+            console.warn('[AccountSwitchGate] free-tier local rebind failed:', e);
+          }
           handledForUserRef.current = sessionUserId;
           return;
         }
@@ -194,6 +338,39 @@ export function AccountSwitchGate() {
     const m = await import('../lib/sync');
     await m.syncNow();
   }, []);
+
+  // Fix 3: попытка долить outbox в облако ПЕРЕД разрушающим clearUserData.
+  //
+  // Возвращает true, если стирать безопасно (нечего доливать / долив прошёл /
+  // сеть недоступна, но снимок уже создан). Возвращает false ТОЛЬКО когда долив
+  // был реально нужен, начат и завершился с непереданными строками — тогда
+  // вызывающий отменяет стирание (не теряем несинхронизированное сверх снимка).
+  //
+  // Ключевой инвариант изоляции (Fix F): сетевой долив выполняется лишь когда
+  // уходящая база принадлежит ТЕКУЩЕЙ сессии (bound === session). При смене
+  // аккаунта (bound !== session) push под чужой сессией переклеил бы user_id на
+  // новый аккаунт — поэтому не пушим, полагаемся на снимок (создаётся всегда).
+  const flushOutboxBeforeClear = useCallback(async (): Promise<boolean> => {
+    try {
+      const bound = getBoundUserId();
+      if (!bound || bound !== sessionUserId) return true; // смена аккаунта → снимок
+      const pending = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sync_outbox')?.n ?? 0;
+      if (pending <= 0) return true;
+      const ent = await getEntitlement(bound, sessionUserEmail);
+      if (!isProOrTrial(ent)) return true; // free: сети нет, снимок защитит
+      const clientId = getClientId();
+      if (!clientId) return true;
+      const { pushAll } = await import('../lib/sync/push');
+      const r = await pushAll(bound, clientId);
+      // «Стираем только после успеха»: если остались непереданные строки —
+      // не стираем (снимок уже есть, пользователь может повторить).
+      return r.failed === 0;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[AccountSwitchGate] pre-clear flush failed:', e);
+      return false;
+    }
+  }, [sessionUserId, sessionUserEmail]);
 
   const handleChoice = useCallback(
     async (choice: Choice, forceCloud = false) => {
@@ -224,6 +401,18 @@ export function AccountSwitchGate() {
           // Очистить локальные + снять привязку → sync подтянет облако нового
           // аккаунта и заново привяжет базу к нему.
           setBusy('apply');
+          // Fix 3: перед стиранием доливаем outbox (безопасно только для своей
+          // сессии; при смене аккаунта — no-op, защита через снимок выше).
+          const safeToClear = await flushOutboxBeforeClear();
+          if (!safeToClear) {
+            setBusy(null);
+            setError(
+              language === 'ru'
+                ? 'Остались несинхронизированные изменения. Снимок сохранён — повторите позже.'
+                : 'Some changes are not synced yet. A snapshot is saved — please retry later.',
+            );
+            return;
+          }
           await db.clearUserData();
           setBoundUserId(null);
           await runSync();
@@ -241,6 +430,10 @@ export function AccountSwitchGate() {
         }
 
         // 3. Обновляем UI и закрываем.
+        // Fix 2: перечитываем привязку (boundUserId + ws/members), чтобы
+        // computeRole сразу увидел owner-роль текущего аккаунта и UI не показывал
+        // «Только владелец пространства может менять статусы…».
+        try { useStore.getState().reloadAccountBinding?.(); } catch { /* best-effort */ }
         try { await Promise.resolve(refresh?.()); } catch { /* refresh best-effort */ }
         finishForSession();
         pushToast(
@@ -252,7 +445,7 @@ export function AccountSwitchGate() {
         setError(`${t('err_generic')}: ${msg}`);
       }
     },
-    [sessionUserId, busy, runSync, refresh, finishForSession, pushToast, language, t, setCloudEmptyWarning],
+    [sessionUserId, busy, runSync, flushOutboxBeforeClear, refresh, finishForSession, pushToast, language, t, setCloudEmptyWarning],
   );
 
   const handleSignOut = useCallback(async () => {
@@ -269,11 +462,48 @@ export function AccountSwitchGate() {
     finishForSession();
   }, [busy, finishForSession]);
 
-  if (!open || !sessionUserId) return null;
+  // F30 (ADR 0023): тот же механизм перезапуска, что handleRestartAfterRestore в
+  // Settings.tsx: в Tauri restore уже заменил data.db на диске (старый файл
+  // держит открытым sql-плагин), нужен реальный рестарт процесса.
+  const handleRestartAfterAutoRestore = useCallback(async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('restart_app');
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[AccountSwitchGate] restart_app error:', e);
+      pushToast(
+        langRef.current === 'ru'
+          ? 'Не удалось перезапустить. Закройте и запустите приложение вручную.'
+          : 'Restart failed. Please close and start the app manually.',
+      );
+    }
+  }, [pushToast]);
+
+  // Диалог перезапуска после auto-restore из файлового снимка не зависит от
+  // `open`/главной модалки (для free-аккаунта она вообще не показывается)—
+  // рендерим его отдельно от раннего return.
+  const restartDialog = (
+    <ConfirmDialog
+      open={restartAfterAutoRestore}
+      title={langRef.current === 'ru' ? 'Восстанавливаем данные, перезапуск…' : 'Restoring your data, restart required…'}
+      message={langRef.current === 'ru'
+        ? 'Найден сохранённый снимок данных этого аккаунта. Чтобы применить его, нужно перезапустить приложение.'
+        : 'A saved snapshot of this account was found. The app needs to restart to apply it.'}
+      confirmLabel={langRef.current === 'ru' ? 'Перезапустить сейчас' : 'Restart now'}
+      cancelLabel={langRef.current === 'ru' ? 'Позже' : 'Later'}
+      onConfirm={() => { setRestartAfterAutoRestore(false); void handleRestartAfterAutoRestore(); }}
+      onCancel={() => setRestartAfterAutoRestore(false)}
+    />
+  );
+
+  if (!open || !sessionUserId) return restartDialog;
 
   const disabled = busy != null;
 
   return (
+    <>
+      {restartDialog}
     <Modal open={open} onClose={() => { /* намеренно не закрываем по клику вне — выбор обязателен */ }} width={620} label={t('title')}>
       <div className="p-6 overflow-y-auto">
         <div className="flex items-start gap-3 mb-4">
@@ -404,5 +634,6 @@ export function AccountSwitchGate() {
         </div>
       </div>
     </Modal>
+    </>
   );
 }

@@ -4,9 +4,15 @@
 # без активности. После пробуждения первые запросы медленные (10-30с),
 # а если пауза дольше 90 дней — проект удаляется.
 #
-# Решение: раз в 3 дня «тыкаем» проект лёгким SELECT-запросом через REST.
+# Решение: раз в 3 дня «тыкаем» проект лёгким запросом через REST.
 # Плюс каждый запуск TaskFlow дополнительно дёргает базу
 # (см. src/lib/supabase.ts → pingSupabaseKeepAlive).
+#
+# v1.0.3: пинг переведён с `/rest/v1/tasks?select=id&limit=1` на корень REST
+# `/rest/v1/`. Таблицы public.tasks в облаке нет (задачи живут в локальной
+# SQLite, в Supabase синхронизируются другие сущности) — PostgREST отвечал 404
+# и воркфлоу падал. Корень REST отдаёт OpenAPI-схему и возвращает 2xx при
+# корректном anon-ключе, не завязываясь ни на одну конкретную таблицу и на RLS.
 #
 # v0.9.22
 name: Supabase keep-alive
@@ -25,31 +31,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: SELECT 1 from tasks
+      - name: Ping REST root
         env:
           # URL и anon key — из GitHub Secrets (публичные по дизайну, но держим
           # вне кода, чтобы репо не раскрывало project-ref).
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          set -e
+          set -euo pipefail
           if [ -z "${SUPABASE_URL}" ] || [ -z "${SUPABASE_ANON_KEY}" ]; then
             echo "::error::SUPABASE_URL / SUPABASE_ANON_KEY не заданы в GitHub Secrets"
             exit 1
           fi
-          echo "Pinging ${SUPABASE_URL}/rest/v1/tasks..."
-          # -f: fail on HTTP >= 400; -s: silent; -S: show errors; --max-time 30
-          # RLS без auth вернёт 200 с пустым массивом — этого достаточно, чтобы Supabase считал проект «активным».
-          HTTP_CODE=$(curl -s -o /tmp/body.txt -w "%{http_code}" \
+          # Убираем возможный трейлинг-слэш в секрете, чтобы не получить '//rest/v1/'.
+          BASE_URL="${SUPABASE_URL%/}"
+          PING_URL="${BASE_URL}/rest/v1/"
+          echo "Pinging ${PING_URL} ..."
+          # -s: silent; -S: показать ошибки транспорта; --max-time 30.
+          # Флаг -f НЕ используем: код проверяем сами, чтобы залогировать его.
+          HTTP_CODE=$(curl -s -S -o /tmp/body.txt -w "%{http_code}" \
             --max-time 30 \
             -H "apikey: ${SUPABASE_ANON_KEY}" \
             -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
-            "${SUPABASE_URL}/rest/v1/tasks?select=id&limit=1")
+            "${PING_URL}") || {
+              echo "::error::curl не смог выполнить запрос к ${PING_URL} (сеть/DNS/таймаут)"
+              exit 1
+            }
           echo "HTTP ${HTTP_CODE}"
-          cat /tmp/body.txt || true
+          # Тело — OpenAPI-схема, может быть большим: печатаем только начало.
+          head -c 500 /tmp/body.txt || true
           echo ""
-          if [ "$HTTP_CODE" -ge 400 ]; then
-            echo "::error::Supabase вернул ${HTTP_CODE}"
+          # Успех = любой 2xx (200..299). Всё остальное (3xx/4xx/5xx/000) — fail.
+          if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -le 299 ]; then
+            echo "OK, база отвечает (HTTP ${HTTP_CODE})."
+          else
+            echo "::error::Supabase вернул не-2xx: HTTP ${HTTP_CODE}"
             exit 1
           fi
-          echo "OK, база отвечает."

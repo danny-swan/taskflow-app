@@ -6,6 +6,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { useDroppable } from '@dnd-kit/core';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useCanEdit } from '../store/workspaceScope';
 
 export function StatusGroup({
   status, tasks, onOpenTask, open, onToggle,
@@ -67,9 +68,11 @@ export function StatusGroup({
 }
 
 function SortableTask({ task, onOpenTask }: { task: Task; onOpenTask: (t: Task) => void }) {
+  const canEdit = useCanEdit();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `task-${task.id}`,
     data: { type: 'task', taskId: task.id, statusId: task.status_id },
+    disabled: !canEdit,
   });
   const style = {
     transform: CSS.Transform.toString(transform),

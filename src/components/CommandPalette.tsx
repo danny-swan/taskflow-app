@@ -18,6 +18,7 @@ import {
   HelpCircle, Plus, Sun, LayoutList, X,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { useCurrentWorkspaceTasks, useCurrentWorkspaceStatuses } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 
 interface Item {
@@ -31,8 +32,8 @@ interface Item {
 
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const lang = useStore(s => s.language);
-  const tasks = useStore(s => s.tasks);
-  const statuses = useStore(s => s.statuses);
+  const tasks = useCurrentWorkspaceTasks();
+  const statuses = useCurrentWorkspaceStatuses();
   const theme = useStore(s => s.theme);
   const setTheme = useStore(s => s.setTheme);
   const tasksView = useStore(s => s.tasksView);

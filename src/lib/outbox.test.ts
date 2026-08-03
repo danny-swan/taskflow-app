@@ -13,7 +13,8 @@ vi.mock('./db', () => ({
 }));
 
 import * as db from './db';
-import { enqueueOutbox, outboxPendingCount } from './outbox';
+import { enqueueOutbox, outboxPendingCount, workspaceHasPendingOutbox, workspaceOutboxFailedPermanently } from './outbox';
+import { MAX_ATTEMPTS } from './sync/push';
 
 describe('enqueueOutbox', () => {
   beforeEach(() => {
@@ -83,5 +84,70 @@ describe('outboxPendingCount', () => {
   it('возвращает 0 если запрос вернул null', () => {
     vi.mocked(db.get).mockReturnValue(null as any);
     expect(outboxPendingCount()).toBe(0);
+  });
+});
+
+describe('workspaceHasPendingOutbox', () => {
+  beforeEach(() => {
+    vi.mocked(db.get).mockReset();
+  });
+
+  it('false без workspaceId (не трогает БД)', () => {
+    expect(workspaceHasPendingOutbox(null)).toBe(false);
+    expect(workspaceHasPendingOutbox(undefined)).toBe(false);
+    expect(workspaceHasPendingOutbox('')).toBe(false);
+    expect(db.get).not.toHaveBeenCalled();
+  });
+
+  it('true когда есть pending по ws или его members', () => {
+    vi.mocked(db.get).mockReturnValue({ n: 2 } as any);
+    expect(workspaceHasPendingOutbox('ws_s')).toBe(true);
+    const [sql, params] = vi.mocked(db.get).mock.calls[0];
+    expect(sql).toContain('sync_outbox');
+    expect(sql).toContain('workspace_members');
+    // Bug A: исчерпанные строки не считаются pending — фильтр attempt_count < MAX.
+    expect(sql).toContain('attempt_count < ?');
+    expect(params).toEqual(['ws_s', MAX_ATTEMPTS, 'ws_s', MAX_ATTEMPTS]);
+  });
+
+  it('false когда pending нет', () => {
+    vi.mocked(db.get).mockReturnValue({ n: 0 } as any);
+    expect(workspaceHasPendingOutbox('ws_s')).toBe(false);
+  });
+
+  it('false и не бросает, если БД недоступна', () => {
+    vi.mocked(db.get).mockImplementation(() => { throw new Error('DB not initialized'); });
+    expect(workspaceHasPendingOutbox('ws_s')).toBe(false);
+  });
+});
+
+describe('workspaceOutboxFailedPermanently (Bug A)', () => {
+  beforeEach(() => {
+    vi.mocked(db.get).mockReset();
+  });
+
+  it('false без workspaceId (не трогает БД)', () => {
+    expect(workspaceOutboxFailedPermanently(null)).toBe(false);
+    expect(workspaceOutboxFailedPermanently(undefined)).toBe(false);
+    expect(workspaceOutboxFailedPermanently('')).toBe(false);
+    expect(db.get).not.toHaveBeenCalled();
+  });
+
+  it('true когда по ws есть исчерпанные строки (attempt_count >= MAX)', () => {
+    vi.mocked(db.get).mockReturnValue({ n: 1 } as any);
+    expect(workspaceOutboxFailedPermanently('ws_s')).toBe(true);
+    const [sql, params] = vi.mocked(db.get).mock.calls[0];
+    expect(sql).toContain('attempt_count >= ?');
+    expect(params).toEqual(['ws_s', MAX_ATTEMPTS, 'ws_s', MAX_ATTEMPTS]);
+  });
+
+  it('false когда исчерпанных строк нет', () => {
+    vi.mocked(db.get).mockReturnValue({ n: 0 } as any);
+    expect(workspaceOutboxFailedPermanently('ws_s')).toBe(false);
+  });
+
+  it('false и не бросает, если БД недоступна', () => {
+    vi.mocked(db.get).mockImplementation(() => { throw new Error('DB not initialized'); });
+    expect(workspaceOutboxFailedPermanently('ws_s')).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { CheckSquare, Loader2, PauseCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { useCurrentWorkspaceTasks, useCurrentWorkspaceStatuses } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { daysUntilDeadline, todayISO } from '../lib/utils';
 
@@ -13,8 +14,8 @@ import { daysUntilDeadline, todayISO } from '../lib/utils';
  */
 export function MetricChips() {
   const lang = useStore(s => s.language);
-  const allTasks = useStore(s => s.tasks);
-  const statuses = useStore(s => s.statuses);
+  const allTasks = useCurrentWorkspaceTasks();
+  const statuses = useCurrentWorkspaceStatuses();
   const activeFilter = useStore(s => s.taskStatusFilter);
   const setFilter = useStore(s => s.setTaskStatusFilter);
   const overdueMode = useStore(s => s.overdueMode); // v0.9.2 (№1)

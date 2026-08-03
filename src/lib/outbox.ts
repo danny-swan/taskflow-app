@@ -11,6 +11,7 @@
  * API синхронный — соответствует db.run/db.all в остальном сторе.
  */
 import * as db from './db';
+import { MAX_ATTEMPTS } from './sync/push';
 
 /** Таблицы, изменения которых синхронизируются. */
 export type SyncEntityTable =
@@ -19,7 +20,10 @@ export type SyncEntityTable =
   | 'statuses'
   | 'task_templates'
   | 'overdue_events'
-  | 'task_hold_periods';
+  | 'task_hold_periods'
+  | 'workspaces'
+  | 'workspace_members'
+  | 'workspace_settings';
 
 /** Тип операции в outbox. */
 export type SyncOutboxOp = 'upsert' | 'delete';
@@ -86,4 +90,68 @@ export function enqueueOutbox(
 export function outboxPendingCount(): number {
   const row = db.get<{ count: number }>(`SELECT COUNT(*) as count FROM sync_outbox`);
   return row?.count ?? 0;
+}
+
+/**
+ * Есть ли в outbox неотправленные изменения по конкретному пространству —
+ * либо сама строка `workspaces` (uuid == workspaceId), либо любая его
+ * `workspace_members` (owner-membership создателя).
+ *
+ * Используется гейтом инвайтов: серверная RPC `invite_to_workspace` проверяет
+ * владельца по СЕРВЕРНОЙ `sync_workspace_members`, поэтому приглашать можно
+ * только после того, как ws + owner-membership реально доставлены push'ем.
+ * Пока по ним есть pending outbox — пространство ещё не на сервере.
+ *
+ * db-ошибки (например, БД не инициализирована в отдельных render-путях)
+ * трактуем как «pending нет»: гейт не должен ронять UI/флоу.
+ */
+export function workspaceHasPendingOutbox(workspaceId: string | null | undefined): boolean {
+  if (!workspaceId) return false;
+  try {
+    // Bug A: исчерпанные/permanent-строки (attempt_count >= MAX_ATTEMPTS) НЕ
+    // считаем «pending» — иначе неотправляемая (напр. RLS 42501) строка держала
+    // бы гейт инвайтов вечно true. Такие строки трактует
+    // workspaceOutboxFailedPermanently — инвайт-флоу показывает ошибку, а не
+    // бесконечное «синхронизируется».
+    const row = db.get<{ n: number }>(
+      `SELECT (
+         (SELECT COUNT(*) FROM sync_outbox
+            WHERE entity_table = 'workspaces' AND entity_uuid = ? AND attempt_count < ?)
+         +
+         (SELECT COUNT(*) FROM sync_outbox o
+            JOIN workspace_members m ON m.uuid = o.entity_uuid
+           WHERE o.entity_table = 'workspace_members' AND m.workspace_id = ? AND o.attempt_count < ?)
+       ) AS n`,
+      [workspaceId, MAX_ATTEMPTS, workspaceId, MAX_ATTEMPTS],
+    );
+    return (row?.n ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Есть ли по пространству outbox-строки, упавшие БЕЗВОЗВРАТНО (исчерпан лимит
+ * попыток / permanent-ошибка), т.е. push этого ws точно не долетит без
+ * вмешательства. Инвайт-флоу использует это, чтобы отличить «ещё синкается» от
+ * «упало навсегда» (иначе гейт вис бы на вечном «синхронизируется»).
+ */
+export function workspaceOutboxFailedPermanently(workspaceId: string | null | undefined): boolean {
+  if (!workspaceId) return false;
+  try {
+    const row = db.get<{ n: number }>(
+      `SELECT (
+         (SELECT COUNT(*) FROM sync_outbox
+            WHERE entity_table = 'workspaces' AND entity_uuid = ? AND attempt_count >= ?)
+         +
+         (SELECT COUNT(*) FROM sync_outbox o
+            JOIN workspace_members m ON m.uuid = o.entity_uuid
+           WHERE o.entity_table = 'workspace_members' AND m.workspace_id = ? AND o.attempt_count >= ?)
+       ) AS n`,
+      [workspaceId, MAX_ATTEMPTS, workspaceId, MAX_ATTEMPTS],
+    );
+    return (row?.n ?? 0) > 0;
+  } catch {
+    return false;
+  }
 }

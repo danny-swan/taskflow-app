@@ -114,6 +114,37 @@ export async function updateProfile(
   return data as unknown as Profile;
 }
 
+// ─── Поиск пользователя по публичному TF-ID (для приглашения в ws) ──────────
+
+/** Публичный минимум чужого профиля, возвращаемый RPC find_user_by_public_id. */
+export interface PublicUserLookup {
+  id: string;              // uuid пользователя (для INSERT в workspace_members)
+  nickname: string | null;
+  avatar_variant: number;
+}
+
+/** Формат публичного идентификатора (см. миграцию 0026). */
+export const PUBLIC_ID_RE = /^TF-[A-Z0-9]{5,6}$/;
+
+/**
+ * Ищет пользователя по публичному TF-XXXXXX через RPC
+ * `public.find_user_by_public_id` (SECURITY DEFINER, миграция 0028). Возвращает
+ * только публичный минимум (id/nickname/avatar_variant) или null, если не найден.
+ * Ввод нормализуется (trim + upper) — как и на сервере.
+ */
+export async function findUserByPublicId(pid: string): Promise<PublicUserLookup | null> {
+  const normalized = pid.trim().toUpperCase();
+  const { data, error } = await supabase.rpc('find_user_by_public_id', { p_pid: normalized });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return {
+    id: row.id as string,
+    nickname: (row.nickname ?? null) as string | null,
+    avatar_variant: Number(row.avatar_variant ?? 1),
+  };
+}
+
 // ─── Хук ────────────────────────────────────────────────────────────────────
 
 export interface UseProfileResult {

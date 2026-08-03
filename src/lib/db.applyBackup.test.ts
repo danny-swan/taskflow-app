@@ -115,3 +115,209 @@ describe('applyBackup() — сохранение sync-идентичности �
     expect(outboxRows[0].attempt_count).toBe(0);
   });
 });
+
+// F32 (ADR 0025): applyBackup перепривязывал task.status_id по имени статуса
+// БЕЗ учёта workspace_id. При 2+ пространствах с одноимёнными сид-статусами
+// («Сегодня», «Взять в работу», ...) последняя по порядку вставки запись в
+// name→id мапе перетирала предыдущую — задача из ws A получала status_id
+// статуса из ws B (доска рендерит колонки по текущему ws → задача невидима,
+// хотя счётчик по workspace_id показывает верное число). Доказано на реальной
+// data.db пользователя (2026-08-03).
+describe('F32: applyBackup — workspace-aware перепривязка status_id/tag_id', () => {
+  it('1. два ws с ОДНОИМЁННЫМИ статусами разных id → восстановленная задача получает status_id СВОЕГО ws', async () => {
+    const dbMod = await import('./db');
+    const { initDb, run, all, get, buildBackup, applyBackup } = dbMod;
+    await initDb();
+
+    const wsA = 'ws_aaaaaaaaaaaaaaaa';
+    const wsB = 'ws_bbbbbbbbbbbbbbbb';
+    run(
+      `INSERT OR IGNORE INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, version) VALUES (?,?,?,?,?,?,?,1)`,
+      [wsA, 'Мои задачи', 'personal', 'user-f32', 0, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'],
+    );
+    run(
+      `INSERT OR IGNORE INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, version) VALUES (?,?,?,?,?,?,?,1)`,
+      [wsB, 'new test3', 'personal', 'user-f32', 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'],
+    );
+    // Убираем сеедовый ws_local и его артефакты, чтобы счёт был детерминирован.
+    run(`DELETE FROM tasks WHERE workspace_id='ws_local'`);
+    run(`DELETE FROM statuses WHERE workspace_id='ws_local'`);
+    run(`DELETE FROM workspaces WHERE uuid='ws_local'`);
+
+    // Одноимённые seed-статусы в ОБОИХ пространствах, с разными id (сид-набор).
+    run(`INSERT INTO statuses (name, color, behavior, sort_order, workspace_id) VALUES ('Сегодня', '#111', 'top', 0, ?)`, [wsA]);
+    run(`INSERT INTO statuses (name, color, behavior, sort_order, workspace_id) VALUES ('Взять в работу', '#111', 'middle', 1, ?)`, [wsA]);
+    run(`INSERT INTO statuses (name, color, behavior, sort_order, workspace_id) VALUES ('Сегодня', '#222', 'top', 0, ?)`, [wsB]);
+    run(`INSERT INTO statuses (name, color, behavior, sort_order, workspace_id) VALUES ('Взять в работу', '#222', 'middle', 1, ?)`, [wsB]);
+
+    const statusTodayA = get<any>(`SELECT id FROM statuses WHERE workspace_id=? AND name='Сегодня'`, [wsA]);
+    const statusTakeA = get<any>(`SELECT id FROM statuses WHERE workspace_id=? AND name='Взять в работу'`, [wsA]);
+    const statusTodayB = get<any>(`SELECT id FROM statuses WHERE workspace_id=? AND name='Сегодня'`, [wsB]);
+    expect(statusTodayA.id).not.toBe(statusTodayB.id);
+
+    // Задачи: одна в ws A на статусе «Сегодня» ws A, одна в ws B на статусе «Взять в работу» ws B.
+    run(
+      `INSERT INTO tasks (title, comment, status_id, created_at, updated_at, workspace_id) VALUES ('Добро пожаловать', '', ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z', ?)`,
+      [statusTodayA.id, wsA],
+    );
+    const statusTakeB = get<any>(`SELECT id FROM statuses WHERE workspace_id=? AND name='Взять в работу'`, [wsB]);
+    run(
+      `INSERT INTO tasks (title, comment, status_id, created_at, updated_at, workspace_id) VALUES ('Задача B', '', ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z', ?)`,
+      [statusTakeB.id, wsB],
+    );
+
+    const backup = buildBackup({ tasks: true, tags: true, statuses: true, workspaces: true });
+
+    // Симулируем restore на чистую БД (как account-switch restore).
+    run('DELETE FROM tasks');
+    run('DELETE FROM statuses');
+    run('DELETE FROM workspaces');
+    run('DELETE FROM workspace_members');
+
+    await applyBackup(backup, 'replace');
+
+    const restoredWelcome = get<any>(`SELECT * FROM tasks WHERE title='Добро пожаловать'`);
+    const restoredB = get<any>(`SELECT * FROM tasks WHERE title='Задача B'`);
+    expect(restoredWelcome).toBeTruthy();
+    expect(restoredB).toBeTruthy();
+
+    // КРИТИЧНО (F32): status_id восстановленной задачи принадлежит её ЖЕ ws, не чужому.
+    const welcomeStatus = get<any>(`SELECT * FROM statuses WHERE id=?`, [restoredWelcome.status_id]);
+    const bStatus = get<any>(`SELECT * FROM statuses WHERE id=?`, [restoredB.status_id]);
+    expect(welcomeStatus).toBeTruthy();
+    expect(bStatus).toBeTruthy();
+    expect(restoredWelcome.workspace_id).toBe(welcomeStatus.workspace_id);
+    expect(restoredB.workspace_id).toBe(bStatus.workspace_id);
+    expect(welcomeStatus.name).toBe('Сегодня');
+    expect(bStatus.name).toBe('Взять в работу');
+
+    // Убеждаемся, что оба ws действительно сохранили РАЗНЫЕ статусы «Сегодня» —
+    // регресс-проверка того, что мапа не схлопнула их в один id.
+    const allTodayStatuses = all<any>(`SELECT * FROM statuses WHERE name='Сегодня'`);
+    expect(allTodayStatuses.length).toBe(2);
+  });
+
+  it('2. легаси-бэкап БЕЗ workspace_id у статусов → перепривязка по имени работает как раньше (fallback)', async () => {
+    const dbMod = await import('./db');
+    const { initDb, run, get, buildBackup, applyBackup } = dbMod;
+    await initDb();
+
+    // Легаси-сценарий: один workspace, buildBackup БЕЗ workspaces (как делали
+    // старые snapshots/экспорт до F28) — payload.statuses не несёт workspace_id
+    // осмысленно (легаси-формат не отправляет колонку в осознанном виде, но
+    // т.к. buildBackup здесь просто SELECT *, колонка может физически быть —
+    // важно, что БЕЗ payload.workspaces isWorkspaceAware=false и resolveWsId
+    // всегда возвращает единый importWsId, так что ws-aware ключ вырождается
+    // в тот же fallback-путь).
+    run(`DELETE FROM statuses`);
+    run(`INSERT INTO statuses (name, color, behavior, sort_order) VALUES ('Сегодня', '#111', 'top', 0)`);
+    run(`INSERT INTO statuses (name, color, behavior, sort_order) VALUES ('Взять в работу', '#111', 'middle', 1)`);
+    const statusToday = get<any>(`SELECT id FROM statuses WHERE name='Сегодня'`);
+
+    run(
+      `INSERT INTO tasks (title, comment, status_id, created_at, updated_at) VALUES ('Legacy status task', '', ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
+      [statusToday.id],
+    );
+
+    // Легаси buildBackup — без workspaces (statuses/tags/tasks только).
+    const backup = buildBackup({ tasks: true, tags: true, statuses: true });
+    expect(backup.workspaces).toBeUndefined();
+
+    run('DELETE FROM tasks');
+    run('DELETE FROM statuses');
+
+    const counts = await applyBackup(backup, 'replace');
+    // Счёт задач в backup может включать сеедовую welcome-задачу из initDb()
+    // (по образцу db.applyBackup.test.ts выше) — важно наличие НАШЕЙ строки,
+    // а не точное число.
+    expect(counts.tasks).toBeGreaterThanOrEqual(1);
+
+    const restored = get<any>(`SELECT * FROM tasks WHERE title='Legacy status task'`);
+    expect(restored).toBeTruthy();
+    const restoredStatus = get<any>(`SELECT * FROM statuses WHERE id=?`, [restored.status_id]);
+    expect(restoredStatus).toBeTruthy();
+    expect(restoredStatus.name).toBe('Сегодня'); // Фолбэк по имени сработал как раньше.
+  });
+});
+
+describe('F33 (ADR 0026): applyBackup replace идемпотентен к уже существующему workspace/member', () => {
+  it('1. replace: payload несёт ws X дважды (эквивалент гонки с reconcile) + новый ws Y → НЕ бросает, оба ws существуют, задачи привязаны', async () => {
+    const dbMod = await import('./db');
+    const { initDb, run, get, all, applyBackup } = dbMod;
+    await initDb();
+
+    // Готовим payload workspace-aware с ДВУМЯ строками одного и того же uuid X
+    // (детерминированный эквивалент гонки: reconcilePersonalWorkspace уже вставил X
+    // к моменту INSERT в applyBackup) + отдельным ws Y. До F33 второй INSERT X
+    // падал бы на UNIQUE constraint failed: workspaces.uuid и рушил весь applyBackup.
+    const wsX = 'ws_f33xxxxxxxxxxxxxxxxxxxxxxxxxxxxx1';
+    const wsY = 'ws_f33yyyyyyyyyyyyyyyyyyyyyyyyyyyyy2';
+    const payload: any = {
+      workspaces: [
+        { uuid: wsX, name: 'Мои задачи', kind: 'personal', owner_id: null, sort_order: 0, created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z', deleted_at: null, version: 1, client_id: null },
+        { uuid: wsX, name: 'Мои задачи', kind: 'personal', owner_id: null, sort_order: 0, created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z', deleted_at: null, version: 1, client_id: null },
+        { uuid: wsY, name: 'new2', kind: 'personal', owner_id: null, sort_order: 1, created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z', deleted_at: null, version: 1, client_id: null },
+      ],
+      statuses: [
+        { id: 501, name: 'Сегодня', color: '#111', behavior: 'top', sort_order: 0, is_seed: 0, is_technical: 0, hidden: 0, default_collapsed: 0, workspace_id: wsX },
+        { id: 502, name: 'Сегодня', color: '#111', behavior: 'top', sort_order: 0, is_seed: 0, is_technical: 0, hidden: 0, default_collapsed: 0, workspace_id: wsY },
+      ],
+      tags: [],
+      tasks: [
+        { id: 901, title: 'Task in X', comment: '', tag_id: null, status_id: 501, start_date: null, deadline: null, finish_date: null, created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z', sort_order: 0, archived: 0, workspace_id: wsX },
+        { id: 902, title: 'Task in Y', comment: '', tag_id: null, status_id: 502, start_date: null, deadline: null, finish_date: null, created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z', sort_order: 0, archived: 0, workspace_id: wsY },
+      ],
+    };
+
+    // НЕ должно бросать (до F33 — бросало UNIQUE workspaces.uuid).
+    await expect(applyBackup(payload, 'replace')).resolves.toBeTruthy();
+
+    // Оба ws существуют и живы.
+    const rowX = get<any>(`SELECT * FROM workspaces WHERE uuid=? AND deleted_at IS NULL`, [wsX]);
+    const rowY = get<any>(`SELECT * FROM workspaces WHERE uuid=? AND deleted_at IS NULL`, [wsY]);
+    expect(rowX).toBeTruthy();
+    expect(rowY).toBeTruthy();
+    // Дубля X нет — ровно одна живая строка на uuid.
+    const dupX = all<any>(`SELECT id FROM workspaces WHERE uuid=?`, [wsX]);
+    expect(dupX.length).toBe(1);
+
+    // Задачи привязаны к своим ws.
+    const tX = get<any>(`SELECT * FROM tasks WHERE title='Task in X'`);
+    const tY = get<any>(`SELECT * FROM tasks WHERE title='Task in Y'`);
+    expect(tX).toBeTruthy();
+    expect(tY).toBeTruthy();
+    expect(tX.workspace_id).toBe(wsX);
+    expect(tY.workspace_id).toBe(wsY);
+  });
+
+  it('2. replace: payload несёт две строки-члена на один (workspace_id,user_id) под разными uuid → НЕ бросает, ровно одна строка', async () => {
+    const dbMod = await import('./db');
+    const { initDb, get, all, applyBackup } = dbMod;
+    await initDb();
+
+    const wsX = 'ws_f33memberxxxxxxxxxxxxxxxxxxxxxx3';
+    const userU = 'user-f33-uuuuuuuu';
+    // Две строки-члена на один и тот же (workspace_id, user_id), разные uuid A/B.
+    // До F33 второй INSERT падал бы на UNIQUE (workspace_id, user_id) и рушил applyBackup.
+    const payload: any = {
+      workspaces: [
+        { uuid: wsX, name: 'Мои задачи', kind: 'personal', owner_id: userU, sort_order: 0, created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z', deleted_at: null, version: 1, client_id: null },
+      ],
+      workspace_members: [
+        { uuid: 'wsm_f33_A', workspace_id: wsX, user_id: userU, role: 'owner', invited_by: null, joined_at: '2026-08-01T00:00:00Z', created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z', deleted_at: null, version: 1, client_id: null },
+        { uuid: 'wsm_f33_B', workspace_id: wsX, user_id: userU, role: 'owner', invited_by: null, joined_at: '2026-08-01T00:00:00Z', created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z', deleted_at: null, version: 1, client_id: null },
+      ],
+      statuses: [],
+      tags: [],
+      tasks: [],
+    };
+
+    await expect(applyBackup(payload, 'replace')).resolves.toBeTruthy();
+
+    // Ровно ОДНА строка члена на (wsX, userU).
+    const members = all<any>(`SELECT * FROM workspace_members WHERE workspace_id=? AND user_id=?`, [wsX, userU]);
+    expect(members.length).toBe(1);
+    // OR IGNORE сохранил ПЕРВУЮ (uuid A), не подменил её на B.
+    expect(members[0].uuid).toBe('wsm_f33_A');
+  });
+});

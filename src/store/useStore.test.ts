@@ -27,6 +27,7 @@ vi.mock('../lib/logger', () => ({
 }));
 
 import { useStore, type Status, type Task } from './useStore';
+import { filterByWorkspace } from './workspaceScope';
 
 const activeStatus = (id: number, name: string, extra: Partial<Status> = {}): Status =>
   ({
@@ -133,6 +134,101 @@ describe('useStore — derived helpers', () => {
       statuses: [activeStatus(7, 'Удалено', { is_technical: 0 })],
     });
     expect(useStore.getState().getDeletedStatusId()).toBeUndefined();
+  });
+});
+
+describe('useStore — reloadAccountBinding (Fix 2)', () => {
+  it('перечитывает bound_user_id из settings в стор + подтягивает ws/members', async () => {
+    const db = await import('../lib/db');
+    (db.get as any).mockImplementation((_sql: string, params: any[] = []) =>
+      params[0] === 'bound_user_id' ? { value: 'user-owner' } : null,
+    );
+    (db.all as any).mockReturnValue([]);
+
+    useStore.setState({ boundUserId: null, workspaces: [], workspaceMembers: [] });
+    useStore.getState().reloadAccountBinding();
+
+    // boundUserId подхвачен из settings — computeRole теперь найдёт свою строку
+    // членства и отдаст owner-роль вместо «только владелец может менять статусы».
+    expect(useStore.getState().boundUserId).toBe('user-owner');
+    // ws/members перечитаны из БД (мок пустой — но вызовы прошли без throw).
+    expect(db.all).toHaveBeenCalled();
+  });
+
+  it('пустой bound_user_id → null (нормализация trim)', async () => {
+    const db = await import('../lib/db');
+    (db.get as any).mockImplementation((_sql: string, params: any[] = []) =>
+      params[0] === 'bound_user_id' ? { value: '   ' } : null,
+    );
+    (db.all as any).mockReturnValue([]);
+
+    useStore.setState({ boundUserId: 'stale' });
+    useStore.getState().reloadAccountBinding();
+    expect(useStore.getState().boundUserId).toBeNull();
+  });
+});
+
+describe('useStore — reloadAccountBinding гидрирует currentWorkspaceId (F31)', () => {
+  const wsTask = (id: number, wsId: string | null): Task =>
+    ({
+      id, title: `t${id}`, comment: '', tag_id: null, status_id: 1,
+      start_date: null, deadline: null, finish_date: null,
+      created_at: '2026-08-03', updated_at: '2026-08-03', sort_order: id,
+      archived: 0, workspace_id: wsId,
+    }) as Task;
+
+  it('воспроизведение бага: заливший от прошлого аккаунта currentWorkspaceId гидрируется из settings, и ws-scoped выборка задач снова видит данные', async () => {
+    const db = await import('../lib/db');
+    // Сидируем: 2 workspaces входящего аккаунта (personal ws_A с 2 задачами, ws_B без задач),
+    // settings.current_workspace_id = ws_A, bound_user_id = user-new.
+    (db.get as any).mockImplementation((_sql: string, params: any[] = []) => {
+      if (params[0] === 'bound_user_id') return { value: 'user-new' };
+      if (params[0] === 'current_workspace_id') return { value: 'ws_A' };
+      if (params[0] === 'personal_workspace_id') return null;
+      return null;
+    });
+    (db.all as any).mockImplementation((sql: string) => {
+      if (sql.includes('FROM workspace_members')) return [];
+      return [];
+    });
+
+    const allTasks = [wsTask(1, 'ws_A'), wsTask(2, 'ws_A')];
+
+    // Эмулируем залипание: in-memory currentWorkspaceId остался от предыдущего
+    // аккаунта и указывает на несуществующий в новом наборе id.
+    useStore.setState({
+      boundUserId: null,
+      workspaces: [],
+      workspaceMembers: [],
+      currentWorkspaceId: 'ws_STALE_from_prev_account',
+      tasks: allTasks,
+    });
+
+    // loadWorkspaces() вызывает readWorkspacesFromDb(), который идёт в db.all.
+    // readWorkspacesFromDb не экспортируется отдельно, поэтому мокаем db.all так,
+    // чтобы SELECT из workspaces вернул входящий набор (ws_A, ws_B).
+    (db.all as any).mockImplementation((sql: string) => {
+      if (sql.includes('FROM workspaces')) {
+        return [
+          { uuid: 'ws_A', name: 'Мои задачи', kind: 'personal', owner_id: 'user-new', sort_order: 0 },
+          { uuid: 'ws_B', name: 'Второе', kind: 'personal', owner_id: 'user-new', sort_order: 1 },
+        ];
+      }
+      if (sql.includes('FROM workspace_members')) return [];
+      return [];
+    });
+
+    useStore.getState().reloadAccountBinding();
+
+    // currentWorkspaceId гидрировался из settings (ws_A) — НЕ ws_STALE и НЕ
+    // pickDefaultWorkspaceId, потому что settings.current_workspace_id валиден.
+    expect(useStore.getState().currentWorkspaceId).toBe('ws_A');
+
+    // ws-scoped выборка задач для текущего currentWorkspaceId теперь видит обе
+    // задачи аккаунта — репродукция бага (список был бы пуст до фикса, т.к. фильтр
+    // бы искал по ws_STALE_from_prev_account).
+    const visible = filterByWorkspace(useStore.getState().tasks, useStore.getState().currentWorkspaceId);
+    expect(visible.map(t => t.id)).toEqual([1, 2]);
   });
 });
 

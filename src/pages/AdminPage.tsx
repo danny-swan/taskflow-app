@@ -31,8 +31,10 @@ import { logger } from '../lib/logger';
 
 interface UserRow {
   id: string;
+  public_user_id: string | null;
   email: string;
-  created_at: string;
+  registered_at: string | null;
+  last_sign_in_at: string | null;
   entitlement: EntRow | null;
 }
 
@@ -46,6 +48,56 @@ interface EntRow {
   updated_at: string;
   renewal_attempts_count: number | null;
   last_payment_at: string | null;
+}
+
+// Плоская строка, возвращаемая RPC public.get_admin_users_summary() (миграция 0039).
+// entitlement-поля nullable: у free-юзеров без строки в user_entitlements они NULL.
+interface AdminUserSummaryRow {
+  id: string;
+  public_user_id: string | null;
+  email: string;
+  registered_at: string | null;
+  last_sign_in_at: string | null;
+  plan: string | null;
+  valid_until: string | null;
+  auto_renew: boolean | null;
+  cancel_at_period_end: boolean | null;
+  source: string | null;
+  notes: string | null;
+  ent_updated_at: string | null;
+  renewal_attempts_count: number | null;
+  last_payment_at: string | null;
+  sessions_count: number | null;
+  tasks_created_count: number | null;
+  latest_app_version: string | null;
+  latest_os: string | null;
+}
+
+// Чистый маппинг RPC-строки → UserRow. entitlement=null, когда у юзера нет
+// строки в user_entitlements (free-план) — тогда plan приходит NULL.
+export function mapAdminUserRow(row: AdminUserSummaryRow): UserRow {
+  const entitlement: EntRow | null =
+    row.plan == null
+      ? null
+      : {
+          plan: row.plan,
+          valid_until: row.valid_until,
+          auto_renew: row.auto_renew,
+          cancel_at_period_end: row.cancel_at_period_end,
+          source: row.source,
+          notes: row.notes,
+          updated_at: row.ent_updated_at ?? row.registered_at ?? '',
+          renewal_attempts_count: row.renewal_attempts_count,
+          last_payment_at: row.last_payment_at,
+        };
+  return {
+    id: row.id,
+    public_user_id: row.public_user_id,
+    email: row.email,
+    registered_at: row.registered_at,
+    last_sign_in_at: row.last_sign_in_at,
+    entitlement,
+  };
 }
 
 interface RenewalAttempt {
@@ -161,48 +213,16 @@ export function AdminPage() {
   const loadUsers = useCallback(async () => {
     setLoading(true);
     try {
-      // Загружаем entitlements через Supabase (service_role у нас нет на клиенте —
-      // используем RLS: admin видит все строки, т.к. Row Security для admin снята)
-      const { data: ents, error: entErr } = await supabase
-        .from('user_entitlements')
-        .select(`
-          user_id, plan, valid_until, auto_renew, cancel_at_period_end,
-          source, notes, updated_at, renewal_attempts_count, last_payment_at
-        `)
-        .order('updated_at', { ascending: false })
-        .limit(200);
+      // Один вызов admin-only SECURITY DEFINER RPC (миграция 0039): полный список
+      // пользователей из profiles (+ email/public_user_id/телеметрия/entitlement).
+      // Заменяет прежнюю связку user_entitlements + get_users_emails, из-за которой
+      // free-юзеры без строки entitlement были невидимы в админке (баг P4/F12).
+      const { data, error } = await supabase.rpc('get_admin_users_summary');
+      if (error) throw error;
 
-      if (entErr) throw entErr;
-
-      // Получаем email-ы через RPC (или из auth.users если доступно)
-      // Используем auth.admin через anon key нельзя — берём из profiles/auth join
-      // Fallback: показываем user_id, если email недоступен
-      const userIds = (ents ?? []).map(e => e.user_id);
-
-      // Пробуем получить email через supabase auth (только если доступно)
-      const emailMap: Record<string, string> = {};
-      if (userIds.length > 0) {
-        // Используем кастомный RPC если есть, иначе показываем truncated user_id
-        // В штатной Supabase schema public.users или profiles нет по умолчанию.
-        // Если у нас нет profiles — покажем user_id; admin сам знает свою аудиторию.
-        try {
-          const { data: profileData } = await supabase.rpc('get_users_emails', { user_ids: userIds });
-          if (Array.isArray(profileData)) {
-            for (const row of profileData as { id: string; email: string }[]) {
-              emailMap[row.id] = row.email;
-            }
-          }
-        } catch {
-          // RPC не существует — нормально, покажем truncated id
-        }
-      }
-
-      const rows: UserRow[] = (ents ?? []).map(e => ({
-        id: e.user_id,
-        email: emailMap[e.user_id] ?? e.user_id,
-        created_at: e.updated_at, // created_at у нас нет в этом запросе
-        entitlement: e as EntRow,
-      }));
+      const rows: UserRow[] = Array.isArray(data)
+        ? (data as AdminUserSummaryRow[]).map(mapAdminUserRow)
+        : [];
 
       setUsers(rows);
     } catch (e: unknown) {
@@ -302,10 +322,14 @@ export function AdminPage() {
   // ─── Фильтрация ───────────────────────────────────────────────────────────
 
   const filtered = search.trim()
-    ? users.filter(u =>
-        u.email.toLowerCase().includes(search.toLowerCase()) ||
-        u.id.toLowerCase().includes(search.toLowerCase())
-      )
+    ? users.filter(u => {
+        const q = search.toLowerCase();
+        return (
+          u.email.toLowerCase().includes(q) ||
+          u.id.toLowerCase().includes(q) ||
+          (u.public_user_id?.toLowerCase().includes(q) ?? false)
+        );
+      })
     : users;
 
   // ─── Guard render ─────────────────────────────────────────────────────────
@@ -367,7 +391,7 @@ export function AdminPage() {
           type="text"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder={t('Поиск по email или user_id…', 'Search by email or user_id…')}
+          placeholder={t('Поиск по email, TF-ID или user_id…', 'Search by email, TF-ID or user_id…')}
           className="w-full pl-8 pr-3 py-2 text-[13px] bg-surface-alt border border-border-soft rounded-md focus:outline-none focus:border-accent/60"
         />
       </div>
@@ -401,12 +425,19 @@ export function AdminPage() {
                     : <ChevronRight size={14} className="text-muted shrink-0" />
                   }
 
-                  {/* Email / ID */}
+                  {/* Email / TF-ID / user_id */}
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-medium truncate">{u.email}</div>
-                    {u.email !== u.id && (
-                      <div className="text-[11px] text-muted font-mono truncate">{u.id}</div>
-                    )}
+                    <div className="flex items-center gap-2 min-w-0">
+                      {u.public_user_id && (
+                        <span className="text-[11px] text-accent font-mono shrink-0">
+                          {u.public_user_id}
+                        </span>
+                      )}
+                      {u.email !== u.id && (
+                        <span className="text-[11px] text-muted font-mono truncate">{u.id}</span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Бейдж плана */}

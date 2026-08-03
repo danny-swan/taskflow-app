@@ -332,6 +332,45 @@ describe('pull worker: applier tasks', () => {
     expect(row[0]).toBe('ok task');
   });
 
+  // F19 (ADR 0013): dedupeSeedStatuses гасит «проигравшее» поколение сида
+  // локальным soft-delete'ом, но в облаке оно остаётся, и облачные задачи всё
+  // ещё ссылаются на его uuid. Без tombstone-фолбэка такие задачи навсегда
+  // висли бы в deferred (status_id не резолвится ни во что).
+  it('задача облака, ссылающаяся на погашенный сид-статус, едет на выжившего близнеца', async () => {
+    const { _internals } = await import('./pull');
+    liveDb!.run(
+      `INSERT INTO statuses (name, color, sort_order, behavior, is_seed, uuid, version, client_id, updated_at, deleted_at, workspace_id)
+       VALUES ('Важно', '#111', 0, 'top', 1, 'st-loser', 1, 'test', '2026-07-05T10:00:00Z', '2026-07-05T11:00:00Z', 'ws_1')`,
+    );
+    liveDb!.run(
+      `INSERT INTO statuses (name, color, sort_order, behavior, is_seed, uuid, version, client_id, updated_at, workspace_id)
+       VALUES ('Важно', '#111', 0, 'top', 1, 'st-keeper', 1, 'test', '2026-07-05T10:00:00Z', 'ws_1')`,
+    );
+    const keeperId = liveDb!.exec(`SELECT id FROM statuses WHERE uuid='st-keeper'`)[0].values[0][0];
+
+    const changed = _internals.applyCloudRowTasks({
+      id: 'tk-loser-gen',
+      title: 'task of losing seed generation',
+      comment: '',
+      status_id: 'st-loser',
+      tag_id: null,
+      start_date: null,
+      deadline: null,
+      finish_date: null,
+      sort_order: 0,
+      archived: false,
+      updated_at: '2026-07-05T12:00:00Z',
+      created_at: '2026-07-05T12:00:00Z',
+      deleted_at: null,
+      version: 1,
+      client_id: 'other',
+      workspace_id: 'ws_1',
+    });
+    expect(changed).toBe(true);
+    const statusId = liveDb!.exec(`SELECT status_id FROM tasks WHERE uuid='tk-loser-gen'`)[0].values[0][0];
+    expect(statusId).toBe(keeperId);
+  });
+
   it('last_pulled_at сохраняется через settings', async () => {
     const { _internals } = await import('./pull');
     expect(_internals.getLastPulledAt('sync_tasks')).toBe('1970-01-01T00:00:00Z');
@@ -341,5 +380,109 @@ describe('pull worker: applier tasks', () => {
       `SELECT value FROM settings WHERE key='sync_last_pulled_sync_tasks'`,
     )[0].values[0];
     expect(row[0]).toBe('2026-07-05T15:00:00Z');
+  });
+});
+
+/**
+ * Bug #1 (фикс #1): prunePhantomWorkspaces удаляет из локального зеркала ws, где
+ * у текущего пользователя нет живого членства (остатки прошлых аккаунтов), но
+ * сохраняет personal-ws и shared-ws, где он состоит.
+ */
+describe('pull worker: prunePhantomWorkspaces (Bug #1)', () => {
+  const UID = 'user-me';
+  const PERSONAL = 'ws_' + UID.replace(/-/g, '');
+
+  const insertWs = (uuid: string, kind: string) =>
+    liveDb!.run(
+      `INSERT INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, version, client_id)
+       VALUES (?,?,?,?,0,'2026-07-01','2026-07-01',1,'test')`,
+      [uuid, uuid, kind, UID],
+    );
+  const insertMember = (wsId: string, userId: string, role: string, deleted_at: string | null) =>
+    liveDb!.run(
+      `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, created_at, updated_at, deleted_at, version, client_id)
+       VALUES (?,?,?,?, '2026-07-01','2026-07-01', ?, 1,'test')`,
+      [`wsm_${wsId}_${userId}`, wsId, userId, role, deleted_at],
+    );
+  const wsUuids = (): string[] =>
+    (liveDb!.exec(`SELECT uuid FROM workspaces ORDER BY uuid`)[0]?.values ?? []).map(r => r[0] as string);
+
+  it('удаляет чужое personal-ws, сохраняет моё personal и shared с моим членством', async () => {
+    const { _internals } = await import('./pull');
+    // Моё personal (членство owner) + shared (я editor) + чужое personal (я не член).
+    insertWs(PERSONAL, 'personal');
+    insertMember(PERSONAL, UID, 'owner', null);
+    insertWs('ws_shared', 'shared');
+    insertMember('ws_shared', UID, 'editor', null);
+    insertWs('ws_foreign', 'personal');
+    insertMember('ws_foreign', 'someone-else', 'owner', null);
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(1);
+    // ws_local сеется миграцией и защищён allow-list'ом (local-only база).
+    expect(wsUuids()).toEqual(['ws_local', 'ws_shared', PERSONAL]);
+    // Членство фантома тоже вычищено.
+    const memCnt = liveDb!.exec(
+      `SELECT COUNT(*) FROM workspace_members WHERE workspace_id='ws_foreign'`,
+    )[0].values[0][0];
+    expect(memCnt).toBe(0);
+  });
+
+  it('членство с deleted_at не даёт права — ws удаляется', async () => {
+    const { _internals } = await import('./pull');
+    insertWs(PERSONAL, 'personal');
+    insertMember(PERSONAL, UID, 'owner', null);
+    insertWs('ws_left', 'shared');
+    insertMember('ws_left', UID, 'editor', '2026-07-10'); // вышел из ws
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(1);
+    expect(wsUuids()).toEqual(['ws_local', PERSONAL]);
+  });
+
+  it('не трогает personal-ws пользователя, даже если членство ещё не подтянулось', async () => {
+    const { _internals } = await import('./pull');
+    // Только строка ws, членства нет (холодный старт) — personal защищён allow-list'ом.
+    insertWs(PERSONAL, 'personal');
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(0);
+    expect(wsUuids()).toEqual(['ws_local', PERSONAL]);
+  });
+
+  it('Bug D/E: не удаляет свежесозданный shared-ws с pending outbox (ещё до первого pull)', async () => {
+    const { _internals } = await import('./pull');
+    insertWs(PERSONAL, 'personal');
+    insertMember(PERSONAL, UID, 'owner', null);
+    // Только что создан локально: строка ws есть, членства ещё нет, но ws висит
+    // в sync_outbox (push не долетел). Прунить нельзя — иначе «исчезнет».
+    insertWs('ws_new', 'shared');
+    liveDb!.run(
+      `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('workspaces', 'ws_new', 'upsert', datetime('now'), 0)`,
+    );
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(0);
+    expect(wsUuids()).toEqual(['ws_local', 'ws_new', PERSONAL]);
+  });
+
+  it('Bug D/E: защищает ws через pending member-строку в outbox (по join)', async () => {
+    const { _internals } = await import('./pull');
+    insertWs(PERSONAL, 'personal');
+    insertMember(PERSONAL, UID, 'owner', null);
+    // ws_m: активного членства нет в allow-list (строка soft-deleted → query её не
+    // выберет), но member-uuid висит в outbox — join должен вернуть ws в allowed.
+    insertWs('ws_m', 'shared');
+    insertMember('ws_m', UID, 'owner', '2026-07-10'); // deleted_at → не в allow-list
+    liveDb!.run(
+      `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count)
+       VALUES ('workspace_members', ?, 'upsert', datetime('now'), 0)`,
+      [`wsm_ws_m_${UID}`],
+    );
+
+    const removed = _internals.prunePhantomWorkspaces(UID);
+    expect(removed).toBe(0);
+    expect(wsUuids()).toContain('ws_m');
   });
 });

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Status, Task, useStore } from '../store/useStore';
+import { useCurrentWorkspaceStatuses } from '../store/workspaceScope';
 import { KanbanColumn } from './KanbanColumn';
 import { KanbanCard } from './KanbanCard';
 import {
@@ -31,7 +32,7 @@ export function KanbanBoard({
   onOpenTask: (t: Task) => void;
 }) {
   const lang = useStore(s => s.language);
-  const allStatuses = useStore(s => s.statuses);
+  const allStatuses = useCurrentWorkspaceStatuses();
   const updateTask = useStore(s => s.updateTask);
   const reorderTasks = useStore(s => s.reorderTasks);
   const pushToast = useStore(s => s.pushToast);

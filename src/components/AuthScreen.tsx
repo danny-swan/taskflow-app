@@ -70,6 +70,49 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
 
   const t = (ru: string, en: string) => (isRu ? ru : en);
 
+  // v0.9.26: нормализация ошибок авторизации.
+  // Проблема: Supabase может вернуть 500 без внятного .message (например, когда
+  // на сервере падает отправка письма подтверждения через SMTP/Resend — signup
+  // возвращает unexpected_failure). В таком случае err.message пустой или является
+  // объектом → в UI попадал «{}». Здесь приводим любую ошибку к понятному тексту.
+  const normalizeAuthError = (err: any): string => {
+    // 1) Достаём «сырое» сообщение из разных форм ошибки Supabase/fetch.
+    const raw =
+      (typeof err?.message === 'string' && err.message) ||
+      (typeof err?.error_description === 'string' && err.error_description) ||
+      (typeof err?.error === 'string' && err.error) ||
+      (typeof err?.msg === 'string' && err.msg) ||
+      '';
+    const msg = raw.trim();
+    const status = err?.status ?? err?.statusCode ?? err?.code;
+    const lower = msg.toLowerCase();
+
+    // 2) Частые распознаваемые случаи.
+    if (lower.includes('invalid login credentials'))
+      return t('Неверный email или пароль.', 'Invalid email or password.');
+    if (lower.includes('email not confirmed'))
+      return t('Email не подтверждён. Проверьте почту и перейдите по ссылке.', 'Email not confirmed. Check your inbox and follow the link.');
+    if (lower.includes('user already registered') || lower.includes('already registered'))
+      return t('Этот email уже зарегистрирован. Попробуйте войти.', 'This email is already registered. Try signing in.');
+    if (lower.includes('rate limit') || status === 429)
+      return t('Слишком много попыток. Подождите немного и повторите.', 'Too many attempts. Please wait a moment and try again.');
+    // Серверный сбой (в т.ч. падение отправки письма подтверждения на бэкенде).
+    if (lower.includes('sending') || lower.includes('email') && lower.includes('error') || lower.includes('unexpected_failure') || status === 500)
+      return t(
+        'Сервер не смог завершить операцию (возможно, не удалось отправить письмо подтверждения). Попробуйте позже или обратитесь к администратору.',
+        'The server could not complete the operation (the confirmation email may have failed to send). Please try again later or contact the administrator.',
+      );
+    // Сетевые ошибки fetch.
+    if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('network request failed'))
+      return t('Нет соединения с сервером. Проверьте интернет и повторите.', 'No connection to the server. Check your internet and try again.');
+
+    // 3) Если есть непустой текст — показываем его как есть.
+    if (msg) return msg;
+
+    // 4) Фолбэк — общий текст (вместо «{}»).
+    return t('Не удалось выполнить запрос. Попробуйте ещё раз позже.', 'The request could not be completed. Please try again later.');
+  };
+
   // v0.9.24: правила пароля из Supabase Auth Policies —
   // Minimum length 8, Password requirements: Lowercase, uppercase letters and digits.
   // v0.9.25: DRY — реализация вынесена в src/lib/password.ts и переиспользуется
@@ -151,7 +194,7 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
       }
       // После успеха useAuth автоматически обновит состояние (если сессия есть)
     } catch (err: any) {
-      setError(err?.message ?? t('Ошибка авторизации', 'Authentication error'));
+      setError(normalizeAuthError(err));
       // v0.9.23: токен Turnstile одноразовый — после любой попытки сбрасываем
       // виджет, чтобы пользователь получил свежий challenge для следующей попытки.
       if (captchaEnabled && !captchaFailed) {
@@ -174,7 +217,7 @@ export function AuthScreen({ reason = 'first-run' }: Props) {
     try {
       await signInWithGoogle();
     } catch (err: any) {
-      setError(err?.message ?? t('Ошибка Google-логина', 'Google login error'));
+      setError(normalizeAuthError(err));
       setLoading(false);
     }
   };

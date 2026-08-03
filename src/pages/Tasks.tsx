@@ -1,5 +1,9 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useStore, Task } from '../store/useStore';
+import {
+  useCurrentWorkspaceTasks, useCurrentWorkspaceStatuses,
+  useCurrentWorkspaceTags, useCurrentWorkspaceTemplates, useCanEdit,
+} from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { daysUntilDeadline, todayISO } from '../lib/utils';
 import { StatusGroup } from '../components/StatusGroup';
@@ -10,7 +14,7 @@ import {
   List, LayoutGrid,
 } from 'lucide-react';
 import { KanbanBoard } from '../components/KanbanBoard';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   DndContext, closestCorners, PointerSensor, useSensor, useSensors,
   DragEndEvent, DragOverlay, DragStartEvent,
@@ -27,17 +31,18 @@ function writeCollapseState(s: Record<number, boolean>) {
 
 export function TasksPage() {
   const lang = useStore(s => s.language);
-  const allTasks = useStore(s => s.tasks);
-  const allStatuses = useStore(s => s.statuses);
-  const tags = useStore(s => s.tags);
+  const allTasks = useCurrentWorkspaceTasks();
+  const allStatuses = useCurrentWorkspaceStatuses();
+  const tags = useCurrentWorkspaceTags();
   const updateTask = useStore(s => s.updateTask);
   const reorderTasks = useStore(s => s.reorderTasks);
   const pushToast = useStore(s => s.pushToast);
-  const taskTemplates = useStore(s => s.taskTemplates);
+  const taskTemplates = useCurrentWorkspaceTemplates();
   const createTaskFromTemplate = useStore(s => s.createTaskFromTemplate);
   const tasksView = useStore(s => s.tasksView);
   const setTasksView = useStore(s => s.setTasksView);
   const overdueMode = useStore(s => s.overdueMode); // v0.9.2 (№1)
+  const canEdit = useCanEdit(); // Wave A PR-4: viewer — read-only
 
   const techIds = useMemo(() => new Set(allStatuses.filter(s => s.is_technical === 1).map(s => s.id)), [allStatuses]);
 
@@ -64,6 +69,22 @@ export function TasksPage() {
   const templatesMenuRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Deep-link ?task=<id> (например, из вкладки «История» ws-настроек) —
+  // открываем модалку задачи и вычищаем параметр из URL.
+  useEffect(() => {
+    const raw = searchParams.get('task');
+    if (!raw) return;
+    const id = Number(raw);
+    const target = allTasks.find(t => t.id === id);
+    if (target) setOpenTask(target);
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.delete('task');
+      return next;
+    }, { replace: true });
+  }, [searchParams, allTasks, setSearchParams]);
 
   // Task 8: initialize collapse state from defaultCollapsed (first render only)
   const defaultCollapseInit = useMemo(() => {
@@ -360,7 +381,17 @@ export function TasksPage() {
             </div>
             {/* v0.8.13: split-кнопка «+ Новая задача» │ ▾. Основная часть
                 открывает пустую модалку (поведение как раньше), стрелка — меню со списком
-                шаблонов. Если шаблонов нет — меню прячется, остаётся обычная кнопка. */}
+                шаблонов. Если шаблонов нет — меню прячется, остаётся обычная кнопка.
+                Wave C PR-c-05: для viewer (read-only) показываем кнопку
+                задизейбленной с tooltip «Только просмотр», а не прячем. */}
+            {!canEdit ? (
+              <button
+                type="button"
+                disabled
+                title={tr(lang, 'ws_viewer_readonly_tooltip')}
+                className="px-3 py-1.5 text-[13px] bg-accent text-white font-medium rounded-md opacity-50 cursor-not-allowed"
+              >{tr(lang, 'new_task')}</button>
+            ) : (
             <div
               ref={templatesMenuRef}
               className="relative inline-flex items-stretch"
@@ -425,6 +456,7 @@ export function TasksPage() {
                 </>
               )}
             </div>
+            )}
           </div>
         </div>
       </div>

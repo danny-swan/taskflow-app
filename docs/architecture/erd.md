@@ -210,7 +210,7 @@ PK = `user_id` (1:1 с пользователем, не история).
 
 | View | Колонки | Статус (Wave 2) |
 |---|---|---|
-| `admin_users_summary` | id, email, registered_at, last_sign_in_at, sessions_count, tasks_created_count, latest_app_version, latest_os | **N4 ✅ ИСПРАВЛЕНО** — `security_invoker=on`, SELECT для anon/authenticated отозван (подтверждено на живой схеме 2026-07-10). Тело view не менялось |
+| `admin_users_summary` | id, email, registered_at, last_sign_in_at, sessions_count, tasks_created_count, latest_app_version, latest_os, **public_user_id** | **N4 ✅ ИСПРАВЛЕНО** — `security_invoker=on`, SELECT для anon/authenticated отозван (подтверждено на живой схеме 2026-07-10). **Миграция `0039` (P4/F12): добавлена колонка `public_user_id` (в конец — ограничение 42P16); `security_invoker=on` и отсутствие GRANT сохранены (view — для service_role/дашборда, клиент читает через RPC `get_admin_users_summary`)** |
 | `sync_status_summary` | user_id, active_tasks, deleted_tasks, active_statuses, active_tags, devices_count, last_device_seen_at, last_change_at | **N5 ✅ ИСПРАВЛЕНО** — `security_invoker=on`, SELECT для authenticated отозван (подтверждено на живой схеме 2026-07-10) |
 
 ---
@@ -223,6 +223,7 @@ PK = `user_id` (1:1 с пользователем, не история).
 |---|---|---|---|
 | `get_users_emails(user_ids uuid[])` | ✅ да (volatile, `search_path=public,auth`) | `EXECUTE` только `authenticated` (для `anon`/`PUBLIC` отозван) | **N15 ✅ ИСПРАВЛЕНО** (миграция `0020`, см. ADR 0002): тело функции требует `public.is_admin_user()` — иначе `EXCEPTION 'Forbidden: admin only'`; без сессии → `'Not authenticated'`. Затем `SELECT id,email FROM auth.users WHERE id=ANY(user_ids)`. Единственный вызов — `src/pages/AdminPage.tsx` под authenticated-JWT админа, поэтому выбран внутренний admin-гейт, а не глобальный REVOKE |
 | `is_admin_user()` | ✅ да, **STABLE** | `authenticated` через `/rest/v1/rpc/is_admin_user` | Ожидаемо (юзер должен уметь спросить "я админ?"). Логика: `EXISTS(SELECT 1 FROM user_entitlements WHERE user_id=auth.uid() AND source='seed' AND plan='lifetime')`. Единый источник истины admin-проверки (используется и в admin-RLS-политиках, и в гейте `get_users_emails`) |
+| `get_admin_users_summary()` | ✅ да (`search_path=public,auth,pg_temp`) | `EXECUTE` только `authenticated` (для `anon`/`PUBLIC` отозван) | **F12 / P4** (миграция `0039`, см. ADR 0006): полный список пользователей для админки. Тело требует `public.is_admin_user()` — иначе `'Forbidden: admin only'`; без сессии → `'Not authenticated'`. Возвращает ВСЕ `profiles` (LEFT JOIN `auth.users`, LEFT JOIN `user_entitlements`): id, public_user_id, email (`COALESCE(u.email,p.email)`), registered_at, last_sign_in_at, entitlement-поля (nullable для free), телеметрия. Закрывает баг: free-юзеры без entitlement были невидимы. Вызов — `src/pages/AdminPage.tsx` (один вызов вместо связки `user_entitlements`+`get_users_emails`) |
 
 **Итог Wave 2:** RPC-утечка email закрыта — обычный залогиненный юзер получает `Forbidden: admin only`, доступ к email имеет только админ (подтверждено на живой схеме 2026-07-10 и pgTAP-тестом `tests/04_wave2_test.sql`).
 
@@ -284,6 +285,7 @@ PK = `user_id` (1:1 с пользователем, не история).
 | 0022 (применена на прод 2026-07-11) | 0022_wave4_fix_function_search_paths — **Wave 4 PR-A:** N18 — фиксация `SET search_path` у public-функций без явного search_path |
 | 0023 (применена на прод 2026-07-11, частично) | 0023_wave4_move_pg_net — **Wave 4 PR-A:** N17 — попытка переноса pg_net в схему `extensions`; на проде осталось в `public` (non-relocatable, known-limitation) |
 | 0024 (применена на прод 2026-07-11) | 0024_wave4_rate_limits — **Wave 4 PR-B:** N13 — таблица `rate_limits` + RPC `check_rate_limit` + cron `rate-limits-cleanup`; RLS deny-by-default (см. ADR 0004, раздел 5a). Применена в 2 части (pg_cron уже установлен) |
+| 0039 (подготовлена, на прод НЕ применена — `feat/workspaces`) | 0039_admin_users_summary_rpc — **P4/F12 (см. ADR 0006):** view `admin_users_summary` += колонка `public_user_id` (security_invoker=on и REVOKE сохранены); новая SECURITY DEFINER RPC `get_admin_users_summary()` с admin-гейтом `is_admin_user()` — полный список пользователей из `profiles` (LEFT JOIN auth.users, user_entitlements). Закрывает баг: free-юзеры без entitlement были невидимы в админке. pgTAP `19`. Прод-проба под ROLLBACK пройдена; применение — через apply_migration |
 
 ---
 

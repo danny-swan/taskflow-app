@@ -311,6 +311,74 @@ describe('push worker', () => {
     expect(upsertCalls[1].table).toBe('sync_tasks');
   });
 
+  it('Fix 4: одна «отравляющая» строка не валит валидные (построчный ретрай)', async () => {
+    const { pushBatch } = await import('./push');
+    const good1 = insertStatus('G1');
+    const bad = insertStatus('BAD');
+    const good2 = insertStatus('G2');
+    for (const s of [good1, bad, good2]) {
+      liveDb!.run(
+        `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+        [s.uuid],
+      );
+    }
+    // Батч (все 3) содержит плохую строку → сервер откатывает весь запрос.
+    // На построчном ретрае плохая падает (permanent 23502), валидные проходят.
+    upsertHandler = async (_table, rows) => {
+      if (rows.some((r: any) => r.id === bad.uuid)) {
+        return { error: { message: 'null value in column "x" violates not-null (23502)' } };
+      }
+      return { error: null };
+    };
+
+    const result = await pushBatch('u', 'c');
+    expect(result.pushed).toBe(2);
+    expect(result.failed).toBe(1);
+    // 1 батч-запрос (упал) + 3 построчных = 4 обращения к upsert.
+    expect(upsertCalls.length).toBe(4);
+    // Валидные удалены из outbox, осталась только плохая.
+    const remain = liveDb!.exec(`SELECT entity_uuid FROM sync_outbox`)[0];
+    expect(remain.values.length).toBe(1);
+    expect(remain.values[0][0]).toBe(bad.uuid);
+    // Плохая помечена permanent (attempt_count=MAX) — больше не блокирует батчи.
+    const ac = liveDb!.exec(`SELECT attempt_count FROM sync_outbox WHERE entity_uuid=?`, [bad.uuid])[0].values[0][0];
+    expect(ac).toBe(5);
+  });
+
+  it('Fix 4: батч из ОДНОЙ строки при ошибке не ретраит повторно (единичный markFailure)', async () => {
+    const { pushBatch } = await import('./push');
+    const { uuid } = insertStatus('S1');
+    liveDb!.run(
+      `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+      [uuid],
+    );
+    upsertHandler = async () => ({ error: { message: 'network down' } });
+
+    const result = await pushBatch('u', 'c');
+    expect(result.failed).toBe(1);
+    // Ровно один upsert (батч=1 не уходит в построчный цикл).
+    expect(upsertCalls.length).toBe(1);
+    const ac = liveDb!.exec(`SELECT attempt_count FROM sync_outbox WHERE entity_uuid=?`, [uuid])[0].values[0][0];
+    expect(ac).toBe(1);
+  });
+
+  it('Fix 4: валидный батч (>1) уходит одним запросом, без построчного', async () => {
+    const { pushBatch } = await import('./push');
+    const s1 = insertStatus('A');
+    const s2 = insertStatus('B');
+    for (const s of [s1, s2]) {
+      liveDb!.run(
+        `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+        [s.uuid],
+      );
+    }
+    const result = await pushBatch('u', 'c');
+    expect(result.pushed).toBe(2);
+    // Ровно один батч-запрос (без построчного ретрая на успехе).
+    expect(upsertCalls.length).toBe(1);
+    expect(upsertCalls[0].rows.length).toBe(2);
+  });
+
   it('soft-delete (op=delete): payload содержит deleted_at и уходит через upsert', async () => {
     const { pushBatch } = await import('./push');
     const { uuid } = insertStatus('X', new Date().toISOString());
@@ -324,5 +392,67 @@ describe('push worker', () => {
     expect(upsertCalls.length).toBe(1);
     expect(upsertCalls[0].table).toBe('sync_statuses');
     expect(upsertCalls[0].rows[0].deleted_at).toBeTruthy();
+  });
+});
+
+describe('isPermanentError (Bug A — регресс-якоря)', () => {
+  it('42501 (RLS) — permanent', async () => {
+    const { _internals } = await import('./push');
+    expect(_internals.isPermanentError('new row violates row-level security policy (42501)')).toBe(true);
+    expect(_internals.isPermanentError('permission denied 42501')).toBe(true);
+  });
+
+  it('23502 (not-null) и 23514 (check) — permanent', async () => {
+    const { _internals } = await import('./push');
+    expect(_internals.isPermanentError('null value in column "owner_id" (23502)')).toBe(true);
+    expect(_internals.isPermanentError('violates check constraint (23514)')).toBe(true);
+  });
+
+  it('23503 (FK) — НЕ permanent (транзиентно, ретраится)', async () => {
+    const { _internals } = await import('./push');
+    expect(_internals.isPermanentError('violates foreign key constraint (23503)')).toBe(false);
+    expect(_internals.isForeignKeyViolation('violates foreign key constraint (23503)')).toBe(true);
+  });
+
+  it('сетевые/5xx — НЕ permanent', async () => {
+    const { _internals } = await import('./push');
+    expect(_internals.isPermanentError('network down')).toBe(false);
+    expect(_internals.isPermanentError('503 service unavailable')).toBe(false);
+  });
+});
+
+describe('workspaceToCloudPayload / memberToCloudPayload — живой owner (Bug A)', () => {
+  it('owner_id/user_id ws берутся из живой сессии, а не из протухшего локального owner_id', async () => {
+    const { workspaceToCloudPayload } = await import('./mappers');
+    const row: any = {
+      uuid: 'ws_s1', name: 'Shared', kind: 'shared',
+      owner_id: 'STALE-FOREIGN-UID', // рассинхрон bound_user_id
+      version: 1, client_id: 'c', updated_at: new Date().toISOString(), deleted_at: null,
+    };
+    const payload = workspaceToCloudPayload(row, 'LIVE-UID', 'client-1');
+    expect(payload.owner_id).toBe('LIVE-UID');
+    expect(payload.user_id).toBe('LIVE-UID');
+  });
+
+  it('owner-membership: user_id берётся из живой сессии', async () => {
+    const { memberToCloudPayload } = await import('./mappers');
+    const row: any = {
+      uuid: 'wsm_1', workspace_id: 'ws_s1', role: 'owner',
+      user_id: 'STALE-FOREIGN-UID', invited_by: null, joined_at: null,
+      version: 1, client_id: 'c', updated_at: new Date().toISOString(), deleted_at: null,
+    };
+    const payload = memberToCloudPayload(row, 'LIVE-UID', 'client-1');
+    expect(payload.user_id).toBe('LIVE-UID');
+  });
+
+  it('НЕ-owner membership: чужой user_id сохраняется (invite/remove участника)', async () => {
+    const { memberToCloudPayload } = await import('./mappers');
+    const row: any = {
+      uuid: 'wsm_2', workspace_id: 'ws_s1', role: 'editor',
+      user_id: 'OTHER-MEMBER-UID', invited_by: 'LIVE-UID', joined_at: null,
+      version: 1, client_id: 'c', updated_at: new Date().toISOString(), deleted_at: null,
+    };
+    const payload = memberToCloudPayload(row, 'LIVE-UID', 'client-1');
+    expect(payload.user_id).toBe('OTHER-MEMBER-UID');
   });
 });

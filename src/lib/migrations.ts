@@ -599,6 +599,372 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+
+  // ================================================================
+  // v11 — Workspaces foundation (Wave A, PR-1 «Схема»).
+  //
+  // Клиентское зеркало серверной миграции 0027. Здесь — ТОЛЬКО слой данных:
+  //   * локальные таблицы workspaces / workspace_members / workspace_settings;
+  //   * колонка workspace_id в шести локальных sync-таблицах;
+  //   * backfill personal-пространства с ТЕМ ЖЕ детерминированным id, что сервер
+  //     (см. supabase/migrations/0027_workspaces_foundation.sql, шапка):
+  //         id = 'ws_' + userId.toLowerCase().replace(/-/g, '')
+  //     — чтобы при первом sync локальные и облачные строки склеились по id;
+  //   * перенос overdue_mode из settings в workspace_settings(personal).
+  //
+  // Sync этих сущностей (мапперы/pull/push/outbox/realtime) — СЛЕДУЮЩИЙ PR
+  // (feat/ws-a-02-sync). Поэтому здесь в sync_outbox НИЧЕГО не кладём: PR-2
+  // сделает backfill outbox для workspace-таблиц отдельно (как v7/v9 для прочих),
+  // а v9-тесты рассчитывают, что v11 не меняет их счётчики outbox.
+  //
+  // Детерминированный id требует user_id. Если база уже привязана к аккаунту
+  // (settings.bound_user_id, появился в v8) — берём его → id совпадёт с сервером.
+  // Если база ещё local-only (не привязана) — используем стабильный локальный
+  // 'ws_local'. Согласование local-only id с серверным ws_<uid> при первой
+  // привязке+sync — ЗАДЕЛ для PR-2 (документировано в workspaces-plan.md §3.3).
+  //
+  // Идемпотентно: CREATE ... IF NOT EXISTS, execIgnoreDuplicate на ADD COLUMN,
+  // INSERT OR IGNORE, UPDATE ... WHERE workspace_id IS NULL.
+  // ================================================================
+  {
+    version: 11,
+    description:
+      'Workspaces foundation: локальные ws-таблицы + workspace_id + backfill personal (Wave A)',
+    up: async ({ exec, execIgnoreDuplicate, select }) => {
+      // ==============================================================
+      // 1. Локальные таблицы пространств (зеркало server sync_workspace*).
+      //    Следуем локальному контракту sync-сущностей: INTEGER PK + uuid TEXT
+      //    (uuid == серверный text-id) + sync-метаданные.
+      // ==============================================================
+      await exec(`
+        CREATE TABLE IF NOT EXISTS workspaces (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          uuid        TEXT,                       -- = серверный sync_workspaces.id (ws_<uid>)
+          name        TEXT    NOT NULL DEFAULT 'Мои задачи',
+          kind        TEXT    NOT NULL DEFAULT 'personal',
+          owner_id    TEXT,                       -- uuid владельца (nullable в local-only)
+          sort_order  INTEGER NOT NULL DEFAULT 0,
+          created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+          updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+          deleted_at  TEXT,
+          version     INTEGER NOT NULL DEFAULT 1,
+          client_id   TEXT
+        )
+      `);
+      await exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_uuid ON workspaces(uuid) WHERE uuid IS NOT NULL`,
+      );
+
+      await exec(`
+        CREATE TABLE IF NOT EXISTS workspace_members (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          uuid          TEXT,                     -- = серверный sync_workspace_members.id
+          workspace_id  TEXT    NOT NULL,         -- = workspaces.uuid (серверный ws-id)
+          user_id       TEXT,                     -- uuid участника
+          role          TEXT    NOT NULL DEFAULT 'owner',
+          invited_by    TEXT,
+          joined_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+          created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+          deleted_at    TEXT,
+          version       INTEGER NOT NULL DEFAULT 1,
+          client_id     TEXT
+        )
+      `);
+      await exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_members_uuid ON workspace_members(uuid) WHERE uuid IS NOT NULL`,
+      );
+      await exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_members_ws_user ON workspace_members(workspace_id, user_id)`,
+      );
+
+      await exec(`
+        CREATE TABLE IF NOT EXISTS workspace_settings (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          uuid          TEXT,
+          workspace_id  TEXT    NOT NULL,         -- = workspaces.uuid
+          key           TEXT    NOT NULL,
+          value         TEXT,
+          created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+          deleted_at    TEXT,
+          version       INTEGER NOT NULL DEFAULT 1,
+          client_id     TEXT
+        )
+      `);
+      await exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_settings_uuid ON workspace_settings(uuid) WHERE uuid IS NOT NULL`,
+      );
+      await exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_settings_ws_key ON workspace_settings(workspace_id, key)`,
+      );
+
+      // ==============================================================
+      // 2. Колонка workspace_id в шести локальных sync-таблицах (NULLable).
+      // ==============================================================
+      const syncTables = [
+        'tasks',
+        'statuses',
+        'tags',
+        'task_templates',
+        'overdue_events',
+        'task_hold_periods',
+      ];
+      for (const t of syncTables) {
+        await execIgnoreDuplicate(`ALTER TABLE ${t} ADD COLUMN workspace_id TEXT`);
+      }
+      // Индексы по workspace_id для будущих ws-scoped выборок (PR-3).
+      for (const t of syncTables) {
+        try {
+          await exec(`CREATE INDEX IF NOT EXISTS idx_${t}_workspace ON ${t}(workspace_id)`);
+        } catch (e) {
+          console.warn(`[migrate v11] index idx_${t}_workspace skipped:`, e);
+        }
+      }
+
+      // ==============================================================
+      // 3. Детерминированный id personal-пространства (совпадает с сервером).
+      // ==============================================================
+      const boundRows = await select<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'bound_user_id'`,
+      );
+      const boundUserId = boundRows[0]?.value?.trim() || null;
+
+      // Если id уже вычислен на прошлом прогоне — переиспользуем (идемпотентность).
+      const existingWsRows = await select<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'personal_workspace_id'`,
+      );
+      let personalWsId = existingWsRows[0]?.value?.trim() || '';
+      if (!personalWsId) {
+        personalWsId = boundUserId
+          ? 'ws_' + boundUserId.toLowerCase().replace(/-/g, '')
+          : 'ws_local'; // local-only: согласование с сервером — задел PR-2.
+      }
+
+      const clientRows = await select<{ value: string }>(
+        `SELECT value FROM settings WHERE key = 'client_id'`,
+      );
+      const clientId: string = clientRows[0]?.value ?? uuidv7();
+
+      // Запоминаем выбранное пространство как текущее (пригодится стору в PR-3).
+      await exec(
+        `INSERT OR REPLACE INTO settings (key, value) VALUES ('personal_workspace_id', ?)`,
+        [personalWsId],
+      );
+      await exec(
+        `INSERT OR IGNORE INTO settings (key, value) VALUES ('current_workspace_id', ?)`,
+        [personalWsId],
+      );
+
+      // ==============================================================
+      // 4. Backfill: строка personal-пространства + owner-членство.
+      // ==============================================================
+      await exec(
+        `INSERT OR IGNORE INTO workspaces (uuid, name, kind, owner_id, sort_order, client_id)
+         VALUES (?, 'Мои задачи', 'personal', ?, 0, ?)`,
+        [personalWsId, boundUserId, clientId],
+      );
+      await exec(
+        `INSERT OR IGNORE INTO workspace_members (uuid, workspace_id, user_id, role, client_id)
+         VALUES (?, ?, ?, 'owner', ?)`,
+        [
+          boundUserId ? 'wsm_' + boundUserId.toLowerCase().replace(/-/g, '') : 'wsm_local',
+          personalWsId,
+          boundUserId,
+          clientId,
+        ],
+      );
+
+      // Проставляем workspace_id всем локальным строкам, где он ещё NULL.
+      for (const t of syncTables) {
+        try {
+          await exec(
+            `UPDATE ${t} SET workspace_id = ? WHERE workspace_id IS NULL`,
+            [personalWsId],
+          );
+        } catch (e) {
+          console.warn(`[migrate v11] workspace_id backfill skipped for ${t}:`, e);
+        }
+      }
+
+      // ==============================================================
+      // 5. Перенос overdue_mode из settings в workspace_settings(personal).
+      // ==============================================================
+      // Копируем ТЕКУЩЕЕ значение (по умолчанию 'calendar' из v4). Старый ключ
+      // settings.overdue_mode НЕ удаляем: его ещё читает текущий код дедлайнов;
+      // переключение читателей на workspace_settings — PR-3/PR-4 (тогда же
+      // старый ключ можно будет вычистить).
+      try {
+        const omRows = await select<{ value: string }>(
+          `SELECT value FROM settings WHERE key = 'overdue_mode'`,
+        );
+        const overdueMode = omRows[0]?.value ?? 'calendar';
+        await exec(
+          `INSERT OR IGNORE INTO workspace_settings (uuid, workspace_id, key, value, client_id)
+           VALUES (?, ?, 'overdue_mode', ?, ?)`,
+          [uuidv7(), personalWsId, overdueMode, clientId],
+        );
+      } catch (e) {
+        console.warn('[migrate v11] overdue_mode migration skipped:', e);
+      }
+    },
+  },
+
+  // ================================================================
+  // v12 — Outbox-backfill workspace-сущностей (Wave A, PR-2 «Sync»).
+  //
+  // v11 СПЕЦИАЛЬНО не клала ws-строки в sync_outbox: v9-тесты рассчитывают,
+  // что миграции workspaces не трогают их счётчики outbox. Теперь, когда sync
+  // ws-сущностей реализован (мапперы/pull/push/realtime), нужно поставить на
+  // push уже созданные v11 строки personal-пространства, owner-членства и
+  // перенесённой настройки overdue_mode — иначе они никогда не уедут в облако
+  // на базах, где v11 уже отработала до появления PR-2.
+  //
+  // Кладём ТОЛЬКО реальные (не local-only) строки: placeholder-id `ws_local` /
+  // `wsm_local` пушить нельзя (сервер их отвергнет по RLS/owner). Для local-only
+  // баз push произойдёт после привязки аккаунта — reconcilePersonalWorkspace()
+  // переименует ws_local → ws_<uid> и сам поставит их в outbox.
+  //
+  // ON CONFLICT DO NOTHING: серверный backfill 0027 создаёт те же
+  // детерминированные id, push использует upsert — повторная постановка
+  // безопасна и не плодит дублей в outbox (UNIQUE(entity_table, entity_uuid)).
+  // Идемпотентно: повторный прогон ничего не ломает.
+  // ================================================================
+  {
+    version: 12,
+    description: 'Outbox-backfill workspace-сущностей для первого sync (Wave A PR-2)',
+    up: async ({ exec, select }) => {
+      const enqueue = async (entityTable: string, uuid: string) => {
+        await exec(
+          `INSERT INTO sync_outbox
+             (entity_table, entity_uuid, op, queued_at, attempt_count, last_attempt_at, last_error)
+           VALUES (?, ?, 'upsert', datetime('now'), 0, NULL, NULL)
+           ON CONFLICT(entity_table, entity_uuid) DO NOTHING`,
+          [entityTable, uuid],
+        );
+      };
+
+      // Пространства (кроме local-only placeholder'а).
+      const wsRows = await select<{ uuid: string | null }>(
+        `SELECT uuid FROM workspaces
+          WHERE uuid IS NOT NULL AND uuid <> 'ws_local' AND deleted_at IS NULL`,
+      );
+      for (const r of wsRows) if (r.uuid) await enqueue('workspaces', r.uuid);
+
+      // Членство (кроме local-only placeholder'а).
+      const memberRows = await select<{ uuid: string | null }>(
+        `SELECT uuid FROM workspace_members
+          WHERE uuid IS NOT NULL AND uuid <> 'wsm_local' AND deleted_at IS NULL`,
+      );
+      for (const r of memberRows) if (r.uuid) await enqueue('workspace_members', r.uuid);
+
+      // Настройки пространств, привязанных к реальному ws (не ws_local).
+      const settingRows = await select<{ uuid: string | null }>(
+        `SELECT uuid FROM workspace_settings
+          WHERE uuid IS NOT NULL AND workspace_id <> 'ws_local' AND deleted_at IS NULL`,
+      );
+      for (const r of settingRows) if (r.uuid) await enqueue('workspace_settings', r.uuid);
+    },
+  },
+
+  // ================================================================
+  // v13 — task_activity_log: локальное зеркало журнала активности задач
+  //        (Wave C, PR-c-03; серверная миграция 0034).
+  //
+  // ПУЛЛ-ONLY: строки создаёт исключительно серверный триггер log_task_activity
+  // в shared-пространствах; клиент их только читает (см. pull.ts / mappers.ts —
+  // ACTIVITY_LOG_SPEC не входит в PUSH_ORDER, toCloud кидает). Поэтому здесь НЕ
+  // кладём ничего в sync_outbox и не делаем backfill — таблица наполняется
+  // только через pull.
+  //
+  // Контракт колонок повторяет серверный (0034), но под SQLite:
+  //   * id INTEGER PK AUTOINCREMENT + uuid TEXT UNIQUE (= серверный
+  //     sync_task_activity_log.id) — как у прочих sync-зеркал;
+  //   * task_id TEXT — серверный uuid задачи (без резолюции в int; UI фильтрует
+  //     по tasks.uuid);
+  //   * payload TEXT — JSON-строка (в облаке jsonb);
+  //   * нет updated_at/version/deleted_at — журнал иммутабелен, курсор pull идёт
+  //     по created_at.
+  //
+  // Идемпотентно: CREATE ... IF NOT EXISTS.
+  // ================================================================
+  {
+    version: 13,
+    description: 'task_activity_log: локальное зеркало журнала активности задач (Wave C PR-c-03)',
+    up: async ({ exec }) => {
+      await exec(`
+        CREATE TABLE IF NOT EXISTS task_activity_log (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          uuid          TEXT,                     -- = серверный sync_task_activity_log.id
+          task_id       TEXT    NOT NULL,         -- серверный uuid задачи
+          workspace_id  TEXT    NOT NULL,
+          user_id       TEXT    NOT NULL,         -- uuid автора действия
+          kind          TEXT    NOT NULL,
+          payload       TEXT    NOT NULL DEFAULT '{}',  -- JSON-строка
+          created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      await exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_task_activity_log_uuid ON task_activity_log(uuid) WHERE uuid IS NOT NULL`,
+      );
+      await exec(
+        `CREATE INDEX IF NOT EXISTS idx_task_activity_log_task ON task_activity_log(task_id, created_at DESC)`,
+      );
+      await exec(
+        `CREATE INDEX IF NOT EXISTS idx_task_activity_log_ws ON task_activity_log(workspace_id, created_at DESC)`,
+      );
+    },
+  },
+
+  // ================================================================
+  // v14 — Сброс застрявших outbox-строк после серверного фикса 0037.
+  //
+  // РЕГРЕССИЯ (серверная миграция 0037): upsert новых workspace-сущностей
+  // (INSERT ... ON CONFLICT ... RETURNING) отклонялся RLS с 403/42501, потому
+  // что SELECT-политика (нужна для RETURNING) требовала membership, которого
+  // при СОЗДАНИИ нового пространства ещё нет. Клиентский isPermanentError
+  // классифицирует 403 и "row-level security" как ПОСТОЯННЫЕ (push.ts) →
+  // markFailure выставил этим строкам attempt_count = MAX_ATTEMPTS и префикс
+  // last_error='[permanent] ...'. Такие строки isReadyForRetry пропускает
+  // НАВСЕГДА — то есть даже после деплоя серверного фикса 0037 ранее
+  // застрявшие пространства НЕ будут повторно отправлены без нового локального
+  // изменения. Симптом: pending sync висит (9/21), созданные пространства
+  // «не долетают» и теряются при переключении аккаунта.
+  //
+  // ЧТО ДЕЛАЕМ: одноразово сбрасываем attempt_count=0, last_attempt_at=NULL,
+  // last_error=NULL для строк, застрявших ИМЕННО по этой причине — т.е.
+  // last_error содержит маркеры RLS/403 (а также 42501 / permission denied).
+  // Прочие permanent-ошибки (23502 not-null, 23514 check, 42703 undefined
+  // column, невалидный синтаксис) НЕ трогаем — они настоящие и ретрай их лишь
+  // сожжёт бюджет. После сброса readReadyBatch снова возьмёт строки, а сервер
+  // (0037) теперь их примет. Идемпотентно: повторный прогон не найдёт строк с
+  // такими маркерами (last_error обнулён / строки удалены при успехе).
+  //
+  // NB: ничего не пушим здесь напрямую — только помечаем к ретраю; фактический
+  // push произойдёт в ближайшем syncNow под платным гейтом (free остаётся
+  // локальным). Совпадает с политикой: gate решает МОЖНО ли пушить.
+  // ================================================================
+  {
+    version: 14,
+    description: 'Reset outbox rows stuck on RLS/403 after server fix 0037 (Wave A PR-hotfix)',
+    up: async ({ exec }) => {
+      await exec(
+        `UPDATE sync_outbox
+            SET attempt_count = 0,
+                last_attempt_at = NULL,
+                last_error = NULL
+          WHERE attempt_count >= 5
+            AND last_error IS NOT NULL
+            AND (
+              lower(last_error) LIKE '%row-level security%'
+              OR lower(last_error) LIKE '%row level security%'
+              OR last_error LIKE '%42501%'
+              OR lower(last_error) LIKE '%permission denied%'
+              OR last_error LIKE '%403%'
+            )`,
+      );
+    },
+  },
 ];
 
 /** Current target user_version (highest registered migration). */

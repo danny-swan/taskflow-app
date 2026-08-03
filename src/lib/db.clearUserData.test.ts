@@ -59,6 +59,16 @@ describe('clearUserData() — контракт удаления/сохранен
     run(
       `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('tasks', 'uuid-1', 'upsert', datetime('now'), 0)`,
     );
+    // Пространства/членство/настройки прошлого аккаунта (Bug #1, фикс #3).
+    run(
+      `INSERT INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, version, client_id) VALUES ('ws_old','Old','personal','user-A',0,'2026-01-01','2026-01-01',1,'client-abc')`,
+    );
+    run(
+      `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, created_at, updated_at, version, client_id) VALUES ('wsm_old','ws_old','user-A','owner','2026-01-01','2026-01-01',1,'client-abc')`,
+    );
+    run(
+      `INSERT INTO workspace_settings (uuid, workspace_id, key, value, created_at, updated_at, version, client_id) VALUES ('wss_old','ws_old','overdue_mode','calendar','2026-01-01','2026-01-01',1,'client-abc')`,
+    );
 
     // Ключи settings: одни должны выжить, другие — исчезнуть.
     const setKey = (k: string, v: string) =>
@@ -70,6 +80,8 @@ describe('clearUserData() — контракт удаления/сохранен
     setKey('lang', 'ru');               // UI-настройка — сохраняется
     setKey('sync_last_pulled_tasks', '2026-01-01T00:00:00Z');   // курсор pull — удаляется
     setKey('sync_last_pulled_tags', '2026-01-01T00:00:00Z');    // курсор pull — удаляется
+    setKey('current_workspace_id', 'ws_old_account');   // указатель прошлого аккаунта — сбрасывается
+    setKey('personal_workspace_id', 'ws_old_account');  // указатель прошлого аккаунта — сбрасывается
 
     // Санити: данные на месте до очистки (initDb мог засеять дефолтные статусы/шаблоны,
     // поэтому проверяем «есть хотя бы наши строки», а не точное число).
@@ -89,9 +101,18 @@ describe('clearUserData() — контракт удаления/сохранен
     expect(tableCount(all, 'overdue_events')).toBe(0);
     expect(tableCount(all, 'sync_outbox')).toBe(0);
 
+    // ── УДАЛЕНО: пространства/членство/настройки прошлого аккаунта (Bug #1) ─
+    expect(tableCount(all, 'workspaces')).toBe(0);
+    expect(tableCount(all, 'workspace_members')).toBe(0);
+    expect(tableCount(all, 'workspace_settings')).toBe(0);
+
     // ── УДАЛЕНО: курсоры pull (sync_last_pulled_%) ─────────────────────────
     expect(get(`SELECT value FROM settings WHERE key = 'sync_last_pulled_tasks'`)).toBeNull();
     expect(get(`SELECT value FROM settings WHERE key = 'sync_last_pulled_tags'`)).toBeNull();
+
+    // ── УДАЛЕНО: указатели пространств прошлого аккаунта ────────────────────
+    expect(get(`SELECT value FROM settings WHERE key = 'current_workspace_id'`)).toBeNull();
+    expect(get(`SELECT value FROM settings WHERE key = 'personal_workspace_id'`)).toBeNull();
 
     // ── СОХРАНЕНО: client_id / реестр снимков / привязка / UI ──────────────
     expect(get<{ value: string }>(`SELECT value FROM settings WHERE key = 'client_id'`)?.value).toBe('client-abc');

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store/useStore';
+import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
 import { AutoGrowTextarea } from '../components/AutoGrowTextarea';
 import { StatusPill } from '../components/StatusPill';
@@ -9,8 +10,8 @@ import { DatePicker } from '../components/DatePicker';
 
 export function AddTaskPage() {
   const lang = useStore(s => s.language);
-  const statuses = useStore(s => s.statuses);
-  const tags = useStore(s => s.tags);
+  const statuses = useCurrentWorkspaceStatuses();
+  const tags = useCurrentWorkspaceTags();
   const addTask = useStore(s => s.addTask);
   const addTagFn = useStore(s => s.addTag);
   const pushToast = useStore(s => s.pushToast);

@@ -230,7 +230,9 @@ describe('overdue_events push (v0.9.35-dev.5)', () => {
     expect(payload.user_id).toBe('user-1');
     expect(payload.deadline_snapshot).toBe('2026-06-15');
     expect(payload.event_date).toBe('2026-06-16');
-    expect(payload.client_id).toBe('test-client');    // из локальной строки
+    // F13/Fix C: маппер ВСЕГДА ставит ТЕКУЩИЙ (зарегистрированный) client_id,
+    // а НЕ протухший row.client_id стороннего устройства — иначе FK sync_*.client_id → sync_devices(id) (23503).
+    expect(payload.client_id).toBe('client-1');       // текущее устройство, не row.client_id
   });
 
   it('push overdue: append-only, идёт через upsert в sync_overdue_events', async () => {
@@ -340,6 +342,50 @@ describe('isPermanentError (v0.9.35-dev.5)', () => {
     expect(row[0]).toBe(1);
     expect(String(row[1])).not.toContain('[permanent]');
   });
+
+  // ─── FK violation (23503) — child раньше parent'а, ретраим (PR-b-01) ─────────
+  it('23503 (FK violation) — НЕ permanent (транзиентная, ретраим)', async () => {
+    const { _internals } = await import('./push');
+    const { isPermanentError } = _internals;
+    expect(isPermanentError('code=23503 insert or update on table violates foreign key constraint')).toBe(false);
+    expect(isPermanentError('violates foreign key constraint "sync_tasks_workspace_id_fkey"')).toBe(false);
+  });
+
+  it('isForeignKeyViolation распознаёт 23503 и текст FK-констрейнта', async () => {
+    const { _internals } = await import('./push');
+    const { isForeignKeyViolation } = _internals;
+    expect(isForeignKeyViolation('SQLSTATE 23503')).toBe(true);
+    expect(isForeignKeyViolation('violates foreign key constraint "sync_tasks_workspace_id_fkey"')).toBe(true);
+    expect(isForeignKeyViolation('500 Internal Server Error')).toBe(false);
+    expect(isForeignKeyViolation('new row violates row-level security policy')).toBe(false);
+  });
+
+  it('FK violation: child ретраится (attempt_count=1), НЕ помечается permanent', async () => {
+    const { pushBatch, MAX_ATTEMPTS } = await import('./push');
+    // Симулируем: task пушится раньше своего workspace → сервер шлёт 23503.
+    upsertHandler = async () => ({
+      error: {
+        message:
+          'insert or update on table "sync_tasks" violates foreign key constraint "sync_tasks_workspace_id_fkey" (23503)',
+      },
+    });
+    const { uuid } = insertStatus('T');
+    liveDb!.run(
+      `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('statuses', ?, 'upsert', datetime('now'), 0)`,
+      [uuid],
+    );
+
+    const result = await pushBatch('u', 'c');
+    expect(result.failed).toBe(1);
+    const row = liveDb!.exec(
+      `SELECT attempt_count, last_error FROM sync_outbox WHERE entity_uuid=?`,
+      [uuid],
+    )[0].values[0];
+    // Ретрай, а не исчерпание попыток: attempt_count=1 (< MAX), без [permanent].
+    expect(row[0]).toBe(1);
+    expect(row[0]).not.toBe(MAX_ATTEMPTS);
+    expect(String(row[1])).not.toContain('[permanent]');
+  });
 });
 
 // ─── 3. Realtime debounce ────────────────────────────────────────────────────
@@ -348,12 +394,16 @@ describe('realtime schedulePull (v0.9.35-dev.5)', () => {
   it('WATCHED_TABLES содержит все sync-таблицы', async () => {
     const { _internals } = await import('./realtime');
     expect(_internals.WATCHED_TABLES).toEqual([
+      'sync_workspaces',
+      'sync_workspace_members',
+      'sync_workspace_settings',
       'sync_tasks',
       'sync_statuses',
       'sync_tags',
       'sync_task_templates',
       'sync_overdue_events',
       'sync_task_hold_periods',
+      'sync_task_activity_log',
     ]);
   });
 

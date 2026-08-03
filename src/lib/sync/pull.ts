@@ -22,13 +22,20 @@
 import * as db from '../db';
 import { supabase } from '../supabase';
 import { logger } from '../logger';
+import { uuidv7 } from '../uuid';
 import {
-  PUSH_ORDER,
+  PULL_ORDER,
+  WORKSPACE_MEMBERS_SPEC,
   resolveStatusIdByUuid,
   resolveTagIdByUuid,
   resolveTaskIdByUuid,
   type TableSpec,
 } from './mappers';
+import {
+  listMembershipWorkspaceIds,
+  computeWorkspaceId,
+  LOCAL_WS_ID,
+} from './workspace';
 
 /**
  * v0.9.35-dev.6.10.3 — Маркер «отложить строку» (deferred by design).
@@ -46,32 +53,138 @@ export class DeferRowError extends Error {
   }
 }
 
-/** Ключ в settings для хранения last_pulled cursor per-table. */
-function lastPulledKey(cloudTable: string): string {
-  return `sync_last_pulled_${cloudTable}`;
+/**
+ * F16 (ADR 0010, roadmap §7.16) — маркер «локальная SQLite повреждена».
+ *
+ * В отличие от DeferRowError (ожидаемое отложение до прихода parent'а), это
+ * НАСТОЯЩАЯ фатальная ошибка: applier наткнулся на признак физической
+ * порчи локальной базы (malformed image / SQLITE_CORRUPT) или на расхождение
+ * unique-индекса с данными (SELECT WHERE uuid=? не находит строку, но INSERT
+ * в неё же ловит 2067). Продолжать применять строки поверх такой базы
+ * бессмысленно и опасно — pullAll должен прервать цикл apply и НЕ звать
+ * prunePhantomWorkspaces (иначе он дочистит остатки ещё не восстановленной
+ * базы и снесёт ws, у которых просто не успело появиться membership).
+ */
+export class SqliteCorruptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SqliteCorruptError';
+  }
 }
 
 /**
- * Читает last_pulled cursor для таблицы из settings.
- * cursorCol определяет начальное значение (updated_at → '1970-01-01', id → zero uuid).
+ * Признак повреждения SQLite в тексте ошибки: malformed image (code 11),
+ * явное упоминание SQLITE_CORRUPT, либо code: 11 в сообщении драйвера.
  */
-function getLastPulledAt(cloudTable: string, cursorCol: 'updated_at' | 'id' = 'updated_at'): string {
-  const row = db.get<{ value: string }>(
-    'SELECT value FROM settings WHERE key=?',
-    [lastPulledKey(cloudTable)],
+function isSqliteCorruptionMessage(msg: string): boolean {
+  // F17 (ADR 0011): откат F16-эскалации. UNIQUE fail на
+  // workspace_members(workspace_id, user_id) (code 2067) — это НЕ порча БД, а
+  // штатная коллизия из-за рассинхрона локального uuid с серверным при
+  // accept-invite. Теперь она чинится fallback-матчером в applyCloudRowMembers,
+  // а не сбросом всей локальной SQLite. Поэтому четыре UNIQUE-паттерна убраны;
+  // здесь остаются только настоящие признаки физической порчи.
+  return (
+    /database disk image is malformed/i.test(msg) ||
+    /code:?\s*11\b/i.test(msg) ||
+    /SQLITE_CORRUPT/i.test(msg)
   );
-  if (row?.value) return row.value;
-  return cursorCol === 'id'
-    ? '00000000-0000-0000-0000-000000000000'
-    : '1970-01-01T00:00:00Z';
 }
 
-/** Обновляет last_pulled cursor в settings. */
-function setLastPulledAt(cloudTable: string, value: string): void {
+/**
+ * Оборачивает applyCloudRow* — если внутри вылетело исключение с признаком
+ * порчи SQLite, поднимает флаг для App.tsx/syncNow и перебрасывает исключение
+ * как SqliteCorruptError (чтобы pullAll отличил его от обычной ошибки строки
+ * и от DeferRowError).
+ */
+function withCorruptionGuard(
+  tableName: string,
+  fn: (row: CloudRow) => boolean,
+): (row: CloudRow) => boolean {
+  return (row: CloudRow): boolean => {
+    try {
+      return fn(row);
+    } catch (e) {
+      if (e instanceof DeferRowError || e instanceof SqliteCorruptError) throw e;
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isSqliteCorruptionMessage(msg)) {
+        if (typeof window !== 'undefined') {
+          (window as any).__taskflow_corruption_recovered = 'runtime_during_pull';
+          // F16: сбрасываем возможно битую БД из LocalStorage СРАЗУ, до того как
+          // scheduleSave() (дебаунс 200ms в db.ts) успеет записать текущее битое
+          // состояние обратно. Без этого reload перечитает ту же битую SQLite
+          // и цикл повторится.
+          try {
+            for (const k of ['taskflow.sqlite.v1', 'taskflow.sqlite.v1.ts']) {
+              try { window.localStorage.removeItem(k); } catch { /* noop */ }
+            }
+          } catch { /* noop */ }
+        }
+        logger.warn(`[sync/pull] SQLITE_CORRUPT detected while applying ${tableName} row ${row.id}:`, msg);
+        throw new SqliteCorruptError(`${tableName}: ${msg}`);
+      }
+      throw e;
+    }
+  };
+}
+
+/**
+ * Ключ settings для last_pulled cursor.
+ *
+ * Wave A PR-2: per-ws-per-table формат `sync_last_pulled_<ws>_<cloudTable>`.
+ * Legacy-формат (до ws) — `sync_last_pulled_<cloudTable>`. Если workspaceId не
+ * передан — возвращаем legacy-ключ (обратная совместимость вызовов без ws).
+ */
+function lastPulledKey(cloudTable: string, workspaceId?: string | null): string {
+  return workspaceId
+    ? `sync_last_pulled_${workspaceId}_${cloudTable}`
+    : `sync_last_pulled_${cloudTable}`;
+}
+
+function readSetting(key: string): string | null {
+  const row = db.get<{ value: string }>('SELECT value FROM settings WHERE key=?', [key]);
+  return row?.value ?? null;
+}
+
+/**
+ * Читает last_pulled cursor для (ws, таблица) из settings.
+ *
+ * Мягкая миграция ключа (§3.4): если нового per-ws ключа ещё нет, но есть старый
+ * `sync_last_pulled_<cloudTable>` — используем его значение как стартовое для
+ * personal-ws и сразу переписываем в новый формат (идемпотентно). Так первый
+ * pull после PR-2 не перечитывает всё заново.
+ */
+function getLastPulledAt(
+  cloudTable: string,
+  cursorCol: 'updated_at' | 'id' | 'created_at' = 'updated_at',
+  workspaceId?: string | null,
+): string {
+  const initial = cursorCol === 'id'
+    ? '00000000-0000-0000-0000-000000000000'
+    : '1970-01-01T00:00:00Z';
+
+  if (!workspaceId) {
+    return readSetting(lastPulledKey(cloudTable)) ?? initial;
+  }
+
+  const newKey = lastPulledKey(cloudTable, workspaceId);
+  const newVal = readSetting(newKey);
+  if (newVal) return newVal;
+
+  // Мягкая миграция: legacy-ключ → per-ws ключ.
+  const legacyVal = readSetting(lastPulledKey(cloudTable));
+  if (legacyVal) {
+    setLastPulledAt(cloudTable, legacyVal, workspaceId);
+    return legacyVal;
+  }
+  return initial;
+}
+
+/** Обновляет last_pulled cursor в settings (per-ws при наличии workspaceId). */
+function setLastPulledAt(cloudTable: string, value: string, workspaceId?: string | null): void {
   db.run(
     `INSERT INTO settings (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    [lastPulledKey(cloudTable), value],
+    [lastPulledKey(cloudTable, workspaceId), value],
   );
 }
 
@@ -91,6 +204,7 @@ interface CloudRow {
 
 /** Применяет одну строку из облака к локальной БД. Возвращает true, если что-то изменили. */
 function applyCloudRowTasks(row: CloudRow): boolean {
+  row.workspace_id ??= null; // облако всегда шлёт ws_id; защищаемся от undefined-бинда
   const local = db.get<{ id: number; updated_at: string; version: number }>(
     'SELECT id, updated_at, version FROM tasks WHERE uuid=?',
     [row.id],
@@ -107,13 +221,13 @@ function applyCloudRowTasks(row: CloudRow): boolean {
            tag_id=?,
            start_date=?, deadline=?, finish_date=?,
            sort_order=?, archived=?,
-           updated_at=?, deleted_at=?, version=?, client_id=?
+           updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [
         row.title,
         row.comment,
-        resolveStatusIdByUuid(row.status_id),
-        resolveTagIdByUuid(row.tag_id),
+        resolveStatusIdByUuid(row.status_id, row.workspace_id),
+        resolveTagIdByUuid(row.tag_id, row.workspace_id),
         row.start_date,
         row.deadline,
         row.finish_date,
@@ -123,6 +237,7 @@ function applyCloudRowTasks(row: CloudRow): boolean {
         row.deleted_at,
         row.version,
         row.client_id,
+        row.workspace_id,
         row.id,
       ],
     );
@@ -130,7 +245,7 @@ function applyCloudRowTasks(row: CloudRow): boolean {
   }
 
   // Локальной строки нет — INSERT новую с сохранением uuid.
-  const statusIntId = resolveStatusIdByUuid(row.status_id);
+  const statusIntId = resolveStatusIdByUuid(row.status_id, row.workspace_id);
   if (statusIntId === null) {
     // v0.9.35-dev.6.10.3 — ФИКС сирот-задач (Проблема №1: всё улетало в «Важно»).
     //
@@ -155,14 +270,14 @@ function applyCloudRowTasks(row: CloudRow): boolean {
   db.run(
     `INSERT INTO tasks
       (uuid, title, comment, status_id, tag_id, start_date, deadline, finish_date,
-       sort_order, archived, created_at, updated_at, deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       sort_order, archived, created_at, updated_at, deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       row.id,
       row.title,
       row.comment,
       statusIntId,
-      resolveTagIdByUuid(row.tag_id),
+      resolveTagIdByUuid(row.tag_id, row.workspace_id),
       row.start_date,
       row.deadline,
       row.finish_date,
@@ -173,12 +288,14 @@ function applyCloudRowTasks(row: CloudRow): boolean {
       row.deleted_at,
       row.version,
       row.client_id,
+      row.workspace_id,
     ],
   );
   return true;
 }
 
 function applyCloudRowStatuses(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM statuses WHERE uuid=?',
     [row.id],
@@ -189,13 +306,13 @@ function applyCloudRowStatuses(row: CloudRow): boolean {
       `UPDATE statuses
        SET name=?, color=?, behavior=?, sort_order=?, is_seed=?, is_technical=?,
            hidden=?, default_collapsed=?,
-           updated_at=?, deleted_at=?, version=?, client_id=?
+           updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [
         row.name, row.color, row.behavior, row.sort_order,
         row.is_seed ? 1 : 0, row.is_technical ? 1 : 0,
         row.hidden ? 1 : 0, row.default_collapsed ? 1 : 0,
-        row.updated_at, row.deleted_at, row.version, row.client_id,
+        row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id,
         row.id,
       ],
     );
@@ -204,19 +321,20 @@ function applyCloudRowStatuses(row: CloudRow): boolean {
   db.run(
     `INSERT INTO statuses
       (uuid, name, color, behavior, sort_order, is_seed, is_technical,
-       hidden, default_collapsed, updated_at, deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       hidden, default_collapsed, updated_at, deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       row.id, row.name, row.color, row.behavior, row.sort_order,
       row.is_seed ? 1 : 0, row.is_technical ? 1 : 0,
       row.hidden ? 1 : 0, row.default_collapsed ? 1 : 0,
-      row.updated_at, row.deleted_at, row.version, row.client_id,
+      row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id,
     ],
   );
   return true;
 }
 
 function applyCloudRowTags(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM tags WHERE uuid=?',
     [row.id],
@@ -226,18 +344,18 @@ function applyCloudRowTags(row: CloudRow): boolean {
     db.run(
       `UPDATE tags
        SET name=?, color=?, sort_order=?,
-           updated_at=?, deleted_at=?, version=?, client_id=?
+           updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [row.name, row.color, row.sort_order,
-       row.updated_at, row.deleted_at, row.version, row.client_id, row.id],
+       row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id, row.id],
     );
     return true;
   }
   db.run(
-    `INSERT INTO tags (uuid, name, color, sort_order, updated_at, deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?)`,
+    `INSERT INTO tags (uuid, name, color, sort_order, updated_at, deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
     [row.id, row.name, row.color, row.sort_order,
-     row.updated_at, row.deleted_at, row.version, row.client_id],
+     row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id],
   );
   return true;
 }
@@ -248,6 +366,7 @@ function applyCloudRowTags(row: CloudRow): boolean {
  * остальное immutable. Если нет — INSERT (при условии что task уже локально).
  */
 function applyCloudRowOverdueEvents(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; deleted_at: string | null }>(
     'SELECT id, deleted_at FROM overdue_events WHERE uuid=?',
     [row.id],
@@ -273,8 +392,8 @@ function applyCloudRowOverdueEvents(row: CloudRow): boolean {
   db.run(
     `INSERT INTO overdue_events
       (uuid, task_id, deadline_snapshot, event_date, created_at, updated_at,
-       deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+       deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [
       row.id,
       taskId,
@@ -285,12 +404,14 @@ function applyCloudRowOverdueEvents(row: CloudRow): boolean {
       row.deleted_at,
       1,                        // version — локально всегда 1 для overdue
       row.client_id,
+      row.workspace_id,
     ],
   );
   return true;
 }
 
 function applyCloudRowTemplates(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM task_templates WHERE uuid=?',
     [row.id],
@@ -301,26 +422,26 @@ function applyCloudRowTemplates(row: CloudRow): boolean {
       `UPDATE task_templates
        SET name=?, title=?, comment=?,
            status_id=?, tag_id=?, sort_order=?,
-           updated_at=?, deleted_at=?, version=?, client_id=?
+           updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [row.name, row.title, row.comment,
-       row.status_id ? resolveStatusIdByUuid(row.status_id) : null,
-       resolveTagIdByUuid(row.tag_id),
+       row.status_id ? resolveStatusIdByUuid(row.status_id, row.workspace_id) : null,
+       resolveTagIdByUuid(row.tag_id, row.workspace_id),
        row.sort_order,
-       row.updated_at, row.deleted_at, row.version, row.client_id, row.id],
+       row.updated_at, row.deleted_at, row.version, row.client_id, row.workspace_id, row.id],
     );
     return true;
   }
   db.run(
     `INSERT INTO task_templates
       (uuid, name, title, comment, status_id, tag_id, sort_order,
-       created_at, updated_at, deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+       created_at, updated_at, deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [row.id, row.name, row.title, row.comment,
-     row.status_id ? resolveStatusIdByUuid(row.status_id) : null,
-     resolveTagIdByUuid(row.tag_id),
+     row.status_id ? resolveStatusIdByUuid(row.status_id, row.workspace_id) : null,
+     resolveTagIdByUuid(row.tag_id, row.workspace_id),
      row.sort_order, row.created_at, row.updated_at, row.deleted_at,
-     row.version, row.client_id],
+     row.version, row.client_id, row.workspace_id],
   );
   return true;
 }
@@ -331,6 +452,7 @@ function applyCloudRowTemplates(row: CloudRow): boolean {
  * uuid; если задача ещё не локальна — откладываем (DeferRowError).
  */
 function applyCloudRowHoldPeriods(row: CloudRow): boolean {
+  row.workspace_id ??= null;
   const local = db.get<{ id: number; updated_at: string }>(
     'SELECT id, updated_at FROM task_hold_periods WHERE uuid=?',
     [row.id],
@@ -339,10 +461,10 @@ function applyCloudRowHoldPeriods(row: CloudRow): boolean {
     if (local.updated_at >= row.updated_at) return false;
     db.run(
       `UPDATE task_hold_periods
-       SET started_at=?, ended_at=?, updated_at=?, deleted_at=?, version=?, client_id=?
+       SET started_at=?, ended_at=?, updated_at=?, deleted_at=?, version=?, client_id=?, workspace_id=?
        WHERE uuid=?`,
       [row.started_at, row.ended_at, row.updated_at, row.deleted_at,
-       row.version, row.client_id, row.id],
+       row.version, row.client_id, row.workspace_id, row.id],
     );
     return true;
   }
@@ -355,8 +477,8 @@ function applyCloudRowHoldPeriods(row: CloudRow): boolean {
   db.run(
     `INSERT INTO task_hold_periods
       (uuid, task_id, started_at, ended_at, created_at, updated_at,
-       deleted_at, version, client_id)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+       deleted_at, version, client_id, workspace_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [
       row.id,
       taskId,
@@ -367,27 +489,234 @@ function applyCloudRowHoldPeriods(row: CloudRow): boolean {
       row.deleted_at,
       row.version,
       row.client_id,
+      row.workspace_id,
     ],
   );
   return true;
 }
 
-/** Карта applier'ов по имени облачной таблицы. */
+/**
+ * workspaces: собственный id (== ws_<uid>) — matched по uuid. LWW по updated_at.
+ * Локальная таблица не имеет user_id; owner_id приходит из облака.
+ */
+function applyCloudRowWorkspaces(row: CloudRow): boolean {
+  const local = db.get<{ id: number; updated_at: string }>(
+    'SELECT id, updated_at FROM workspaces WHERE uuid=?',
+    [row.id],
+  );
+  if (local) {
+    if (local.updated_at >= row.updated_at) return false;
+    db.run(
+      `UPDATE workspaces
+       SET name=?, kind=?, owner_id=?, sort_order=?,
+           updated_at=?, deleted_at=?, version=?, client_id=?
+       WHERE uuid=?`,
+      [row.name, row.kind, row.owner_id, row.sort_order,
+       row.updated_at, row.deleted_at, row.version, row.client_id, row.id],
+    );
+    return true;
+  }
+  db.run(
+    `INSERT INTO workspaces
+      (uuid, name, kind, owner_id, sort_order, created_at, updated_at, deleted_at, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [row.id, row.name, row.kind, row.owner_id, row.sort_order,
+     row.created_at, row.updated_at, row.deleted_at, row.version, row.client_id],
+  );
+  return true;
+}
+
+/**
+ * workspace_members: сначала matched по uuid (серверный id), затем fallback
+ * по натуральному ключу (workspace_id, user_id). LWW по updated_at.
+ *
+ * F17 (ADR 0011): при accept-invite клиент создаёт локальный membership со
+ * СВОИМ случайным uuid (uuidv7), а сервер хранит СВОЙ канонический uuid для той
+ * же пары (workspace_id, user_id). Матчинг только по uuid промахивался мимо
+ * локальной строки → applier уходил в INSERT → ловил
+ * `UNIQUE constraint failed: workspace_members.workspace_id, workspace_members.user_id`
+ * (code 2067), т.к. локальный uuid-индекс НЕ partial и (ws, user) уже занята.
+ * Fallback по паре ловит эту строку и переклеивает uuid на серверный (он —
+ * каноническая идентичность членства).
+ */
+function applyCloudRowMembers(row: CloudRow): boolean {
+  const byUuid = db.get<{ id: number; updated_at: string }>(
+    'SELECT id, updated_at FROM workspace_members WHERE uuid=?',
+    [row.id],
+  );
+  if (byUuid) {
+    if (byUuid.updated_at >= row.updated_at) return false;
+    db.run(
+      `UPDATE workspace_members
+       SET workspace_id=?, user_id=?, role=?, invited_by=?, joined_at=?,
+           updated_at=?, deleted_at=?, version=?, client_id=?
+       WHERE uuid=?`,
+      [row.workspace_id, row.user_id, row.role, row.invited_by, row.joined_at,
+       row.updated_at, row.deleted_at, row.version, row.client_id, row.id],
+    );
+    return true;
+  }
+
+  // F17: по uuid не нашли — ищем ту же пару (workspace_id, user_id). Если она
+  // локально есть, это тот же membership с локальным uuid ≠ серверный. НЕ
+  // вставляем (иначе 2067), а переклеиваем uuid на серверный + LWW по полям.
+  const byPair = db.get<{ id: number; uuid: string | null; updated_at: string }>(
+    'SELECT id, uuid, updated_at FROM workspace_members WHERE workspace_id=? AND user_id=?',
+    [row.workspace_id, row.user_id],
+  );
+  if (byPair) {
+    // Edge case: серверный uuid уже занят ДРУГОЙ локальной строкой (например,
+    // остаток от прошлой неудачной переклейки). Уникальный индекс на uuid не
+    // даст выставить его на byPair — сначала убираем дубликат.
+    const uuidOwner = db.get<{ id: number }>(
+      'SELECT id FROM workspace_members WHERE uuid=? AND id<>?',
+      [row.id, byPair.id],
+    );
+    if (uuidOwner) {
+      db.run('DELETE FROM workspace_members WHERE id=?', [byPair.id]);
+      logger.warn(
+        `[sync/pull] F17: серверный uuid ${row.id} уже принадлежит строке id=${uuidOwner.id}; ` +
+        `удалён дубликат byPair id=${byPair.id} для (ws=${row.workspace_id}, user=${row.user_id})`,
+      );
+      // uuidOwner — каноническая строка (у неё уже серверный uuid). Применяем к
+      // ней LWW, как если бы нашли по uuid.
+      const owner = db.get<{ updated_at: string }>(
+        'SELECT updated_at FROM workspace_members WHERE id=?',
+        [uuidOwner.id],
+      );
+      if (owner && owner.updated_at < row.updated_at) {
+        db.run(
+          `UPDATE workspace_members
+           SET workspace_id=?, user_id=?, role=?, invited_by=?, joined_at=?,
+               updated_at=?, deleted_at=?, version=?, client_id=?
+           WHERE id=?`,
+          [row.workspace_id, row.user_id, row.role, row.invited_by, row.joined_at,
+           row.updated_at, row.deleted_at, row.version, row.client_id, uuidOwner.id],
+        );
+      }
+      return true;
+    }
+
+    // uuid=row.id ВСЕГДА выставляем (серверная идентичность каноническая).
+    // Остальные поля — по LWW: свежее облако → обновляем всё; иначе только uuid.
+    if (byPair.updated_at < row.updated_at) {
+      db.run(
+        `UPDATE workspace_members
+         SET uuid=?, workspace_id=?, user_id=?, role=?, invited_by=?, joined_at=?,
+             updated_at=?, deleted_at=?, version=?, client_id=?
+         WHERE id=?`,
+        [row.id, row.workspace_id, row.user_id, row.role, row.invited_by, row.joined_at,
+         row.updated_at, row.deleted_at, row.version, row.client_id, byPair.id],
+      );
+    } else {
+      db.run('UPDATE workspace_members SET uuid=? WHERE id=?', [row.id, byPair.id]);
+    }
+    return true;
+  }
+
+  db.run(
+    `INSERT INTO workspace_members
+      (uuid, workspace_id, user_id, role, invited_by, joined_at,
+       created_at, updated_at, deleted_at, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    [row.id, row.workspace_id, row.user_id, row.role, row.invited_by, row.joined_at,
+     row.created_at, row.updated_at, row.deleted_at, row.version, row.client_id],
+  );
+  return true;
+}
+
+/**
+ * workspace_settings: серверный PK = (workspace_id, key), нет колонки id.
+ * Matched локально по (workspace_id, key). LWW по updated_at. Локальный uuid —
+ * генерируем при вставке (нужен для outbox/fetchLocal при обратном push'е).
+ */
+function applyCloudRowSettings(row: CloudRow): boolean {
+  const local = db.get<{ id: number; updated_at: string }>(
+    'SELECT id, updated_at FROM workspace_settings WHERE workspace_id=? AND key=?',
+    [row.workspace_id, row.key],
+  );
+  if (local) {
+    if (local.updated_at >= row.updated_at) return false;
+    db.run(
+      `UPDATE workspace_settings
+       SET value=?, updated_at=?, deleted_at=?, version=?, client_id=?
+       WHERE workspace_id=? AND key=?`,
+      [row.value, row.updated_at, row.deleted_at, row.version, row.client_id,
+       row.workspace_id, row.key],
+    );
+    return true;
+  }
+  db.run(
+    `INSERT INTO workspace_settings
+      (uuid, workspace_id, key, value, created_at, updated_at, deleted_at, version, client_id)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [uuidv7(), row.workspace_id, row.key, row.value,
+     row.created_at, row.updated_at, row.deleted_at, row.version, row.client_id],
+  );
+  return true;
+}
+
+/**
+ * task_activity_log: иммутабельный append-only журнал (миграция 0034). Только
+ * INSERT — если строка с таким uuid уже есть локально, ничего не делаем (лог
+ * не меняется). task_id хранится как серверный uuid задачи (без резолюции в
+ * int). payload (jsonb) кладём как JSON-строку. НЕ откладываем при отсутствии
+ * задачи локально: лог самодостаточен (task_id — просто uuid для фильтрации в
+ * UI), а сама задача в shared-ws могла быть soft-deleted и вообще не пуллиться.
+ */
+function applyCloudRowActivityLog(row: CloudRow): boolean {
+  const local = db.get<{ id: number }>(
+    'SELECT id FROM task_activity_log WHERE uuid=?',
+    [row.id],
+  );
+  if (local) return false; // иммутабельно — уже есть, не трогаем
+  db.run(
+    `INSERT INTO task_activity_log
+      (uuid, task_id, workspace_id, user_id, kind, payload, created_at)
+     VALUES (?,?,?,?,?,?,?)`,
+    [
+      row.id,
+      row.task_id,
+      row.workspace_id,
+      row.user_id,
+      row.kind,
+      JSON.stringify(row.payload ?? {}),
+      row.created_at,
+    ],
+  );
+  return true;
+}
+
+/**
+ * Карта applier'ов по имени облачной таблицы.
+ *
+ * F16 (ADR 0010, roadmap §7.16): каждый applier обёрнут withCorruptionGuard —
+ * любая ошибка с признаком физической порчи локальной SQLite (malformed
+ * image / SQLITE_CORRUPT / расхождение unique-индекса с данными) поднимается
+ * как SqliteCorruptError, а не тонет как обычная ошибка строки.
+ */
 const APPLIERS: Record<string, (row: CloudRow) => boolean> = {
-  sync_tasks: applyCloudRowTasks,
-  sync_statuses: applyCloudRowStatuses,
-  sync_tags: applyCloudRowTags,
-  sync_task_templates: applyCloudRowTemplates,
-  sync_overdue_events: applyCloudRowOverdueEvents,
-  sync_task_hold_periods: applyCloudRowHoldPeriods,
+  sync_workspaces: withCorruptionGuard('sync_workspaces', applyCloudRowWorkspaces),
+  sync_workspace_members: withCorruptionGuard('sync_workspace_members', applyCloudRowMembers),
+  sync_workspace_settings: withCorruptionGuard('sync_workspace_settings', applyCloudRowSettings),
+  sync_tasks: withCorruptionGuard('sync_tasks', applyCloudRowTasks),
+  sync_statuses: withCorruptionGuard('sync_statuses', applyCloudRowStatuses),
+  sync_tags: withCorruptionGuard('sync_tags', applyCloudRowTags),
+  sync_task_templates: withCorruptionGuard('sync_task_templates', applyCloudRowTemplates),
+  sync_overdue_events: withCorruptionGuard('sync_overdue_events', applyCloudRowOverdueEvents),
+  sync_task_hold_periods: withCorruptionGuard('sync_task_hold_periods', applyCloudRowHoldPeriods),
+  sync_task_activity_log: withCorruptionGuard('sync_task_activity_log', applyCloudRowActivityLog),
 };
 
 /**
  * Описание курсора для pull. Большинство таблиц пуллятся по updated_at,
- * а overdue_events — по id (uuidv7 монотонный).
+ * overdue_events — по id (uuidv7 монотонный), а иммутабельный журнал активности
+ * (нет updated_at) — по created_at.
  */
-function cursorColumnFor(cloudTable: string): 'updated_at' | 'id' {
-  return cloudTable === 'sync_overdue_events' ? 'id' : 'updated_at';
+function cursorColumnFor(cloudTable: string): 'updated_at' | 'id' | 'created_at' {
+  if (cloudTable === 'sync_overdue_events') return 'id';
+  if (cloudTable === 'sync_task_activity_log') return 'created_at';
+  return 'updated_at';
 }
 
 /** Ключ settings для last_pulled cursor value. */
@@ -411,13 +740,35 @@ export interface PullResult {
   deferred: number;
   /** Первая ошибка. */
   firstError: string | null;
+  /**
+   * F14: максимальный курсор, достигнутый в этом батче. Нужен для in-memory
+   * пагинации ПОЛНОГО pull (когда курсор в settings НЕ продвигается) — чтобы
+   * следующий батч читал с `.gt(maxCursor)`, а не бесконечно перечитывал первые
+   * PULL_BATCH_SIZE строк от epoch.
+   */
+  maxCursor?: string;
+  /**
+   * F16 (ADR 0010, roadmap §7.16): локальная SQLite оказалась повреждена во время
+   * apply. Когда true — pullAll НЕ вызывает prunePhantomWorkspaces за этот цикл.
+   */
+  corruption?: boolean;
 }
 
 /**
  * Пуллит одну таблицу. Обновляет last_pulled_at на max(updated_at).
+ *
+ * Скоуп: таблицы с user_id фильтруются по user_id; таблицы без него
+ * (sync_workspace_settings) — по workspace_id IN (<мои ws>). Курсор хранится
+ * per-ws (ключ по первому/personal ws — в Wave A он один).
  */
-async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
+async function pullTable(
+  userId: string,
+  spec: TableSpec,
+  workspaceIds: string[],
+  opts?: { fullFrom?: string },
+): Promise<PullResult> {
   const result: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
+  let _corruptError: SqliteCorruptError | null = null;
   const applier = APPLIERS[spec.cloud];
   if (!applier) {
     logger.warn(`[sync/pull] no applier for ${spec.cloud}, skipping`);
@@ -425,15 +776,31 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
   }
 
   const cursorCol = cursorColumnFor(spec.cloud);
-  const lastPulled = getLastPulledAt(spec.cloud, cursorCol);
+  const cursorWs = workspaceIds[0] ?? null;
+  // F14: ПОЛНЫЙ pull (fullFrom задан) читает от переданного курсора (для первого
+  // батча — epoch) и НЕ трогает сохранённый в settings курсор. Так членство на
+  // каждом старте перечитывается целиком (чинит симптомы 1 и 3), а data-таблицы
+  // остаются инкрементальными по своему per-ws курсору.
+  const full = opts?.fullFrom !== undefined;
+  const lastPulled = full ? opts!.fullFrom! : getLastPulledAt(spec.cloud, cursorCol, cursorWs);
+  result.maxCursor = lastPulled;
   try {
-    const { data, error } = await supabase
-      .from(spec.cloud)
-      .select('*')
-      .eq('user_id', userId)
+    // Скоуп-фильтр первым. P0: почти всё тянем по пространству (workspace_id IN
+    // <мои ws> для data-таблиц; id IN <мои ws> для самой sync_workspaces, где id
+    // и есть ws-id). По user_id остаётся только членство — вход в набор ws.
+    let scoped;
+    if (spec.pullScope === 'workspace_id') {
+      scoped = supabase.from(spec.cloud).select('*').in('workspace_id', workspaceIds);
+    } else if (spec.pullScope === 'id') {
+      scoped = supabase.from(spec.cloud).select('*').in('id', workspaceIds);
+    } else {
+      scoped = supabase.from(spec.cloud).select('*').eq('user_id', userId);
+    }
+    const query = scoped
       .gt(cursorCol, lastPulled)
       .order(cursorCol, { ascending: true })
       .limit(PULL_BATCH_SIZE);
+    const { data, error } = await query;
     if (error) throw new Error(error.message);
     if (!data || data.length === 0) return result;
 
@@ -453,6 +820,15 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
         const rowCursor = String((raw as any)[cursorCol] ?? '');
         if (!cursorFrozen && rowCursor > maxCursor) maxCursor = rowCursor;
       } catch (e) {
+        if (e instanceof SqliteCorruptError) {
+          // F16: фатально — прерываем цикл по этой таблице сразу. Не двигаем
+          // курсор (он и так не сдвинут — база повреждена, писать в settings опасно).
+          logger.error(`[sync/pull] ${spec.cloud} SQLITE_CORRUPT, aborting table apply:`, e.message);
+          result.corruption = true;
+          result.firstError = e.message;
+          _corruptError = e;
+          break;
+        }
         const msg = e instanceof Error ? e.message : String(e);
         if (e instanceof DeferRowError) {
           // ОЖИДАЕМОЕ отложение (parent ещё не пришёл) — НЕ считаем ошибкой sync.
@@ -470,9 +846,16 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
       }
     }
 
+    if (_corruptError) {
+      return result; // F16: не сохраняем прогресс/курсор, флаг/error уже выставлены
+    }
+
     // Сохраняем прогресс. Если applied+skipped == батч, возможно есть ещё —
-    // orchestrator позовёт нас снова.
-    setLastPulledAt(spec.cloud, maxCursor);
+    // orchestrator позовёт нас снова. F14: при ПОЛНОМ pull курсор в settings НЕ
+    // продвигаем (иначе следующий старт снова станет инкрементальным); отдаём
+    // maxCursor вызывающему для in-memory пагинации этого же прохода.
+    result.maxCursor = maxCursor;
+    if (!full) setLastPulledAt(spec.cloud, maxCursor, cursorWs);
     logger.info(
       `[sync/pull] ${spec.cloud}: +${result.applied} applied, ${result.skipped} skipped, ${result.deferred} deferred`,
     );
@@ -486,24 +869,180 @@ async function pullTable(userId: string, spec: TableSpec): Promise<PullResult> {
 }
 
 /**
- * Полный pull: пуллит все таблицы в порядке PUSH_ORDER (parent'ы первыми).
+ * Полный pull: пуллит все таблицы в порядке PULL_ORDER (parent'ы первыми,
+ * пулл-only журнал активности в конце).
  * Если applied+skipped == PULL_BATCH_SIZE — было много изменений, идём
  * следующей итерацией той же таблицы (max 5 итераций).
  */
 export async function pullAll(userId: string): Promise<PullResult> {
   const total: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
-  for (const spec of PUSH_ORDER) {
-    for (let i = 0; i < 5; i++) {
-      const r = await pullTable(userId, spec);
-      total.applied += r.applied;
-      total.skipped += r.skipped;
-      total.deferred += r.deferred;
-      if (!total.firstError && r.firstError) total.firstError = r.firstError;
-      if (r.applied + r.skipped < PULL_BATCH_SIZE) break;
-      // Иначе — было batch_size, возможно есть ещё.
+
+  try {
+    // ── Фаза 1: членство (F14: ПОЛНЫЙ pull в двух скопах, без инкремент-курсора) ─
+    // Проход A (вход в набор): свои строки членства (user_id=me), ПОЛНО — читаем от
+    // epoch, игнорируя сохранённый курсор. Строку членства в чужом shared-ws создаёт
+    // серверный accept_invite (user_id=me). Полнота чинит симптом 3: локально
+    // погашенные/удалённые prune'ом свои membership-строки восстанавливаются на
+    // КАЖДОМ старте (инкрементальный курсор «в будущем» их больше не приносил).
+    await pullSpecPaged(userId, WORKSPACE_MEMBERS_SPEC, listMembershipWorkspaceIds(userId), total, { full: true });
+    if (total.corruption) return total;
+
+    // ── Набор пространств ──────────────────────────────────────────────────────
+    // Пересчитываем ПОСЛЕ прохода A из СВЕЖЕподтянутого членства (а не из локальной
+    // таблицы workspaces) — так чужой ws попадает в набор, разрывая chicken-and-egg.
+    const workspaceIds = listMembershipWorkspaceIds(userId);
+
+    // Проход B (со-участники): членство по `workspace_id IN (мои ws)`, тоже ПОЛНО.
+    // Даёт строки owner/других editor'ов того же ws (чинит симптом 1 — участники
+    // shared не видны). Серверный RLS (has_workspace_role viewer+) отдаёт их —
+    // подтверждено прод-пробой. Клон spec с pullScope='workspace_id'.
+    const membersByWorkspaceSpec: TableSpec = { ...WORKSPACE_MEMBERS_SPEC, pullScope: 'workspace_id' };
+    await pullSpecPaged(userId, membersByWorkspaceSpec, workspaceIds, total, { full: true });
+    if (total.corruption) return total;
+
+    // ── Фаза 2: пространства и их данные ────────────────────────────────────────
+    // Тянем каждое пространство ОТДЕЛЬНО, чтобы у каждого был свой per-ws курсор:
+    // иначе свежедобавленный shared-ws со «старыми» updated_at был бы отсечён общим
+    // курсором ведущего ws (его lastPulled уже «в будущем» относительно тех строк).
+    const phase2 = PULL_ORDER.filter(s => s.cloud !== WORKSPACE_MEMBERS_SPEC.cloud);
+    for (const ws of workspaceIds) {
+      for (const spec of phase2) {
+        await pullSpecPaged(userId, spec, [ws], total);
+        if (total.corruption) return total;
+      }
     }
+
+    prunePhantomWorkspaces(userId);
+    return total;
+  } catch (e) {
+    // F16 (ADR 0010, roadmap §7.16): страховочная сетка — если SqliteCorruptError
+    // всё же долетит сюда напрямую (а не через total.corruption), не даём pullAll
+    // упасть с необработанным исключением и не зовём prunePhantomWorkspaces.
+    if (e instanceof SqliteCorruptError) {
+      logger.error('[sync/pull] pullAll aborted: SqliteCorruptError:', e.message);
+      return { ...total, corruption: true, firstError: e.message };
+    }
+    throw e;
   }
-  return total;
+}
+
+/**
+ * Пуллит один spec с пагинацией (до 5 батчей PULL_BATCH_SIZE) и агрегирует
+ * результат в total. Вынесено из pullAll, чтобы переиспользовать в обеих фазах.
+ */
+async function pullSpecPaged(
+  userId: string,
+  spec: TableSpec,
+  workspaceIds: string[],
+  total: PullResult,
+  opts?: { full?: boolean },
+): Promise<void> {
+  // F14: при ПОЛНОМ pull курсор в settings не продвигается, поэтому пагинацию
+  // ведём in-memory — от epoch, затем от maxCursor предыдущего батча. Иначе при
+  // >PULL_BATCH_SIZE строк мы бы бесконечно перечитывали первый батч.
+  let fullCursor = opts?.full ? initialCursorValue(spec.cloud) : undefined;
+  for (let i = 0; i < 5; i++) {
+    const r = await pullTable(
+      userId,
+      spec,
+      workspaceIds,
+      opts?.full ? { fullFrom: fullCursor } : undefined,
+    );
+    total.applied += r.applied;
+    total.skipped += r.skipped;
+    total.deferred += r.deferred;
+    if (!total.firstError && r.firstError) total.firstError = r.firstError;
+    if (r.corruption) {
+      // F16 (ADR 0010, roadmap §7.16): локальная SQLite повреждена — прерываем
+      // пагинацию этого spec сразу, поднимаем флаг в total — pullAll проверяет
+      // его после каждого вызова pullSpecPaged и останавливается, не дойдя
+      // до prunePhantomWorkspaces.
+      total.corruption = true;
+      return;
+    }
+    if (r.applied + r.skipped < PULL_BATCH_SIZE) break;
+    // Иначе — было batch_size, возможно есть ещё.
+    if (opts?.full && r.maxCursor) fullCursor = r.maxCursor;
+  }
+}
+
+/**
+ * Bug #1 (фикс #1): подчистка «фантомных» пространств прошлых аккаунтов.
+ *
+ * После pull'а членство текущего пользователя (`workspace_members` с активным
+ * `deleted_at IS NULL`) — источник истины о том, к каким ws он ПРИНАДЛЕЖИТ.
+ * RLS на сервере возвращает членство только для этих ws, поэтому локальные
+ * строки `workspaces`/`workspace_members`/`workspace_settings` для ws, которых
+ * нет в этом наборе, — это остатки прошлого аккаунта или старых экспериментов,
+ * просочившиеся в локальный SQLite. Удаляем их, чтобы они не рисовались в
+ * сайдбаре.
+ *
+ * Набор допустимых ws строится по ЧЛЕНСТВУ текущего пользователя (а не по
+ * `owner_id`), поэтому shared-пространства, где юзер — editor/viewer, сохраняются.
+ * В набор всегда включаем детерминированный personal-ws (`ws_<uid>`) и локальный
+ * placeholder `ws_local` — на случай, если членство ещё не подтянулось (холодный
+ * старт) или reconcile ещё не переклеил local-only базу.
+ *
+ * @returns число удалённых строк из таблицы `workspaces` (для логов/тестов).
+ */
+function prunePhantomWorkspaces(userId: string): number {
+  // F16 (ADR 0010, roadmap §7.16): если в текущем цикле pull локальная SQLite
+  // оказалась повреждена (флаг ставится в detectAndRecoverCorruption/withCorruptionGuard),
+  // не чистим фантомные ws прямо после того, как база была битой — ещё нет
+  // подтверждения, что membership успело восстановиться, и pruning снесёт рабочие
+  // shared workspaces (исходный симптом F16 — пустой сайдбар после рестарта).
+  if (typeof window !== 'undefined' && (window as any).__taskflow_corruption_recovered) {
+    logger.warn('[sync/pull] prunePhantomWorkspaces skipped: DB was corrupt this cycle');
+    return 0;
+  }
+
+  const allowed = new Set<string>([computeWorkspaceId(userId), LOCAL_WS_ID]);
+  try {
+    const rows = db.all<{ workspace_id: string | null }>(
+      `SELECT DISTINCT workspace_id FROM workspace_members
+        WHERE user_id=? AND deleted_at IS NULL`,
+      [userId],
+    );
+    for (const r of rows) if (r.workspace_id) allowed.add(r.workspace_id);
+  } catch {
+    // Таблицы workspace_members нет на базе до v11 — чистить нечего.
+    return 0;
+  }
+
+  // Регрессия D/E: только что созданные локально ws (и их owner-membership) ещё
+  // не подтверждены pull'ом — они висят в sync_outbox. Не сносим их, иначе pull
+  // удалит свежесозданный shared-ws до первого round-trip, и он «исчезнет».
+  try {
+    const pend = db.all<{ workspace_id: string | null }>(
+      `SELECT entity_uuid AS workspace_id FROM sync_outbox WHERE entity_table='workspaces'
+       UNION
+       SELECT m.workspace_id FROM sync_outbox o
+         JOIN workspace_members m ON m.uuid = o.entity_uuid
+        WHERE o.entity_table='workspace_members'`,
+    );
+    for (const r of pend) if (r.workspace_id) allowed.add(r.workspace_id);
+  } catch { /* sync_outbox недоступен в отдельных путях — не критично */ }
+
+  const ids = [...allowed];
+  const placeholders = ids.map(() => '?').join(',');
+  let removed = 0;
+  try {
+    const phantoms = db.all<{ uuid: string }>(
+      `SELECT uuid FROM workspaces
+        WHERE uuid IS NOT NULL AND uuid NOT IN (${placeholders})`,
+      ids,
+    );
+    removed = phantoms.length;
+    if (removed > 0) {
+      db.run(`DELETE FROM workspaces WHERE uuid NOT IN (${placeholders})`, ids);
+      db.run(`DELETE FROM workspace_members WHERE workspace_id NOT IN (${placeholders})`, ids);
+      db.run(`DELETE FROM workspace_settings WHERE workspace_id NOT IN (${placeholders})`, ids);
+      logger.info(`[sync/pull] удалено фантомных пространств: ${removed}`);
+    }
+  } catch (e) {
+    logger.warn('[sync/pull] prunePhantomWorkspaces failed:', e);
+  }
+  return removed;
 }
 
 // Экспорт для тестов
@@ -516,6 +1055,12 @@ export const _internals = {
   applyCloudRowTemplates,
   applyCloudRowOverdueEvents,
   applyCloudRowHoldPeriods,
+  applyCloudRowWorkspaces,
+  applyCloudRowMembers,
+  applyCloudRowSettings,
+  applyCloudRowActivityLog,
+  prunePhantomWorkspaces,
+  lastPulledKey,
   cursorColumnFor,
   initialCursorValue,
   lastPulledCursorKey,

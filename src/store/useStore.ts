@@ -3,6 +3,8 @@
 import { create } from 'zustand';
 import * as db from '../lib/db';
 import type { Lang } from '../lib/i18n';
+import { tr } from '../lib/i18n';
+import { computeWorkspaceId, LOCAL_WS_ID } from '../lib/sync/workspace';
 import { detectOverdueEvents, detectOverdueEventForTask } from '../lib/overdue';
 import { recordHoldTransition } from '../lib/holdPeriods';
 import { todayISO } from '../lib/utils';
@@ -11,6 +13,7 @@ import { logger } from '../lib/logger';
 import { uuidv7 } from '../lib/uuid';
 import { getClientId } from '../lib/clientId';
 import { enqueueOutbox } from '../lib/outbox';
+import { SEED_STATUSES } from '../lib/seedData';
 
 export type ThemeName = 'light' | 'dark' | 'akatsuki' | 'konoha' | 'custom';
 
@@ -32,6 +35,8 @@ export interface Status {
   version?: number;
   client_id?: string | null;
   updated_at?: string | null;
+  // Wave A (workspaces): к какому пространству относится строка.
+  workspace_id?: string | null;
 }
 export interface Tag {
   id: number;
@@ -44,6 +49,8 @@ export interface Tag {
   version?: number;
   client_id?: string | null;
   updated_at?: string | null;
+  // Wave A (workspaces): к какому пространству относится строка.
+  workspace_id?: string | null;
 }
 export interface Task {
   id: number;
@@ -64,6 +71,34 @@ export interface Task {
   deleted_at?: string | null;
   version?: number;
   client_id?: string | null;
+  // Wave A (workspaces): к какому пространству относится строка.
+  workspace_id?: string | null;
+}
+
+/**
+ * Wave A (workspaces): пространство. Локальное зеркало таблицы `workspaces`.
+ * `id` — серверный ws-id (`ws_<uid>` для personal, `ws_local` для local-only).
+ */
+export interface Workspace {
+  id: string;                       // = workspaces.uuid (серверный ws-id)
+  name: string;
+  kind: 'personal' | 'shared' | string;
+  owner_id: string | null;
+  sort_order: number;
+}
+
+/**
+ * Wave A (workspaces): участник пространства. Локальное зеркало таблицы
+ * `workspace_members`. `id` — серверный uuid строки членства; `user_id` —
+ * uuid пользователя; `role` — owner/editor/viewer.
+ */
+export interface WorkspaceMember {
+  id: string;                       // = workspace_members.uuid (серверный id)
+  workspace_id: string;
+  user_id: string | null;
+  role: 'owner' | 'editor' | 'viewer' | string;
+  invited_by: string | null;
+  joined_at: string | null;
 }
 
 // v0.8.13: шаблон задачи — образец, из которого одним кликом создаётся новая задача.
@@ -83,6 +118,8 @@ export interface TaskTemplate {
   deleted_at?: string | null;
   version?: number;
   client_id?: string | null;
+  // Wave A (workspaces): к какому пространству относится строка.
+  workspace_id?: string | null;
 }
 
 interface State {
@@ -90,6 +127,16 @@ interface State {
   statuses: Status[];        // all statuses incl technical (for stats)
   tags: Tag[];
   tasks: Task[];             // all tasks incl archived/deleted (full set)
+  // Wave A (workspaces): текущее пространство + список доступных пространств.
+  // Persist'ится в settings.current_workspace_id. Все страницы читают данные
+  // через ws-scoped хуки (useCurrentWorkspace*), фильтруя по currentWorkspaceId.
+  currentWorkspaceId: string | null;
+  workspaces: Workspace[];
+  // Wave A (workspaces, PR-4): участники всех известных пространств + uuid
+  // привязанного пользователя (settings.bound_user_id). Нужны ролевым хукам
+  // (useCurrentWorkspaceRole) и вкладке «Участники».
+  workspaceMembers: WorkspaceMember[];
+  boundUserId: string | null;
   language: Lang;
   theme: ThemeName;
   statsEnabled: boolean;
@@ -130,6 +177,24 @@ interface State {
 
   init(): Promise<void>;
   refresh(): void;
+
+  // Wave A (workspaces): управление текущим пространством.
+  setWorkspaces(list: Workspace[]): void;
+  loadWorkspaces(): void;                 // перечитать список из локальной БД + выбрать дефолт
+  loadWorkspaceMembers(): void;           // перечитать участников из локальной БД
+  reloadAccountBinding(): void;           // Fix 2: перечитать bound_user_id + ws/members из БД
+  switchWorkspace(id: string): void;      // сменить текущее ws (persist + refresh + resync)
+
+  // Wave A (workspaces, PR-4): CRUD пространств. Все — локальная запись в SQLite
+  // + enqueueOutbox для последующего push'а в облако.
+  createWorkspace(name: string, kind: 'personal' | 'shared'): string; // → id нового ws
+  renameWorkspace(id: string, name: string): void;                     // owner-only (UI-гейт)
+  deleteWorkspace(id: string): void;                                   // soft-delete + switch на personal
+
+  // Управление участниками текущего (shared) пространства.
+  addWorkspaceMember(userId: string, role: 'editor' | 'viewer'): void;
+  updateWorkspaceMemberRole(memberId: string, role: 'owner' | 'editor' | 'viewer'): void;
+  removeWorkspaceMember(memberId: string): void;
 
   setLanguage(l: Lang): void;
   setTheme(t: ThemeName): void;
@@ -196,6 +261,260 @@ interface State {
 
 let toastId = 0;
 
+// ── Wave A (workspaces): чтение пространств из локальной БД ──────────────────
+
+/**
+ * Прочитать список активных пространств из локальной таблицы `workspaces`.
+ *
+ * Bug #1 (фантомные пространства): список строится ТОЛЬКО из пространств, где у
+ * текущего пользователя (settings.bound_user_id) есть живое членство в
+ * `workspace_members` (deleted_at IS NULL). Иначе в сайдбар просачиваются
+ * чужие personal-ws и остатки прошлых аккаунтов, осевшие в локальном SQLite.
+ *
+ * Скоуп строится по МЕМБЕРШИПУ (а не owner_id) — иначе поломается shared-сценарий,
+ * где участник видит чужой workspace, в котором он состоит.
+ *
+ * Local-only база (bound_user_id ещё нет — вход не выполнялся): фильтр не
+ * применяем, показываем всё (одна БД = один локальный пользователь).
+ */
+function readWorkspacesFromDb(): Workspace[] {
+  try {
+    const boundUserId = (readSetting('bound_user_id') || '').trim() || null;
+    const rows = boundUserId
+      ? db.all<{
+          uuid: string | null; name: string; kind: string;
+          owner_id: string | null; sort_order: number;
+        }>(
+          `SELECT w.uuid, w.name, w.kind, w.owner_id, w.sort_order
+             FROM workspaces w
+            WHERE w.uuid IS NOT NULL AND w.deleted_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM workspace_members m
+                 WHERE m.workspace_id = w.uuid
+                   AND m.user_id = ?
+                   AND m.deleted_at IS NULL
+              )
+            ORDER BY w.sort_order, w.id`,
+          [boundUserId],
+        )
+      : db.all<{
+          uuid: string | null; name: string; kind: string;
+          owner_id: string | null; sort_order: number;
+        }>(
+          `SELECT uuid, name, kind, owner_id, sort_order
+             FROM workspaces
+            WHERE uuid IS NOT NULL AND deleted_at IS NULL
+            ORDER BY sort_order, id`,
+        );
+    const list: Workspace[] = rows
+      .filter(r => !!r.uuid)
+      .map(r => ({
+        id: r.uuid as string,
+        name: r.name,
+        kind: r.kind,
+        owner_id: r.owner_id ?? null,
+        sort_order: r.sort_order ?? 0,
+      }));
+    // Регрессия D/E: personal-ws (и ws_local) обязаны быть в сайдбаре ВСЕГДА —
+    // даже если строка членства ещё не подтянулась (до первого pull, после
+    // clearUserData, при рассинхроне bound_user_id). Иначе EXISTS-фильтр выше
+    // отсеивает personal и экран пуст.
+    if (boundUserId) {
+      ensurePersonalInList(list, boundUserId);
+    }
+    return list;
+  } catch {
+    // Таблица workspaces отсутствует на базе до v11 — не критично.
+    return [];
+  }
+}
+
+/**
+ * Гарантировать, что в списке пространств присутствует personal-ws текущего
+ * пользователя (`ws_<uid>`) и, если он локально есть, `ws_local`. Если строки
+ * ws нет вовсе — синтезируем минимальный personal, чтобы переключателю всегда
+ * было куда встать (writer'ы всё равно создадут строку при первом изменении).
+ */
+function ensurePersonalInList(list: Workspace[], boundUserId: string): void {
+  const addByIdIfMissing = (wsId: string, synthesize: boolean) => {
+    if (list.some(w => w.id === wsId)) return;
+    let row: { uuid: string | null; name: string; kind: string; owner_id: string | null; sort_order: number } | null | undefined;
+    try {
+      row = db.get(
+        'SELECT uuid, name, kind, owner_id, sort_order FROM workspaces WHERE uuid=? AND deleted_at IS NULL',
+        [wsId],
+      );
+    } catch { /* таблицы может не быть до v11 */ }
+    if (row?.uuid) {
+      list.unshift({
+        id: row.uuid,
+        name: row.name,
+        kind: row.kind,
+        owner_id: row.owner_id ?? null,
+        sort_order: row.sort_order ?? 0,
+      });
+    } else if (synthesize) {
+      logger.warn('[useStore] personal workspace row missing — synthesizing sidebar entry:', wsId);
+      list.unshift({ id: wsId, name: 'Мои задачи', kind: 'personal', owner_id: boundUserId, sort_order: 0 });
+    }
+  };
+  addByIdIfMissing(computeWorkspaceId(boundUserId), true);
+  addByIdIfMissing(LOCAL_WS_ID, false);
+}
+
+/** Прочитать участников всех пространств из локальной таблицы `workspace_members`. */
+function readMembersFromDb(): WorkspaceMember[] {
+  try {
+    const rows = db.all<{
+      uuid: string | null; workspace_id: string; user_id: string | null;
+      role: string; invited_by: string | null; joined_at: string | null;
+    }>(
+      `SELECT uuid, workspace_id, user_id, role, invited_by, joined_at
+         FROM workspace_members
+        WHERE deleted_at IS NULL
+        ORDER BY joined_at, id`,
+    );
+    return rows
+      .filter(r => !!r.uuid)
+      .map(r => ({
+        id: r.uuid as string,
+        workspace_id: r.workspace_id,
+        user_id: r.user_id ?? null,
+        role: r.role,
+        invited_by: r.invited_by ?? null,
+        joined_at: r.joined_at ?? null,
+      }));
+  } catch {
+    // Таблицы нет на базе до v11 — не критично.
+    return [];
+  }
+}
+
+/** Прочитать один ключ из settings (или null). */
+function readSetting(key: string): string | null {
+  try {
+    return db.get<{ value: string }>('SELECT value FROM settings WHERE key=?', [key])?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Выбрать пространство по умолчанию: personal (settings.personal_workspace_id),
+ * иначе первое personal, иначе первое из списка, иначе null.
+ */
+function pickDefaultWorkspaceId(list: Workspace[]): string | null {
+  const personalId = readSetting('personal_workspace_id');
+  if (personalId && list.some(w => w.id === personalId)) return personalId;
+  const firstPersonal = list.find(w => w.kind === 'personal');
+  if (firstPersonal) return firstPersonal.id;
+  return list[0]?.id ?? null;
+}
+
+/**
+ * F31: гидрировать `currentWorkspaceId` из settings ТОЧНО ТАК ЖЕ, как это
+ * делал `init()` (холодный старт — работает у пользователя). Извлечено в
+ * отдельный helper, чтобы reloadAccountBinding() (путь смены аккаунта) мог
+ * переиспользовать ровно ту же логику вместо того, чтобы оставлять
+ * in-memory currentWorkspaceId залипшим от предыдущего аккаунта.
+ *
+ * Логика (буквально то, что раньше было инлайном в init()):
+ *  1. читаем `current_workspace_id` из settings;
+ *  2. если он валиден в переданном наборе `workspaces` — используем его;
+ *  3. иначе — `pickDefaultWorkspaceId(workspaces)`;
+ *  4. если итоговый id отличается от сохранённого — синхронно персистим
+ *     обратно в settings (чтобы дефолт закрепился, а не пересчитывался
+ *     на каждый вызов).
+ *
+ * Чистая функция относительно параметров (кроме чтения/записи settings через
+ * db) — возвращает выбранный id (или null, если пространств нет вовсе).
+ */
+function hydrateCurrentWorkspaceId(workspaces: Workspace[]): string | null {
+  const savedWsId = (readSetting('current_workspace_id') || '').trim() || null;
+  const currentWorkspaceId =
+    savedWsId && workspaces.some(w => w.id === savedWsId)
+      ? savedWsId
+      : pickDefaultWorkspaceId(workspaces);
+  // Синхронизируем persist, если дефолт отличается от сохранённого.
+  if (currentWorkspaceId && currentWorkspaceId !== savedWsId) {
+    try {
+      db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['current_workspace_id', currentWorkspaceId]);
+    } catch (e) { console.warn('[hydrateCurrentWorkspaceId] persist current_workspace_id failed:', e); }
+  }
+  return currentWorkspaceId;
+}
+
+/**
+ * ws-id для НОВОЙ строки: текущее пространство стора, иначе persist'нутый
+ * current_workspace_id, иначе personal_workspace_id. Гарантирует, что новые
+ * задачи/статусы/теги/шаблоны не создаются с NULL workspace_id (иначе они
+ * выпадут из ws-scoped выборок и не пройдут серверный NOT NULL).
+ */
+function resolveWriteWorkspaceId(current: string | null): string | null {
+  return current || readSetting('current_workspace_id') || readSetting('personal_workspace_id');
+}
+
+/**
+ * Bug #4: сев эталонных статусов при создании нового пространства.
+ *
+ * Раньше новые ws создавались пустыми — ни статусов, ни колонок на доске, задачи
+ * некуда положить. Сеем те же 7 эталонных статусов (SEED_STATUSES, единый
+ * источник правды из lib/seedData), что и при первичной инициализации
+ * personal-ws, но с workspace_id нового пространства. Статусы создаются на
+ * клиенте с UUIDv7 + client_id и ставятся в outbox → уходят в облако штатным
+ * push по PUSH_ORDER (та же модель, что и addStatus). Для shared-участника
+ * статусы приезжают pull'ом от owner — этот путь не трогаем.
+ *
+ * Идемпотентно: если в ws уже есть живые статусы — no-op (защита от повторного
+ * сева при ретраях/pull). Возвращает число засеянных статусов.
+ */
+function seedDefaultStatuses(wsId: string): number {
+  const existing =
+    db.get<{ c: number }>(
+      'SELECT COUNT(*) AS c FROM statuses WHERE workspace_id=? AND deleted_at IS NULL',
+      [wsId],
+    )?.c ?? 0;
+  if (existing > 0) return 0;
+
+  const now = new Date().toISOString();
+  const clientId = getClientId();
+  for (let i = 0; i < SEED_STATUSES.length; i++) {
+    const s = SEED_STATUSES[i];
+    const rowUuid = uuidv7();
+    db.run(
+      `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed,
+                             uuid, client_id, version, updated_at, workspace_id)
+       VALUES (?,?,?,?,1,?,?,?,?,?,1,?,?)`,
+      [s.name, s.color, s.behavior, i, s.is_technical, s.hidden, s.default_collapsed,
+       rowUuid, clientId, now, wsId],
+    );
+    enqueueOutbox('statuses', rowUuid, 'upsert');
+  }
+  return SEED_STATUSES.length;
+}
+
+/**
+ * overdue_mode ТЕКУЩЕГО пространства из workspace_settings.
+ * Приоритет: workspace_settings(ws,'overdue_mode') → глобальный settings.overdue_mode
+ * (легаси-фолбэк) → 'calendar'.
+ */
+function readOverdueModeForWs(wsId: string | null): 'calendar' | 'business' {
+  if (wsId) {
+    try {
+      const row = db.get<{ value: string | null }>(
+        `SELECT value FROM workspace_settings
+          WHERE workspace_id=? AND key='overdue_mode' AND deleted_at IS NULL`,
+        [wsId],
+      );
+      if (row?.value === 'business') return 'business';
+      if (row?.value === 'calendar') return 'calendar';
+    } catch {
+      // Таблица отсутствует (база до v11) — падаем на легаси-ключ ниже.
+    }
+  }
+  return readSetting('overdue_mode') === 'business' ? 'business' : 'calendar';
+}
+
 // v0.9.35-dev.6.10.5: отложенные (в пределах окна Undo) permanent-delete'ы.
 // Ключ — id задачи, значение — таймер. Модульный уровень: переживает
 // перемонтирование страницы Статистики, чтобы окно отмены не срывалось при
@@ -207,6 +526,10 @@ export const useStore = create<State>((set, get) => ({
   statuses: [],
   tags: [],
   tasks: [],
+  currentWorkspaceId: null,
+  workspaces: [],
+  workspaceMembers: [],
+  boundUserId: null,
   language: 'ru',
   theme: 'light',
   statsEnabled: true,
@@ -260,6 +583,16 @@ export const useStore = create<State>((set, get) => ({
     let initError: string | null = null;
     try {
       await db.initDb();
+      // F32 (ADR 0025): идемпотентный ремонт задач, чей status_id указывает на
+      // статус ЧУЖОГО workspace (испорчено предыдущим багом applyBackup —
+      // перепривязка статусов по имени без учёта workspace_id). Чиним ДО
+      // первого refresh(), чтобы доска сразу увидела верно привязанные задачи.
+      // Безопасно при повторных запусках — no-op, если mismatch уже устранён.
+      try {
+        await db.repairTaskStatusWorkspaceMismatch();
+      } catch (e) {
+        console.error('[init] repairTaskStatusWorkspaceMismatch failed:', e);
+      }
       get().refresh();
     } catch (e: any) {
       initError = String(e?.message || e || 'Unknown error');
@@ -284,8 +617,25 @@ export const useStore = create<State>((set, get) => ({
       if (Array.isArray(parsed)) recentEmojis = parsed.filter((x): x is string => typeof x === 'string').slice(0, 12);
     } catch {}
     const quote = pickQuote(quoteSetFor(theme), language);
+
+    // Wave A (workspaces): список пространств + текущее пространство.
+    // Если сохранённый current_workspace_id пуст или указывает на несуществующее
+    // пространство — падаем на personal-пространство по умолчанию.
+    const workspaces = readWorkspacesFromDb();
+    const workspaceMembers = readMembersFromDb();
+    const boundUserId = (map.bound_user_id || '').trim() || null;
+    // F31: логика выбора current workspace вынесена в hydrateCurrentWorkspaceId
+    // (переиспользуется reloadAccountBinding() на пути смены аккаунта). Поведение
+    // init() не изменилось — это чистый рефактор, helper делает то же самое, что
+    // раньше было инлайном здесь.
+    const currentWorkspaceId = hydrateCurrentWorkspaceId(workspaces);
+
     set({
       ready: true,
+      currentWorkspaceId,
+      workspaces,
+      workspaceMembers,
+      boundUserId,
       language,
       theme,
       statsEnabled: map.stats_enabled !== '0',
@@ -294,8 +644,10 @@ export const useStore = create<State>((set, get) => ({
       defaultTab: (map.default_tab === 'add' || !map.default_tab) ? 'tasks' : map.default_tab,
       // v0.9.0: вид страницы Задачи — список по умолчанию
       tasksView: (map.tasks_view === 'kanban' ? 'kanban' : 'list') as 'list' | 'kanban',
-      // v0.9.2 (№1): режим подсчёта просрочки — календарные дни по умолчанию
-      overdueMode: (map.overdue_mode === 'business' ? 'business' : 'calendar') as 'calendar' | 'business',
+      // v0.9.2 (№1): режим подсчёта просрочки — календарные дни по умолчанию.
+      // Wave A: берём режим ТЕКУЩЕГО пространства из workspace_settings
+      // (фолбэк — легаси settings.overdue_mode → 'calendar').
+      overdueMode: readOverdueModeForWs(currentWorkspaceId),
       // v0.9.8: автопроверка обновлений — включена по умолчанию
       autoUpdateEnabled: map.auto_update_enabled !== '0',
       // v0.9.28: автоочистка — opt-out только для новых БД. Старые БД — opt-in.
@@ -390,6 +742,250 @@ export const useStore = create<State>((set, get) => ({
     });
   },
 
+  // ── Wave A (workspaces) ──────────────────────────────────────────────────
+
+  setWorkspaces(list) {
+    set({ workspaces: list });
+    // Если текущее пространство исчезло из набора — выбираем дефолт.
+    const cur = get().currentWorkspaceId;
+    if (!cur || !list.some(w => w.id === cur)) {
+      const next = pickDefaultWorkspaceId(list);
+      if (next && next !== cur) {
+        set({ currentWorkspaceId: next, overdueMode: readOverdueModeForWs(next) });
+        try {
+          db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['current_workspace_id', next]);
+        } catch (e) { console.warn('[setWorkspaces] persist current_workspace_id failed:', e); }
+      }
+    }
+  },
+
+  loadWorkspaces() {
+    const list = readWorkspacesFromDb();
+    // current_workspace_id в settings — источник истины после логина/смены
+    // аккаунта (его переставляет reconcilePersonalWorkspace) и после ручного
+    // switchWorkspace. Подхватываем персистентный указатель, если он валиден в
+    // новом наборе и отличается от in-memory: иначе setWorkspaces НЕ переставит
+    // current, пока «залипшее» чужое пространство ещё присутствует в списке
+    // (его строку clearUserData намеренно не удаляет). См. fix/hydrate-current-workspace.
+    const savedWsId = (readSetting('current_workspace_id') || '').trim() || null;
+    if (savedWsId && savedWsId !== get().currentWorkspaceId && list.some(w => w.id === savedWsId)) {
+      set({ currentWorkspaceId: savedWsId, overdueMode: readOverdueModeForWs(savedWsId) });
+    }
+    get().setWorkspaces(list);
+  },
+
+  loadWorkspaceMembers() {
+    set({ workspaceMembers: readMembersFromDb() });
+  },
+
+  // Fix 2 (fix-round2): перечитать привязку базы к аккаунту из settings и
+  // синхронно обновить in-memory boundUserId + список пространств/членства.
+  //
+  // Без этого после смены аккаунта (AccountSwitchGate) или после первого sync
+  // стор держит устаревший (или null) boundUserId, а computeRole (workspaceScope)
+  // не находит строку членства текущего пользователя → owner получает
+  // «Только владелец пространства может менять статусы…». Порядок важен:
+  // сперва boundUserId, затем members/workspaces — чтобы селекторы, пересчитанные
+  // на смену любого из этих срезов, уже видели актуальную привязку.
+  reloadAccountBinding() {
+    const boundUserId = (readSetting('bound_user_id') || '').trim() || null;
+    set({ boundUserId });
+    get().loadWorkspaceMembers();
+    get().loadWorkspaces();
+    // F31: гидрировать currentWorkspaceId из settings так же, как init() —
+    // иначе после смены аккаунта in-memory currentWorkspaceId залипает от
+    // предыдущего аккаунта и ws-scoped фильтр прячет задачи (список пуст
+    // при верном счётчике). См. диагноз по data.db+log 2026-08-03 (f31_brief.md).
+    // Важно: вызывается ПОСЛЕ loadWorkspaces() — чтобы get().workspaces был уже
+    // новым набором входящего аккаунта.
+    const ws = get().workspaces;
+    const cwid = hydrateCurrentWorkspaceId(ws);
+    set({ currentWorkspaceId: cwid, overdueMode: readOverdueModeForWs(cwid) });
+  },
+
+  createWorkspace(name, kind) {
+    const clean = name.trim().slice(0, 60);
+    const now = new Date().toISOString();
+    const clientId = getClientId();
+    const boundUserId = get().boundUserId ?? readSetting('bound_user_id');
+    // Уникальный серверный id пространства (== workspaces.uuid). Personal-ws
+    // имеет детерминированный ws_<uid>; для новых просто ws_<uuid-hex>.
+    const wsUuid = 'ws_' + uuidv7().replace(/-/g, '');
+    const order =
+      (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM workspaces')?.m) ?? 0;
+    db.run(
+      `INSERT INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, version, client_id)
+       VALUES (?,?,?,?,?,?,?,1,?)`,
+      [wsUuid, clean, kind, boundUserId, order, now, now, clientId],
+    );
+    enqueueOutbox('workspaces', wsUuid, 'upsert');
+    // owner-membership создателя.
+    const memberUuid = uuidv7();
+    db.run(
+      `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, invited_by, joined_at, created_at, updated_at, version, client_id)
+       VALUES (?,?,?,'owner',?,?,?,?,1,?)`,
+      [memberUuid, wsUuid, boundUserId, boundUserId, now, now, now, clientId],
+    );
+    enqueueOutbox('workspace_members', memberUuid, 'upsert');
+    // Bug #4: сеем эталонные статусы в новое пространство (иначе доска пустая).
+    seedDefaultStatuses(wsUuid);
+    get().loadWorkspaces();
+    get().loadWorkspaceMembers();
+    // Диагностика D/E: только что созданный ws ОБЯЗАН попасть в сайдбар. Если нет
+    // — сработал EXISTS-фильтр readWorkspacesFromDb (рассинхрон bound_user_id).
+    if (!get().workspaces.some(w => w.id === wsUuid)) {
+      logger.warn('[createWorkspace] новый ws не попал в readWorkspacesFromDb (рассинхрон bound_user_id?):', wsUuid);
+    }
+    get().switchWorkspace(wsUuid);
+    return wsUuid;
+  },
+
+  renameWorkspace(id, name) {
+    const clean = name.trim().slice(0, 60);
+    if (!clean) return;
+    const now = new Date().toISOString();
+    db.run(
+      `UPDATE workspaces SET name=?, updated_at=?, version=COALESCE(version,0)+1 WHERE uuid=?`,
+      [clean, now, id],
+    );
+    enqueueOutbox('workspaces', id, 'upsert');
+    get().loadWorkspaces();
+  },
+
+  deleteWorkspace(id) {
+    const ws = get().workspaces.find(w => w.id === id);
+    // Неудаляемо ТОЛЬКО системное личное пространство (детерминированный id
+    // 'ws_'+boundUserId без дефисов) — дублирует серверный guard
+    // block_personal_workspace_delete (0036). Дополнительные personal и shared
+    // удаляются штатно.
+    const boundUserId = get().boundUserId ?? readSetting('bound_user_id');
+    const systemId = boundUserId ? computeWorkspaceId(boundUserId) : null;
+    if (ws?.kind === 'personal' && systemId && id === systemId) {
+      logger.warn('[deleteWorkspace] отказ: системное личное пространство нельзя удалить');
+      get().pushToast(tr(get().language, 'ws_delete_personal_hint'));
+      return;
+    }
+    const now = new Date().toISOString();
+    db.run(
+      `UPDATE workspaces SET deleted_at=?, updated_at=?, version=COALESCE(version,0)+1 WHERE uuid=?`,
+      [now, now, id],
+    );
+    enqueueOutbox('workspaces', id, 'delete');
+    get().loadWorkspaces();
+    // После удаления — переключаемся на personal (или дефолт).
+    const fresh = readWorkspacesFromDb();
+    const target = pickDefaultWorkspaceId(fresh);
+    if (get().currentWorkspaceId === id && target) {
+      get().switchWorkspace(target);
+    }
+  },
+
+  addWorkspaceMember(userId, role) {
+    const wsId = get().currentWorkspaceId;
+    if (!wsId) return;
+    const now = new Date().toISOString();
+    const clientId = getClientId();
+    const boundUserId = get().boundUserId ?? readSetting('bound_user_id');
+    // Уже есть живой член с этим user_id → просто обновляем роль (реактивация).
+    const existing = db.get<{ uuid: string | null }>(
+      `SELECT uuid FROM workspace_members WHERE workspace_id=? AND user_id=?`,
+      [wsId, userId],
+    );
+    if (existing?.uuid) {
+      db.run(
+        `UPDATE workspace_members
+            SET role=?, deleted_at=NULL, updated_at=?, version=COALESCE(version,0)+1
+          WHERE uuid=?`,
+        [role, now, existing.uuid],
+      );
+      enqueueOutbox('workspace_members', existing.uuid, 'upsert');
+    } else {
+      const memberUuid = uuidv7();
+      db.run(
+        `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, invited_by, joined_at, created_at, updated_at, version, client_id)
+         VALUES (?,?,?,?,?,?,?,?,1,?)`,
+        [memberUuid, wsId, userId, role, boundUserId, now, now, now, clientId],
+      );
+      enqueueOutbox('workspace_members', memberUuid, 'upsert');
+    }
+    get().loadWorkspaceMembers();
+  },
+
+  updateWorkspaceMemberRole(memberId, role) {
+    const now = new Date().toISOString();
+    db.run(
+      `UPDATE workspace_members SET role=?, updated_at=?, version=COALESCE(version,0)+1 WHERE uuid=?`,
+      [role, now, memberId],
+    );
+    enqueueOutbox('workspace_members', memberId, 'upsert');
+    get().loadWorkspaceMembers();
+  },
+
+  removeWorkspaceMember(memberId) {
+    const now = new Date().toISOString();
+    // F14 (симптом 2): захватываем ws/владельца строки ДО гашения и текущее
+    // пространство — чтобы понять, покинул ли текущий пользователь ТЕКУЩЕЕ ws
+    // (leave собственного членства) и переключить сайдбар на дефолт.
+    const prevCurrent = get().currentWorkspaceId;
+    const row = db.get<{ workspace_id: string | null; user_id: string | null }>(
+      'SELECT workspace_id, user_id FROM workspace_members WHERE uuid=?',
+      [memberId],
+    );
+    db.run(
+      `UPDATE workspace_members SET deleted_at=?, updated_at=?, version=COALESCE(version,0)+1 WHERE uuid=?`,
+      [now, now, memberId],
+    );
+    enqueueOutbox('workspace_members', memberId, 'delete');
+    get().loadWorkspaceMembers();
+    // Перечитываем сайдбар: покинутое ws уходит по EXISTS-фильтру
+    // readWorkspacesFromDb (членство погашено). Без этого меню не обновлялось до
+    // следующего createWorkspace.
+    get().loadWorkspaces();
+    // Если покинули ТЕКУЩЕЕ пространство своим членством — переключаемся на
+    // дефолт (personal), как это делает deleteWorkspace.
+    const boundUserId = get().boundUserId ?? readSetting('bound_user_id');
+    const leftCurrentSelf =
+      row?.workspace_id != null &&
+      row.workspace_id === prevCurrent &&
+      (row.user_id ?? null) === (boundUserId ?? null);
+    if (leftCurrentSelf) {
+      const target = pickDefaultWorkspaceId(readWorkspacesFromDb());
+      if (target && target !== prevCurrent) get().switchWorkspace(target);
+    }
+  },
+
+  switchWorkspace(id) {
+    if (!id || id === get().currentWorkspaceId) return;
+    const known = get().workspaces.some(w => w.id === id);
+    if (!known) {
+      // Пространства нет в наборе — перечитываем БД (мог появиться после pull).
+      const fresh = readWorkspacesFromDb();
+      set({ workspaces: fresh });
+      if (!fresh.some(w => w.id === id)) {
+        logger.warn('[switchWorkspace] unknown workspace id:', id);
+        return;
+      }
+    }
+    // 1. currentWorkspaceId + persist.
+    set({ currentWorkspaceId: id, overdueMode: readOverdueModeForWs(id) });
+    try {
+      db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['current_workspace_id', id]);
+    } catch (e) { console.warn('[switchWorkspace] persist failed:', e); }
+    // 2. Обновляем локальный стор под новое пространство.
+    get().refresh();
+    // 3. Дотягиваем облако для нового ws + переподписываем realtime.
+    //    Ленивый import, чтобы не тащить sync-чанк в initial bundle и избежать
+    //    циклической зависимости (sync → mappers → db → store).
+    try {
+      void import('../lib/sync').then(m => {
+        try { m.resubscribeRealtime?.(); } catch (e) { logger.warn('[switchWorkspace] resubscribe failed:', e); }
+        void m.syncNow?.().then(() => get().refresh()).catch(() => {});
+      }).catch(() => {});
+    } catch {
+      // sync-модуль недоступен (например, в тестах с моками) — не мешаем.
+    }
+  },
+
   setLanguage(l) {
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['language', l]);
     const q = pickQuote(quoteSetFor(get().theme), l);
@@ -424,6 +1020,40 @@ export const useStore = create<State>((set, get) => ({
     set({ fontSize: n });
   },
   setOverdueMode(m) {
+    // Wave A: overdue_mode — свойство ТЕКУЩЕГО пространства (workspace_settings).
+    // Пишем в workspace_settings (источник истины + sync), а глобальный
+    // settings.overdue_mode обновляем как легаси-зеркало/фолбэк.
+    const wsId = get().currentWorkspaceId;
+    if (wsId) {
+      try {
+        const existing = db.get<{ uuid: string | null }>(
+          `SELECT uuid FROM workspace_settings WHERE workspace_id=? AND key='overdue_mode'`,
+          [wsId],
+        );
+        const now = new Date().toISOString();
+        if (existing) {
+          const rowUuid = existing.uuid ?? uuidv7();
+          db.run(
+            `UPDATE workspace_settings
+                SET value=?, uuid=COALESCE(uuid,?), deleted_at=NULL,
+                    updated_at=?, version=COALESCE(version,0)+1
+              WHERE workspace_id=? AND key='overdue_mode'`,
+            [m, rowUuid, now, wsId],
+          );
+          enqueueOutbox('workspace_settings', rowUuid, 'upsert');
+        } else {
+          const rowUuid = uuidv7();
+          db.run(
+            `INSERT INTO workspace_settings (uuid, workspace_id, key, value, created_at, updated_at, version, client_id)
+             VALUES (?,?, 'overdue_mode', ?, ?, ?, 1, ?)`,
+            [rowUuid, wsId, m, now, now, getClientId()],
+          );
+          enqueueOutbox('workspace_settings', rowUuid, 'upsert');
+        }
+      } catch (e) {
+        console.warn('[setOverdueMode] workspace_settings write failed:', e);
+      }
+    }
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['overdue_mode', m]);
     set({ overdueMode: m });
   },
@@ -589,11 +1219,12 @@ export const useStore = create<State>((set, get) => ({
     // v0.9.35-dev.2: sync-колонки на INSERT'е.
     const rowUuid = uuidv7();
     const clientId = getClientId();
+    const wsId = resolveWriteWorkspaceId(get().currentWorkspaceId);
     const r = db.run(
-      `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, client_id, version)
-       VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,1)`,
+      `INSERT INTO tasks (title, comment, tag_id, status_id, start_date, deadline, finish_date, created_at, updated_at, sort_order, archived, uuid, client_id, version, workspace_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,1,?)`,
       [p.title || '', p.comment || '', p.tag_id ?? null, p.status_id ?? 1,
-       startDate, p.deadline ?? null, finishDate, now, now, order, rowUuid, clientId]
+       startDate, p.deadline ?? null, finishDate, now, now, order, rowUuid, clientId, wsId]
     );
     enqueueOutbox('tasks', rowUuid, 'upsert');
     // Задачу могли создать сразу в статусе «Приостановлено» — открываем интервал.
@@ -750,9 +1381,10 @@ export const useStore = create<State>((set, get) => ({
     const rowUuid = uuidv7();
     const clientId = getClientId();
     const now = new Date().toISOString();
+    const wsId = resolveWriteWorkspaceId(get().currentWorkspaceId);
     const r = db.run(
-      'INSERT INTO tags (name, color, sort_order, uuid, client_id, version, updated_at) VALUES (?,?,?,?,?,1,?)',
-      [name, color, order, rowUuid, clientId, now],
+      'INSERT INTO tags (name, color, sort_order, uuid, client_id, version, updated_at, workspace_id) VALUES (?,?,?,?,?,1,?,?)',
+      [name, color, order, rowUuid, clientId, now, wsId],
     );
     enqueueOutbox('tags', rowUuid, 'upsert');
     get().refresh();
@@ -803,11 +1435,12 @@ export const useStore = create<State>((set, get) => ({
     const now = new Date().toISOString();
     const rowUuid = uuidv7();
     const clientId = getClientId();
+    const wsId = resolveWriteWorkspaceId(get().currentWorkspaceId);
     const r = db.run(
       `INSERT INTO statuses (name, color, behavior, sort_order, is_seed, is_technical, hidden, default_collapsed,
-                             uuid, client_id, version, updated_at)
-       VALUES (?,?,?,?,0,0,0,0,?,?,1,?)`,
-      [name, color, behavior, order, rowUuid, clientId, now]
+                             uuid, client_id, version, updated_at, workspace_id)
+       VALUES (?,?,?,?,0,0,0,0,?,?,1,?,?)`,
+      [name, color, behavior, order, rowUuid, clientId, now, wsId]
     );
     enqueueOutbox('statuses', rowUuid, 'upsert');
     get().refresh();
@@ -914,11 +1547,12 @@ export const useStore = create<State>((set, get) => ({
     const order = (db.get<{ m: number }>('SELECT COALESCE(MAX(sort_order),0)+1 AS m FROM task_templates')?.m) ?? 0;
     const rowUuid = uuidv7();
     const clientId = getClientId();
+    const wsId = resolveWriteWorkspaceId(get().currentWorkspaceId);
     const r = db.run(
       `INSERT INTO task_templates (name, title, comment, status_id, tag_id, sort_order, created_at, updated_at,
-                                   uuid, client_id, version)
-       VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
-      [p.name, p.title ?? '', p.comment ?? '', p.status_id ?? null, p.tag_id ?? null, order, now, now, rowUuid, clientId]
+                                   uuid, client_id, version, workspace_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,1,?)`,
+      [p.name, p.title ?? '', p.comment ?? '', p.status_id ?? null, p.tag_id ?? null, order, now, now, rowUuid, clientId, wsId]
     );
     enqueueOutbox('task_templates', rowUuid, 'upsert');
     get().refresh();
