@@ -1769,8 +1769,13 @@ export async function applyBackup(
       const uuid = typeof w.uuid === 'string' && w.uuid ? w.uuid : ('ws_' + uuidv7().replace(/-/g, ''));
       if (mode === 'merge' && existingWs.has(uuid)) continue;
       const version = typeof w.version === 'number' ? w.version + 1 : 1;
+      // F33 (ADR 0026): replace-режим DELETE+INSERT не в единой транзакции — к моменту
+      // INSERT personal-пространство может уже существовать (пересоздано reconcilePersonalWorkspace,
+      // который по контракту выполняется до restore) → UNIQUE constraint failed: workspaces.uuid.
+      // OR REPLACE безопасен: связи (tasks/statuses/tags/templates) идут по uuid-строке, не по
+      // числовому id, так что подмена numeric id при REPLACE не рвёт FK-подобные ссылки.
       await sync(
-        `INSERT INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT OR REPLACE INTO workspaces (uuid, name, kind, owner_id, sort_order, created_at, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
         [uuid, String(w.name ?? 'Мои задачи'), String(w.kind ?? 'personal'), w.owner_id ?? null, w.sort_order ?? 0, w.created_at ?? nowIso, nowIso, w.deleted_at ?? null, version, w.client_id ?? clientId]
       );
       counts.workspaces++;
@@ -1787,8 +1792,12 @@ export async function applyBackup(
       if (mode === 'merge' && existingMembers.has(uuid)) continue;
       if (!m.workspace_id || !m.user_id) continue;
       const version = typeof m.version === 'number' ? m.version + 1 : 1;
+      // F33 (ADR 0026): same replace-mode race as workspaces above, second UNIQUE variant
+      // from the log — UNIQUE constraint failed: workspace_members.workspace_id, workspace_members.user_id.
+      // OR IGNORE (not REPLACE) here: keeps the existing member row's identity untouched when a
+      // duplicate (workspace_id, user_id) or uuid is hit, instead of swapping owner-row identity.
       await sync(
-        `INSERT INTO workspace_members (uuid, workspace_id, user_id, role, invited_by, joined_at, created_at, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT OR IGNORE INTO workspace_members (uuid, workspace_id, user_id, role, invited_by, joined_at, created_at, updated_at, deleted_at, version, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
         [uuid, m.workspace_id, m.user_id, String(m.role ?? 'owner'), m.invited_by ?? null, m.joined_at ?? nowIso, m.created_at ?? nowIso, nowIso, m.deleted_at ?? null, version, m.client_id ?? clientId]
       );
       counts.workspace_members++;

@@ -886,6 +886,20 @@ _N1/N2/N3 в текущий заход не включены по явному �
 
 ---
 
+### 7.28. `applyBackup` падал на UNIQUE(`workspaces.uuid`)/(`workspace_members.workspace_id,user_id`) при смене аккаунта → аварийный откат на старый снимок терял второе пространство (F33, ⚠️ реализовано, тесты зелёные, ждёт ручную проверку, в `feat/workspaces`, 03.08.2026)
+
+Симптом (после F32 «Мои задачи» стали видны): пользователь создаёт второе пространство «new2» → перезапуск / смена free-аккаунта → «new2» пропадает, приложение откатывается на «Мои задачи».
+
+**Корень (доказан на реальных `data-4.db` + `taskflow-3.log` пользователя от 03.08.2026):** в логе прямая улика — `[localAccountStore] applyBackup failed for ca1290fe...: (code: 2067) UNIQUE constraint failed: workspaces.uuid` (и второй вариант: `workspace_members.workspace_id, workspace_members.user_id`), сразу за ним `[snapshots] restored snap_... from file`. `restoreLocalAccountData` (`src/lib/localAccountStore.ts`) вызывает `db.applyBackup(payload, 'replace')`; replace-режим делает `DELETE` затем `INSERT INTO workspaces (uuid,...)` по каждой строке, НО personal-пространство ca1290fe к этому моменту уже существует (пересоздано `reconcilePersonalWorkspace`, который по контракту выполняется ДО restore; плюс applyBackup не в единой транзакции) → INSERT падает на UNIQUE(uuid) → applyBackup бросает исключение → `localAccountStore` срывается на аварийный откат на файловый снимок (F30) → снимок = состояние ДО создания «new2» → «new2» теряется. Данные подтвердили: `data-4.db` (живое состояние) несёт оба ws («Мои задачи» + «new2»), а `data.db-5.backup` (снимок отката) — «Мои задачи» + старое «new test3», без «new2». Воспроизведено на копии `data-4.db`: обычный `INSERT` с существующим uuid → та же ошибка лога.
+
+**Фикс (ADR 0026, минимальный, без новых слоёв):** в `src/lib/db.ts` `applyBackup()` вставка пространств `INSERT INTO workspaces` → `INSERT OR REPLACE INTO workspaces` (связи tasks/statuses/tags/templates идут по uuid-строке `ws_...`, не по числовому id — подмена numeric id при REPLACE безопасна); вставка членов `INSERT INTO workspace_members` → `INSERT OR IGNORE INTO workspace_members` (сохраняет существующую строку при конфликте по uuid ИЛИ по составному (workspace_id,user_id)). merge-дедуп-строки не тронуты. statuses/tags/tasks/templates, схема/миграции, `localAccountStore.ts`, F30/F31/F32 — не тронуты. Фикс делает applyBackup идемпотентным к уже существующему personal-пространству → не бросает → аварийный откат на снимок не срабатывает → «new2» сохраняется.
+
+**Верификация:** 2 новых теста в `src/lib/db.applyBackup.test.ts` (replace с уже существующим ws uuid → не бросает, оба ws целы, задачи привязаны; replace с дублем члена по (ws,user) → не бросает, ровно одна строка). Полный прогон `src/lib/`, `src/store/`, `src/components/` (73 файла / 613 тестов) — **все зелёные**. `tsc --noEmit` чист. Фикс проверен на реальной `data-4.db` пользователя (до/после: оба ws целы). Build НЕ запускался (OOM). См. [ADR 0026](../adr/0026-applybackup-idempotent-workspaces-members.md).
+
+**⚠️ Статус:** реализовано, тесты зелёные — ждёт ручную проверку на реальных данных пользователя.
+
+---
+
 ## 8. Что этот аудит покрыл, а что нет
 
 Границы первого аудита 09.07.2026 (обновляется при последующих аудитах, если их будет несколько).
