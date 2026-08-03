@@ -924,7 +924,7 @@ _N1/N2/N3 в текущий заход не включены по явному �
 
 **Верификация:** цепочка прогонов `DB tests (pgTAP)` на `feat/workspaces`: `30806943342` — FAIL (609 тестов, два файла красные) → `30807601318` — FAIL, но тест 20 уже зелёный, остался только кейс 11 (616 тестов) → финальный прогон — зелёный, 20 файлов / 618 тестов.
 
-**Статус:** ✅ ИСПРАВЛЕНО (03.08.2026, в составе merge-PR `feat/workspaces → main`).
+**Статус:** ✅ ИСПРАВЛЕНО (PR #106, 03.08.2026) — коммиты `c045293716f42ca6a8b349ee69688f9e8f2a8a84` и `77b9350e501c9e5f4868b69bb207dd0e2982ec06`, merge-коммит в `main` — `a2c732a50759167ec0ce39fb9cc4f92df349e247`.
 
 ---
 
@@ -938,7 +938,7 @@ _N1/N2/N3 в текущий заход не включены по явному �
 
 **Предлагаемый фикс (отдельным патчем, НЕ в merge-PR):** миграция `0041_revoke_execute_log_task_activity.sql` — идемпотентный `revoke execute ... from anon, authenticated, PUBLIC` (триггер продолжит работать: триггеры исполняются от владельца таблицы независимо от GRANT EXECUTE) + pgTAP-кейсы `hasnt_function_privs` в отдельном тесте по образцу теста 19. Применение на прод — вручную, с `confirm_action`, после зелёного pgTAP.
 
-**Статус:** 🟡 открыта — заведена 03.08.2026 при подготовке merge-PR, к мержу не блокер (состояние прода этим PR не меняется).
+**Статус:** 🟡 открыта — заведена 03.08.2026 при подготовке PR #106, блокером мержа не была (состояние прода тем PR не менялось).
 
 ---
 
@@ -1068,7 +1068,7 @@ _N1/N2/N3 в текущий заход не включены по явному �
 | 0010 | F16: авто-обнаружение и восстановление битой локальной SQLite при старте (`detectAndRecoverCorruption` в `initDb`, `SqliteCorruptError`/`withCorruptionGuard` в pull.ts, prune-skip, тост + reload) — только клиент, без миграций (accepted) | `docs/adr/0010-sqlite-corruption-auto-recovery.md` |
 | 0011 | F17: реконсиль uuid членства при рассинхроне local↔server (fallback-матчинг `applyCloudRowMembers` по `(workspace_id, user_id)` + переклейка uuid; откат F16-эскалации 2067→corruption) — только клиент, без миграций (accepted) | `docs/adr/0011-membership-uuid-mismatch-reconcile.md` |
 | 0012–0026 | (в этой таблице не дублируются — актуальный полный индекс ведётся в [`docs/adr/README.md`](../adr/README.md)) | `docs/adr/README.md` |
-| 0027 | Миграции на прод применяются ВРУЧНУЮ с `confirm_action`; CI их НЕ применяет (прежнее утверждение в `docs/migrations.md` ошибочно — ни один workflow не ходит в прод-БД). Мерж `feat/workspaces → main` merge-коммитом, без изменений прод-БД: 0027–0040 уже применены, прод легально опережает `main` (accepted) | `docs/adr/0027-manual-migrations-and-workspaces-merge-to-main.md` |
+| 0027 (PR #106) | Миграции на прод применяются ВРУЧНУЮ с `confirm_action`; CI их НЕ применяет (прежнее утверждение в `docs/migrations.md` ошибочно — ни один workflow не ходит в прод-БД). Мерж `feat/workspaces → main` merge-коммитом, без изменений прод-БД: 0027–0040 уже применены, прод легально опережает `main` (accepted) | `docs/adr/0027-manual-migrations-and-workspaces-merge-to-main.md` |
 | — | удалили/оставили `renewal_attempts` в пользу `renewal_attempts_count` (F2) — решение ещё не принято, фронт-часть не деплоилась | тбд |
 
 ---
