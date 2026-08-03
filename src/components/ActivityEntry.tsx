@@ -11,10 +11,14 @@
 // по uuid, поэтому автор резолвится так:
 //   • это я (boundUserId) → «вы»;
 //   • онлайн-участник (presence) → ник или публичный TF-ID + его аватар;
-//   • иначе (офлайн, историческое действие) → короткий id.
+//   • F40 (ADR 0031): офлайн-участник → кэш публичных профилей пространства
+//     (get_workspace_member_profiles), то есть ник либо TF-id вместо куска uuid;
+//   • если и в кэше нет — нейтральная подпись «Участник» (внутренний uuid в UI
+//     не показываем никогда).
 // Email НЕ показывается никогда.
 import type { ReactNode } from 'react';
 import { Avatar } from './Avatar';
+import { lookupCachedMemberProfile } from '../lib/memberProfiles';
 import { useStore } from '../store/useStore';
 import { usePresenceStore } from '../store/usePresenceStore';
 import type { ActivityRecord, ActivityKind } from '../store/useTaskActivityStore';
@@ -78,18 +82,25 @@ export function ActivityAuthorRow({
 
   let name: string;
   let variant = 1;
+  let color: string | null = null;
+  const cached = lookupCachedMemberProfile(record.userId);
   if (boundUserId && record.userId === boundUserId) {
     name = tr(lang, 'ws_activity_you');
   } else if (presence) {
     name = presence.nickname || presence.publicUserId;
     variant = presence.avatarVariant || 1;
+    color = presence.avatarColor ?? cached?.avatar_color ?? null;
+  } else if (cached) {
+    name = cached.nickname?.trim() || cached.public_user_id;
+    variant = cached.avatar_variant || 1;
+    color = cached.avatar_color ?? null;
   } else {
-    name = record.userId ? record.userId.slice(0, 8) : '—';
+    name = record.userId ? tr(lang, 'ws_members_unknown') : '—';
   }
 
   return (
     <li className="flex items-start gap-2.5 py-2 border-b border-border-soft last:border-b-0">
-      <Avatar variant={variant} size={26} className="shrink-0 mt-0.5" />
+      <Avatar variant={variant} color={color} size={26} className="shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0 text-[12.5px] leading-snug">
         <span className="font-medium">{name}</span>{' '}
         <span className="text-muted">{eventText(lang, record.kind)}</span>

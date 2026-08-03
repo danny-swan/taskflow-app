@@ -9,6 +9,7 @@ const m = (userId: string, over: Partial<PresenceMember> = {}): PresenceMember =
   userId,
   nickname: over.nickname ?? `nick-${userId}`,
   avatarVariant: over.avatarVariant ?? 1,
+  avatarColor: over.avatarColor ?? null,
   publicUserId: over.publicUserId ?? `TF-${userId.toUpperCase()}`,
 });
 

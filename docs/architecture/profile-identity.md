@@ -25,17 +25,25 @@
 |------------------|------------|------------------------------------|
 | `nickname`       | `text`     | `char_length ≤ 32`, NULL допустим  |
 | `avatar_variant` | `smallint` | `1..8`, NOT NULL, default `1`      |
+| `avatar_color`   | `text`     | `^#[0-9a-f]{6}$` или NULL (миграция `0042`) |
 | `bio`            | `text`     | `char_length ≤ 160`, NULL допустим |
 
 Это **дополнение** профиля, а не замена идентификатора: ник не уникален, аватар —
 один из 8 встроенных SVG (индекс ↔ `avatar_variant`).
+
+`avatar_color` (F41, ADR 0032) — **явный** цвет аватара, заданный пользователем в
+модалке выбора аватара. `NULL` означает «цвет не задан»: тогда аватар красится
+акцентом текущей темы, как это было до миграции `0042`. Цвет намеренно НЕ следует
+за темой приложения — иначе участники общих пространств видели бы не выбранный
+человеком цвет, а акцент своей собственной темы (из-за этого аватары в списке
+участников выглядели одинаковыми).
 
 ## Guard неизменяемости
 
 У роли `authenticated` есть `UPDATE ON profiles` (RLS own-row), поэтому
 BEFORE-UPDATE триггер `profiles_guard_immutable` молча возвращает старые значения
 `id` и `public_user_id`, если их пытаются переписать. Легитимные UPDATE
-(`nickname` / `avatar_variant` / `bio`) и смена email не блокируются. Триггер
+(`nickname` / `avatar_variant` / `avatar_color` / `bio`) и смена email не блокируются. Триггер
 отделён от `set_updated_at`.
 
 ## Sync
@@ -43,3 +51,19 @@ BEFORE-UPDATE триггер `profiles_guard_immutable` молча возвра�
 `profiles` **не участвует** в клиентском sync-цикле (`outbox → push → pull`).
 Профиль читается/пишется отдельным Supabase-запросом (`src/lib/profile.ts`),
 поэтому новые поля не влияют на upsert/conflict-flow таблиц `sync_*`.
+
+## Чужие профили: только через RPC (F40, ADR 0031)
+
+RLS на `profiles` — own-row (`profiles_select_own`: `auth.uid() = id`), поэтому ник,
+TF-id и аватар **другого** пользователя клиенту напрямую недоступны. Публичный
+минимум выдаётся двумя SECURITY DEFINER функциями:
+
+- `find_user_by_public_id(p_pid text)` (миграция `0028`) — поиск по TF-id (инвайты);
+- `get_workspace_member_profiles(p_workspace_id text)` (миграция `0043`) — профили
+  участников пространства, если вызывающий сам в нём состоит
+  (`has_workspace_role(..., 'viewer')`), исключая вышедших (`deleted_at`).
+
+Обе отдают только `public_user_id` / `nickname` / `avatar_variant` / `avatar_color`
+/ `bio`. `email` и внутренний `id` в UI не показываются никогда; на клиенте профили
+участников кэшируются в `localStorage['tf.memberProfiles.v1']`
+(`src/lib/memberProfiles.ts`), чтобы имена не пропадали в офлайне.

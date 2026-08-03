@@ -2234,6 +2234,9 @@ function AccountSection() {
         {t('Аккаунт', 'Account')}
       </h3>
 
+      {/* v1.1.x (ADR 0032): блок «Профиль» идёт ПЕРВЫМ, ниже — email/даты. */}
+      <ProfileBlock userId={user.id} isRu={isRu} />
+
       <div className="bg-surface-alt border border-border-soft rounded-lg p-4 space-y-3">
         <div className="flex justify-between items-center">
           <span className="text-[12px] text-muted uppercase tracking-wide">Email</span>
@@ -2260,9 +2263,6 @@ function AccountSection() {
           </div>
         )}
       </div>
-
-      {/* v1.0.x: кастомизация профиля — публичный ID, ник, аватар, «о себе». */}
-      <ProfileBlock userId={user.id} isRu={isRu} />
 
       {/* v0.9.14: смена пароля и email — только для email-провайдера. Google-юзеры меняют в своём аккаунте Google. */}
       {isEmailProvider && (

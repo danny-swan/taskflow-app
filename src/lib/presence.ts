@@ -34,6 +34,8 @@ export interface PresenceProfile {
   userId: string;
   nickname: string | null;
   avatarVariant: number;
+  /** F41 (ADR 0032): явный цвет аватара; null = акцент темы. */
+  avatarColor: string | null;
   publicUserId: string;
 }
 
@@ -41,6 +43,8 @@ export interface PresenceProfile {
 interface PresenceMeta {
   nickname: string | null;
   avatar_variant: number;
+  /** F41: может отсутствовать в meta от старых клиентов → трактуем как null. */
+  avatar_color?: string | null;
   public_user_id: string;
 }
 
@@ -55,6 +59,7 @@ function metaToMember(userId: string, metas: TrackedMeta[]): PresenceMember | nu
     userId,
     nickname: meta.nickname ?? null,
     avatarVariant: Number(meta.avatar_variant ?? 1),
+    avatarColor: meta.avatar_color ?? null,
     publicUserId: meta.public_user_id,
   };
 }
@@ -105,6 +110,7 @@ export function subscribeWorkspacePresence(
         const meta: PresenceMeta = {
           nickname: profile.nickname,
           avatar_variant: profile.avatarVariant,
+          avatar_color: profile.avatarColor,
           public_user_id: profile.publicUserId,
         };
         channel.track(meta).catch((e) => logger.warn('[presence] track failed:', e));
@@ -151,6 +157,7 @@ export function useWorkspacePresence(): void {
           userId: boundUserId,
           nickname: profile.nickname,
           avatarVariant: profile.avatar_variant,
+          avatarColor: profile.avatar_color,
           publicUserId: profile.public_user_id,
         });
       })

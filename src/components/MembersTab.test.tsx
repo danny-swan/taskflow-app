@@ -26,6 +26,17 @@ vi.mock('./InviteMemberModal', () => ({
   InviteMemberModal: () => null,
 }));
 
+// F40 (ADR 0031): публичные профили участников приходят из RPC-обёртки; в тестах
+// подменяем её карту, чтобы проверить «ник, иначе TF-id» и реальные аватары.
+let memberProfilesMap: any = {};
+vi.mock('../lib/memberProfiles', async (importActual) => {
+  const actual = await importActual<typeof import('../lib/memberProfiles')>();
+  return {
+    ...actual,
+    useWorkspaceMemberProfiles: () => ({ byId: memberProfilesMap, loading: false, refetch: vi.fn() }),
+  };
+});
+
 import { MembersTab } from './MembersTab';
 
 const member = (id: string, user_id: string, role: string) => ({
@@ -58,7 +69,17 @@ function setup(opts: { role: 'owner' | 'editor' | 'viewer'; invites?: any[] }) {
   };
 }
 
+const profile = (over: Partial<any> = {}) => ({
+  user_id: over.user_id ?? 'other-ed',
+  public_user_id: over.public_user_id ?? 'TF-EDIT01',
+  nickname: 'nickname' in over ? over.nickname : null,
+  avatar_variant: over.avatar_variant ?? 1,
+  avatar_color: over.avatar_color ?? null,
+  bio: 'bio' in over ? over.bio : null,
+});
+
 beforeEach(() => {
+  memberProfilesMap = {};
   updateWorkspaceMemberRole.mockReset();
   removeWorkspaceMember.mockReset();
   loadWorkspaceInvites.mockClear();
@@ -137,5 +158,62 @@ describe('MembersTab — не-owner', () => {
     setup({ role: 'editor' });
     render(<MembersTab />);
     expect(loadWorkspaceInvites).not.toHaveBeenCalled();
+  });
+});
+
+// ─── F40: ник / TF-id / реальные аватары вместо куска uuid ──────────────────
+describe('MembersTab — отображение участников (F40)', () => {
+  it('показывает ник участника, если он задан', () => {
+    setup({ role: 'owner' });
+    memberProfilesMap = {
+      'other-ed': profile({ user_id: 'other-ed', nickname: 'Даниил', public_user_id: 'TF-EDIT01' }),
+    };
+    render(<MembersTab />);
+    expect(screen.getByRole('button', { name: 'Даниил' })).toBeTruthy();
+  });
+
+  it('показывает TF-id, если ник пустой', () => {
+    setup({ role: 'owner' });
+    memberProfilesMap = {
+      'other-vw': profile({ user_id: 'other-vw', nickname: null, public_user_id: 'TF-VIEW01' }),
+    };
+    render(<MembersTab />);
+    expect(screen.getByRole('button', { name: 'TF-VIEW01' })).toBeTruthy();
+  });
+
+  it('внутренний uuid участника в разметку не попадает', () => {
+    setup({ role: 'owner' });
+    memberProfilesMap = {
+      'other-ed': profile({ user_id: 'other-ed', nickname: 'Даниил' }),
+    };
+    const { container } = render(<MembersTab />);
+    // Раньше здесь были первые 8 символов uuid — теперь ни ника-заглушки, ни id.
+    expect(container.innerHTML).not.toContain('other-vw');
+    expect(screen.getByText('Участник')).toBeTruthy(); // профиля нет в карте
+  });
+
+  it('аватар берётся из профиля участника (форма + явный цвет)', () => {
+    setup({ role: 'owner' });
+    memberProfilesMap = {
+      'other-ed': profile({ user_id: 'other-ed', avatar_variant: 6, avatar_color: '#4fa35b' }),
+    };
+    const { container } = render(<MembersTab />);
+    const colored = Array.from(container.querySelectorAll<HTMLElement>('span[style]'))
+      .filter(el => el.style.color === 'rgb(79, 163, 91)');
+    expect(colored.length).toBeGreaterThan(0);
+  });
+
+  it('клик по имени открывает карточку участника с TF-id и «о себе»', () => {
+    setup({ role: 'owner' });
+    memberProfilesMap = {
+      'other-ed': profile({
+        user_id: 'other-ed', nickname: 'Даниил', public_user_id: 'TF-EDIT01', bio: 'сорсинг',
+      }),
+    };
+    render(<MembersTab />);
+    fireEvent.click(screen.getByRole('button', { name: 'Даниил' }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByText('TF-EDIT01')).toBeTruthy();
+    expect(screen.getByText('сорсинг')).toBeTruthy();
   });
 });

@@ -19,6 +19,8 @@ export interface PresenceMember {
   userId: string;
   nickname: string | null;
   avatarVariant: number;
+  /** F41 (ADR 0032): явный цвет аватара `#rrggbb`; null = акцент темы. */
+  avatarColor: string | null;
   publicUserId: string;
 }
 
