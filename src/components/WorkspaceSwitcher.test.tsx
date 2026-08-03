@@ -5,7 +5,9 @@
 //
 // Проверяет: сплит «Личные»/«Общие», role-badge (editor/viewer — есть,
 // owner/personal — нет), пустое состояние секции «Общие» с TF-ID, сортировку
-// (активный первым, остальные по алфавиту).
+// (активный первым, остальные по алфавиту), а также F44 — ссылка «Настройки
+// пространства» доступна и наблюдателю (иначе он не может выйти из
+// пространства: кнопка «Покинуть пространство» живёт во вкладке «Участники»).
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -147,5 +149,39 @@ describe('WorkspaceSwitcher — сортировка', () => {
       .getAllByRole('button')
       .map(b => b.textContent?.trim());
     expect(names).toEqual(['Банан', 'Абрикос', 'Яблоко']);
+  });
+});
+
+describe('WorkspaceSwitcher — доступ к настройкам пространства (F44)', () => {
+  it('viewer видит ссылку «Настройки пространства» — иначе он заперт в пространстве', () => {
+    workspaces = [ws('p1', 'Личное', 'personal'), ws('sv', 'Наблюдательское', 'shared')];
+    current = workspaces[1];
+    roles = { p1: 'owner', sv: 'viewer' };
+    canEdit = false; // viewer: read-only
+    renderOpen();
+
+    const link = screen.getByText('Настройки пространства').closest('a')!;
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toContain('/workspace-settings');
+  });
+
+  it('владелец тоже видит ссылку (поведение не изменилось)', () => {
+    workspaces = [ws('p1', 'Личное', 'personal'), ws('so', 'Моё общее', 'shared')];
+    current = workspaces[1];
+    roles = { p1: 'owner', so: 'owner' };
+    canEdit = true;
+    renderOpen();
+
+    expect(screen.getByText('Настройки пространства')).toBeTruthy();
+  });
+});
+
+describe('WorkspaceSwitcher — якорь онбординга', () => {
+  it('корневой контейнер помечен data-onboarding="workspace-switcher" (шаг «Пространства»)', () => {
+    workspaces = [ws('p1', 'Личное', 'personal')];
+    current = workspaces[0];
+    roles = { p1: 'owner' };
+    const { container } = render(<MemoryRouter><WorkspaceSwitcher /></MemoryRouter>);
+    expect(container.querySelector('[data-onboarding="workspace-switcher"]')).not.toBeNull();
   });
 });
