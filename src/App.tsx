@@ -24,6 +24,7 @@ import { useAuth, handleAuthCallback } from './lib/auth';
 import { logEvent } from './lib/telemetry';
 import { pingSupabaseKeepAlive } from './lib/supabase';
 import { useLocalAccountAutosave } from './lib/useLocalAccountAutosave';
+import { useDefaultTabNavigation } from './lib/useDefaultTabNavigation';
 import { TasksPage } from './pages/Tasks';
 // v0.8.6: AddTaskPage больше не подключается — заменена на NewTaskModal
 // v0.8.12 (п. 24 code splitting): второстепенные вкладки грузим лениво —
@@ -44,6 +45,8 @@ function App() {
   const init = useStore(s => s.init);
   const statsEnabled = useStore(s => s.statsEnabled);
   const defaultTab = useStore(s => s.defaultTab);
+  // F38 (ADR 0030): смена пространства должна возвращать на дефолтную вкладку.
+  const currentWorkspaceId = useStore(s => s.currentWorkspaceId);
   const autoUpdate = useStore(s => s.autoUpdateEnabled);
   const pushToast = useStore(s => s.pushToast);
   const lang = useStore(s => s.language);
@@ -99,7 +102,8 @@ function App() {
               if (parsed.protocol === 'taskflow:' && parsed.host === 'pay') {
                 if (parsed.pathname === '/success') {
                   pushToast(lang === 'ru' ? 'Оплата прошла. Подписка активируется в течение минуты.' : 'Payment successful. Subscription will activate within a minute.');
-                  navigate('/settings');
+                  // F39 (ADR 0030): ведём прямо в «Настройки → Подписка», а не в «Основные».
+                  navigate('/settings#subscription');
                 } else if (parsed.pathname === '/fail') {
                   pushToast(lang === 'ru' ? 'Оплата отменена.' : 'Payment cancelled.');
                   navigate('/checkout');
@@ -220,6 +224,16 @@ function App() {
     auth.session?.user?.email ?? null,
   );
 
+  // F38 (ADR 0030): активная вкладка = «Вкладка по умолчанию» при входе в аккаунт
+  // и при смене пространства. Одна точка вместо навигации в каждом месте смены ws.
+  useDefaultTabNavigation({
+    ready,
+    userId: auth.session?.user?.id ?? null,
+    workspaceId: currentWorkspaceId ?? null,
+    defaultTab,
+    navigate,
+  });
+
   // v0.9.9: телеметрия старта приложения (один раз на логин)
   useEffect(() => {
     if (auth.session?.user && ready) {
@@ -240,7 +254,9 @@ function App() {
               (lang === 'ru' ? 'Доступно обновление v' : 'Update available v') + info.newVersion,
               {
                 label: lang === 'ru' ? 'Открыть' : 'Open',
-                onClick: () => navigate('/settings'),
+                // F39 (ADR 0030): «Открыть» ведёт в «Настройки → Обновления»,
+                // где лежит кнопка установки, а не в «Основные».
+                onClick: () => navigate('/settings#updates'),
               }
             );
           }
