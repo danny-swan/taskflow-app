@@ -583,6 +583,16 @@ export const useStore = create<State>((set, get) => ({
     let initError: string | null = null;
     try {
       await db.initDb();
+      // F32 (ADR 0025): идемпотентный ремонт задач, чей status_id указывает на
+      // статус ЧУЖОГО workspace (испорчено предыдущим багом applyBackup —
+      // перепривязка статусов по имени без учёта workspace_id). Чиним ДО
+      // первого refresh(), чтобы доска сразу увидела верно привязанные задачи.
+      // Безопасно при повторных запусках — no-op, если mismatch уже устранён.
+      try {
+        await db.repairTaskStatusWorkspaceMismatch();
+      } catch (e) {
+        console.error('[init] repairTaskStatusWorkspaceMismatch failed:', e);
+      }
       get().refresh();
     } catch (e: any) {
       initError = String(e?.message || e || 'Unknown error');
