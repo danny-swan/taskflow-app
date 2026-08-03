@@ -898,6 +898,46 @@ _N1/N2/N3 в текущий заход не включены по явному �
 
 **⚠️ Статус:** реализовано, тесты зелёные — ждёт ручную проверку на реальных данных пользователя.
 
+**✅ Обновление статуса (03.08.2026):** подтверждено пользователем вручную на его реальных данных — при смене free-аккаунта ошибки `applyBackup failed ... UNIQUE constraint` и аварийного отката на снимок больше нет, оба пространства и задачи целы, инварианты F32 держатся. F31 и F32 (§7.26, §7.27) подтверждены тем же ручным прогоном. Сборка на `79649d26e82acb8203c9d36cb74ec921fb960b10` успешна.
+
+---
+
+### 7.29. Два новых pgTAP-теста (19, 20) никогда не исполнялись в CI и лежали красными — `main` приехал бы с красным `DB tests` (F34, ✅ ИСПРАВЛЕНО в `feat/workspaces`, 03.08.2026)
+
+**Симптом:** перед merge-PR `feat/workspaces → main` сделан контрольный ручной прогон `DB tests (pgTAP)` (`workflow_dispatch`, run `30806943342`, 03.08.2026) — **FAIL**. `Files=20, Tests=609`: `19_admin_users_summary_test.sql` — 1 падение из 12, `20_accept_invite_reactivation_test.sql` — 0 из 6 (`Bad plan. You planned 6 tests but ran 0`).
+
+**Корень (доказан на выводе прогона и на схеме, не по гипотезе):**
+
+1. *Почему не ловилось раньше.* `db-tests.yml` триггерится на push в `develop`/`main` и на PR в `develop`/`main`/`feat/workspaces`, по путям `supabase/**`. Оба файла были залиты **прямыми пушами в `feat/workspaces` без PR**, поэтому CI их ни разу не исполнил. Последний до этого прогон — run `29865446224` от 21.07.2026 20:22 (ветка `fix/workspace-limits-owned-and-accept`), то есть ДО появления миграции 0039 (21.07 ~21:40) и 0040 (22.07) вместе с их тестами.
+2. *Тест 19, кейс 11 (`have: TF-CK8CMG`, `want: TF-FREE00`).* Фикстура вставляет `public.profiles` с `ON CONFLICT (id) DO NOTHING`, но, в отличие от теста 20, **не отключает триггер** `on_auth_user_created` на `auth.users`. Триггер уже создал profiles-строку, а колонка `public_user_id` с миграции 0026 имеет `DEFAULT public.assign_public_user_id()` → строка приходит со сгенерированным TF-ID, фикстурный `TF-FREE00` молча не применяется.
+3. *Тест 20 (23505 в setup).* Фикстура вставляла **два pending-инвайта на одну пару** `(ws20, гость)`, а миграция 0032 держит partial unique index `sync_workspace_invites_pending_uq on (workspace_id, target_user_id) where status = 'pending'`. `ON CONFLICT (id) DO NOTHING` тут не спасает — конфликт по частичному индексу, а не по `id`. Исключение в `DO $$`-блоке роняло файл целиком, до `plan(6)`.
+
+**Важно:** оба падения — **баги тестовых фикстур, а не прода**. И DEFAULT на `public_user_id`, и «не более одного pending на пару» — намеренные инварианты; они как раз отработали правильно. Ни миграции, ни код приложения не менялись.
+
+**Фикс (без ADR — правки только в тестах и доке):**
+
+- `supabase/tests/19_admin_users_summary_test.sql`: `ON CONFLICT (id) DO NOTHING` → `DO UPDATE SET email = EXCLUDED.email, public_user_id = EXCLUDED.public_user_id` + комментарий про триггер и DEFAULT из 0026. Триггер не трогаем — фикстура становится детерминированной сама по себе.
+- `supabase/tests/20_accept_invite_reactivation_test.sql`: в setup остаётся только `inv20a`; `inv20b` заводится по сценарию **после** того, как `inv20a` принят и перестал быть `pending` (`accept_invite` ставит `status='accepted'`, миграция 0040). Плюс новый 7-й кейс `F15-2a2` (`throws_ok ... 23505`), который фиксирует сам инвариант индекса под тестом, чтобы фикстура больше не разошлась со схемой молча. `plan(6)` → `plan(7)`.
+- `docs/migrations.md`: в раздел «Проверка перед применением в prod» добавлено правило — после добавления миграции или pgTAP-теста прямым пушем вручную дёргать `gh workflow run db-tests.yml --ref <ветка>` и дожидаться зелёного.
+
+**Верификация:** повторный прогон `DB tests (pgTAP)` на `feat/workspaces` — зелёный, 20 файлов / 610 тестов (было 609, +1 новый кейс F15-2a2).
+
+**Статус:** ✅ ИСПРАВЛЕНО (03.08.2026, в составе merge-PR `feat/workspaces → main`).
+
+---
+
+### 7.30. `log_task_activity()` (миграция 0034) без `REVOKE EXECUTE` — SECURITY DEFINER функция доступна `anon`/`authenticated` через PostgREST RPC (F35, 🟡 открыта)
+
+**Симптом:** Security Advisor прод-проекта `sejpmzrmtgcvevukggkx` (снят 03.08.2026) отдаёт два WARN на одну функцию: `anon_security_definer_function_executable` и `authenticated_security_definer_function_executable` — «`public.log_task_activity()` can be executed by the `anon`/`authenticated` role as a SECURITY DEFINER function via `/rest/v1/rpc/log_task_activity`».
+
+**Корень (доказан по файлу миграции и по Advisor прода):** `supabase/migrations/0034_task_activity_log.sql` создаёт `create or replace function public.log_task_activity() ... security definer`, но **не содержит** `revoke execute on function public.log_task_activity() from anon, authenticated, PUBLIC`. Это прямое требование `docs/migrations.md` §«Trigger-функции» и устоявшийся прецедент миграции 0013 (`0013_revoke_execute_on_trigger_functions.sql`), которое при написании 0034 было пропущено. Прочие SECURITY DEFINER функции в списке Advisor (`accept_invite`, `invite_to_workspace`, `find_user_by_public_id`, `get_admin_users_summary` и т.д.) — намеренные RPC с внутренними гейтами, они не находка.
+
+**Оценка эксплуатируемости — низкая:** триггерную функцию нельзя вызвать напрямую, Postgres отобьёт вызов (`trigger functions can only be called as triggers`, 0A000) ещё до тела. Риск — не в исполнении, а в отклонении от контракта прав (лишний EXECUTE у `anon` на прод-объекте) и в постоянном WARN, который зашумляет Advisor и обесценивает правило «после apply не должно быть новых warn».
+
+**Предлагаемый фикс (отдельным патчем, НЕ в merge-PR):** миграция `0041_revoke_execute_log_task_activity.sql` — идемпотентный `revoke execute ... from anon, authenticated, PUBLIC` (триггер продолжит работать: триггеры исполняются от владельца таблицы независимо от GRANT EXECUTE) + pgTAP-кейсы `hasnt_function_privs` в отдельном тесте по образцу теста 19. Применение на прод — вручную, с `confirm_action`, после зелёного pgTAP.
+
+**Статус:** 🟡 открыта — заведена 03.08.2026 при подготовке merge-PR, к мержу не блокер (состояние прода этим PR не меняется).
+
 ---
 
 ## 8. Что этот аудит покрыл, а что нет
@@ -1025,6 +1065,8 @@ _N1/N2/N3 в текущий заход не включены по явному �
 | 0009 | F15: `accept_invite` реактивирует soft-deleted membership через `INSERT ... ON CONFLICT DO UPDATE` (миграция 0040), `id` стабилен для pull-matcher (accepted) | `docs/adr/0009-accept-invite-upsert-membership.md` |
 | 0010 | F16: авто-обнаружение и восстановление битой локальной SQLite при старте (`detectAndRecoverCorruption` в `initDb`, `SqliteCorruptError`/`withCorruptionGuard` в pull.ts, prune-skip, тост + reload) — только клиент, без миграций (accepted) | `docs/adr/0010-sqlite-corruption-auto-recovery.md` |
 | 0011 | F17: реконсиль uuid членства при рассинхроне local↔server (fallback-матчинг `applyCloudRowMembers` по `(workspace_id, user_id)` + переклейка uuid; откат F16-эскалации 2067→corruption) — только клиент, без миграций (accepted) | `docs/adr/0011-membership-uuid-mismatch-reconcile.md` |
+| 0012–0026 | (в этой таблице не дублируются — актуальный полный индекс ведётся в [`docs/adr/README.md`](../adr/README.md)) | `docs/adr/README.md` |
+| 0027 | Миграции на прод применяются ВРУЧНУЮ с `confirm_action`; CI их НЕ применяет (прежнее утверждение в `docs/migrations.md` ошибочно — ни один workflow не ходит в прод-БД). Мерж `feat/workspaces → main` merge-коммитом, без изменений прод-БД: 0027–0040 уже применены, прод легально опережает `main` (accepted) | `docs/adr/0027-manual-migrations-and-workspaces-merge-to-main.md` |
 | — | удалили/оставили `renewal_attempts` в пользу `renewal_attempts_count` (F2) — решение ещё не принято, фронт-часть не деплоилась | тбд |
 
 ---

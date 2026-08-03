@@ -41,11 +41,18 @@ BEGIN
     (norm_id,  'p4-norm@test'),
     (free_id,  'p4-free@test')
     ON CONFLICT (id) DO NOTHING;
+  -- ВАЖНО (F34): DO UPDATE, а НЕ DO NOTHING. Триггер on_auth_user_created на
+  -- auth.users уже создал profiles-строку, а колонка public_user_id с миграции
+  -- 0026 имеет DEFAULT public.assign_public_user_id() → строка приходит со
+  -- СГЕНЕРИРОВАННЫМ TF-ID. При DO NOTHING фикстурные TF-ADMIN0/TF-NORM00/
+  -- TF-FREE00 молча не применялись и тест 11 сравнивал ожидаемое с рандомным.
   INSERT INTO public.profiles (id, email, public_user_id) VALUES
     (admin_id, 'p4-admin@test', 'TF-ADMIN0'),
     (norm_id,  'p4-norm@test',  'TF-NORM00'),
     (free_id,  'p4-free@test',  'TF-FREE00')
-    ON CONFLICT (id) DO NOTHING;
+    ON CONFLICT (id) DO UPDATE
+      SET email = EXCLUDED.email,
+          public_user_id = EXCLUDED.public_user_id;
   -- Entitlement ТОЛЬКО для admin и обычного юзера; free-юзер — БЕЗ строки.
   INSERT INTO public.user_entitlements (user_id, plan, source) VALUES
     (admin_id, 'lifetime', 'seed'),

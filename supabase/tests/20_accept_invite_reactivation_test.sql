@@ -18,7 +18,7 @@
 -- Совместимо с vanilla Postgres 15 (CI).
 
 BEGIN;
-SELECT plan(6);
+SELECT plan(7);
 
 -- ============================================================================
 -- SETUP
@@ -53,13 +53,15 @@ BEGIN
   INSERT INTO public.sync_workspace_members (id, workspace_id, user_id, role) VALUES
     ('im20o','ws20',u_own,'owner') ON CONFLICT DO NOTHING;
 
-  -- Два инвайта одному гостю в одно и то же пространство: сперва editor, потом
-  -- viewer. Первый принимается сразу (INSERT-путь), затем гость делает leave
-  -- (soft-delete), после чего принимается второй инвайт (UPDATE-путь).
+  -- Только ПЕРВЫЙ инвайт (editor). Второй (viewer) заводится ПОЗЖЕ по сценарию —
+  -- после того, как первый принят и перестал быть pending.
+  -- F34: заводить оба сразу нельзя — partial unique index
+  -- sync_workspace_invites_pending_uq (0032) держит не более ОДНОГО pending на
+  -- пару (workspace_id, target_user_id); прежняя фикстура падала на 23505 ещё в
+  -- setup и роняла весь файл (0 из 6 тестов). Это инвариант прода, не баг схемы.
   INSERT INTO public.sync_workspace_invites
     (id, workspace_id, inviter_user_id, target_public_user_id, target_user_id, role, status, expires_at) VALUES
-    ('inv20a','ws20',u_own,'TF-GST202',u_gst,'editor','pending', now()+interval '7 days'),
-    ('inv20b','ws20',u_own,'TF-GST202',u_gst,'viewer','pending', now()+interval '7 days')
+    ('inv20a','ws20',u_own,'TF-GST202',u_gst,'editor','pending', now()+interval '7 days')
     ON CONFLICT (id) DO NOTHING;
 END$$;
 
@@ -106,7 +108,26 @@ SELECT isnt(
 
 -- ============================================================================
 -- F15-2: повторный invite → повторный accept (UPDATE-путь, реактивация).
+-- Второй инвайт заводится ЗДЕСЬ (суперюзером, роль сброшена выше): inv20a уже
+-- accepted, поэтому pending-инвайт на ту же пару снова допустим индексом.
 -- ============================================================================
+INSERT INTO public.sync_workspace_invites
+  (id, workspace_id, inviter_user_id, target_public_user_id, target_user_id, role, status, expires_at) VALUES
+  ('inv20b','ws20','a0000020-0000-0000-0000-000000000001'::uuid,'TF-GST202',
+   'a0000020-0000-0000-0000-000000000002'::uuid,'viewer','pending', now()+interval '7 days')
+  ON CONFLICT (id) DO NOTHING;
+
+-- F34: сам инвариант «не более одного pending на пару» — под тестом, чтобы
+-- фикстура больше не разошлась со схемой молча.
+SELECT throws_ok(
+  $$INSERT INTO public.sync_workspace_invites
+      (id, workspace_id, inviter_user_id, target_public_user_id, target_user_id, role, status, expires_at)
+    VALUES ('inv20c','ws20','a0000020-0000-0000-0000-000000000001'::uuid,'TF-GST202',
+            'a0000020-0000-0000-0000-000000000002'::uuid,'viewer','pending', now()+interval '7 days')$$,
+  '23505'::char(5),
+  NULL::text,
+  'F15-2a2: второй pending-инвайт на ту же пару (ws, target) отбивается индексом sync_workspace_invites_pending_uq');
+
 SET LOCAL ROLE authenticated;
 SET LOCAL request.jwt.claim.sub TO 'a0000020-0000-0000-0000-000000000002'; -- u_gst
 
