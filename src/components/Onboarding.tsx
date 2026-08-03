@@ -35,7 +35,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   X, ChevronRight, ChevronLeft, Sparkles,
   ListChecks, CalendarDays, LayoutDashboard, BarChart3,
-  Settings as SettingsIcon, HelpCircle, Plus, Tag, Layers,
+  Settings as SettingsIcon, HelpCircle, Plus, Tag, Layers, Users,
   LucideIcon,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
@@ -87,13 +87,23 @@ const STEPS: Step[] = [
     },
   },
   {
+    target: null,
+    route: '/tasks',
+    icon: Users,
+    title: { ru: 'Пространства', en: 'Workspaces' },
+    body: {
+      ru: 'Задачи живут внутри пространств (workspace) — переключатель вверху сайдбара. У вас всегда есть личное пространство, а на Pro/Trial можно создавать общие и приглашать туда других по вашему TF-id (его видно в Настройки → Аккаунт).',
+      en: 'Tasks live inside workspaces — the switcher is at the top of the sidebar. You always have a personal workspace, and on Pro/Trial you can create shared ones and invite others using your TF-id (visible in Settings → Account).',
+    },
+  },
+  {
     target: 'view-toggle',
     route: '/tasks',
     icon: ListChecks,
-    title: { ru: 'Задачи — список и Kanban', en: 'Tasks — list and Kanban' },
+    title: { ru: 'Задачи — список и Карточки', en: 'Tasks — list and Cards' },
     body: {
-      ru: 'На вкладке «Задачи» — два вида: список с колонками и доска Kanban со статусами. Переключатель в шапке (подсвечен). В верхней панели быстрые метрики (всего, в работе, просрочено, ...) — клик по чипу фильтрует список.',
-      en: 'The Tasks tab has two views: a list with columns and a Kanban board grouped by status. Toggle in the header (highlighted). The top bar shows quick metric chips (total, in progress, overdue, …) — click a chip to filter the list.',
+      ru: 'На вкладке «Задачи» — два вида: список с колонками и доска «Карточки» со статусами. Переключатель в шапке (подсвечен). В верхней панели быстрые метрики (всего, в работе, просрочено, ...) — клик по чипу фильтрует список.',
+      en: 'The Tasks tab has two views: a list with columns and a Cards board grouped by status. Toggle in the header (highlighted). The top bar shows quick metric chips (total, in progress, overdue, …) — click a chip to filter the list.',
     },
   },
   {
@@ -152,8 +162,8 @@ const STEPS: Step[] = [
     icon: SettingsIcon,
     title: { ru: 'Настройки', en: 'Settings' },
     body: {
-      ru: 'Темы (Светлая, Тёмная, Akatsuki, Konoha), теги, статусы, шаблоны задач, экспорт/импорт данных, размер шрифта, вкладка по умолчанию.',
-      en: 'Themes (Light, Dark, Akatsuki, Konoha), tags, statuses, task templates, data export/import, font size, default tab.',
+      ru: 'Темы (Светлая, Тёмная, Акацуки, Деревня листа), теги, статусы, шаблоны задач, экспорт/импорт данных, размер шрифта, вкладка по умолчанию.',
+      en: 'Themes (Light, Dark, Akatsuki, Hidden Leaf), tags, statuses, task templates, data export/import, font size, default tab.',
     },
   },
   {

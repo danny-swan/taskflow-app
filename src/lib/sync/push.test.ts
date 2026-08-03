@@ -12,7 +12,8 @@
  *      пропускается (не входит в батч).
  *   4. MAX_ATTEMPTS: строка с attempt_count>=5 пропускается навсегда.
  *   5. PUSH_ORDER: statuses пушатся раньше tasks.
- *   6. Soft-delete (op='delete'): отправляется через upsert (deleted_at уже в payload'е).
+ *   6. Soft-delete (op='delete'): уходит UPDATE'ом по ключу строки (НЕ upsert'ом),
+ *      патч содержит только поля гашения — F42 / ADR 0033.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import initSqlJs, { type Database } from 'sql.js';
@@ -88,6 +89,17 @@ type UpsertHandler = (
 let upsertHandler: UpsertHandler = async () => ({ error: null });
 const upsertCalls: { table: string; rows: any[]; opts: any }[] = [];
 
+// F42: soft delete уходит через .update(patch).eq(key, value)… — мок повторяет
+// цепочку PostgREST'а и записывает патч вместе с фильтрами.
+type UpdateHandler = (
+  table: string,
+  patch: any,
+  filters: Record<string, unknown>,
+) => Promise<{ error: { message: string } | null }>;
+
+let updateHandler: UpdateHandler = async () => ({ error: null });
+const updateCalls: { table: string; patch: any; filters: Record<string, unknown> }[] = [];
+
 vi.mock('../supabase', () => ({
   supabase: {
     from(table: string) {
@@ -95,6 +107,20 @@ vi.mock('../supabase', () => ({
         upsert(rows: any[], opts: any) {
           upsertCalls.push({ table, rows, opts });
           return upsertHandler(table, rows, opts);
+        },
+        update(patch: any) {
+          const filters: Record<string, unknown> = {};
+          const builder: any = {
+            eq(col: string, val: unknown) {
+              filters[col] = val;
+              return builder;
+            },
+            then(resolve: any, reject: any) {
+              updateCalls.push({ table, patch, filters });
+              return updateHandler(table, patch, filters).then(resolve, reject);
+            },
+          };
+          return builder;
         },
         select() {
           return {
@@ -168,6 +194,8 @@ beforeEach(async () => {
   liveDb = null;
   upsertCalls.length = 0;
   upsertHandler = async () => ({ error: null });
+  updateCalls.length = 0;
+  updateHandler = async () => ({ error: null });
   await setupDb();
   // Очищаем seed'ы, чтобы каждый тест стартовал с пустым outbox.
   // Миграция v2 seed'ит default task_template, v7 бэкфиллит её в outbox.
@@ -379,7 +407,7 @@ describe('push worker', () => {
     expect(upsertCalls[0].rows.length).toBe(2);
   });
 
-  it('soft-delete (op=delete): payload содержит deleted_at и уходит через upsert', async () => {
+  it('soft-delete (op=delete): уходит UPDATE по ключу, а не upsert (F42)', async () => {
     const { pushBatch } = await import('./push');
     const { uuid } = insertStatus('X', new Date().toISOString());
     liveDb!.run(
@@ -389,9 +417,63 @@ describe('push worker', () => {
 
     const result = await pushBatch('u', 'c');
     expect(result.pushed).toBe(1);
-    expect(upsertCalls.length).toBe(1);
-    expect(upsertCalls[0].table).toBe('sync_statuses');
-    expect(upsertCalls[0].rows[0].deleted_at).toBeTruthy();
+    // Главный якорь F42: ни одного upsert'а на гашении.
+    expect(upsertCalls.length).toBe(0);
+    expect(updateCalls.length).toBe(1);
+    expect(updateCalls[0].table).toBe('sync_statuses');
+    expect(updateCalls[0].filters).toEqual({ id: uuid });
+    expect(updateCalls[0].patch.deleted_at).toBeTruthy();
+  });
+
+  it('soft-delete: патч несёт только поля гашения, содержимое строки не переписывается (F42)', async () => {
+    const { pushBatch } = await import('./push');
+    const { uuid } = insertStatus('Секретное имя', new Date().toISOString());
+    liveDb!.run(
+      `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('statuses', ?, 'delete', datetime('now'), 0)`,
+      [uuid],
+    );
+
+    await pushBatch('u', 'c');
+    expect(updateCalls.length).toBe(1);
+    expect(Object.keys(updateCalls[0].patch).sort()).toEqual(
+      ['client_id', 'deleted_at', 'updated_at', 'version'].sort(),
+    );
+    expect(updateCalls[0].patch.name).toBeUndefined();
+  });
+
+  it('soft-delete: ошибка UPDATE помечает строку failed и оставляет её в outbox', async () => {
+    const { pushBatch } = await import('./push');
+    const { uuid } = insertStatus('Y', new Date().toISOString());
+    liveDb!.run(
+      `INSERT INTO sync_outbox (entity_table, entity_uuid, op, queued_at, attempt_count) VALUES ('statuses', ?, 'delete', datetime('now'), 0)`,
+      [uuid],
+    );
+    updateHandler = async () => ({ error: { message: 'network down' } });
+
+    const result = await pushBatch('u', 'c');
+    expect(result.pushed).toBe(0);
+    expect(result.failed).toBe(1);
+    const row = liveDb!.exec(`SELECT attempt_count, last_error FROM sync_outbox WHERE entity_uuid='${uuid}'`);
+    expect(row[0].values[0][0]).toBe(1);
+    expect(String(row[0].values[0][1])).toContain('network down');
+  });
+
+  it('softDeleteRow: составной ключ (workspace_settings) фильтрует по обеим колонкам', async () => {
+    const { _internals } = await import('./push');
+    const err = await _internals.softDeleteRow(
+      'sync_workspace_settings',
+      { workspace_id: 'ws_1', key: 'theme', deleted_at: 'now', updated_at: 'now', version: 2, client_id: 'c' },
+      'workspace_id,key',
+    );
+    expect(err).toBeNull();
+    expect(updateCalls[0].filters).toEqual({ workspace_id: 'ws_1', key: 'theme' });
+  });
+
+  it('softDeleteRow: нет значения ключа в payload → внятная ошибка, запрос не уходит', async () => {
+    const { _internals } = await import('./push');
+    const err = await _internals.softDeleteRow('sync_statuses', { deleted_at: 'now' }, 'id');
+    expect(err).toContain('no key column');
+    expect(updateCalls.length).toBe(0);
   });
 });
 
