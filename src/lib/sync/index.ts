@@ -309,9 +309,18 @@ export async function syncNow(): Promise<SyncResult> {
       // смены аккаунта), обновляем стор и выходим БЕЗ pull/push.
       try {
         const dbMod = await import('../db');
-        if (typeof dbMod.ensureSeededIfEmpty === 'function') await dbMod.ensureSeededIfEmpty();
+        // F36 (ADR 0028): ws-id передаём ЯВНО. reconcilePersonalWorkspace выше
+        // пишет указатели через синхронный db.run(), который в Tauri доводит
+        // запись до нативной SQLite fire-and-forget — а сев читал указатель именно
+        // из нативной базы и мог увидеть пустоту → статусы уезжали на `ws_local`,
+        // а welcome-задача — на `ws_<uid>` (доска без колонок, пустые «Задачи»).
+        // computeWorkspaceId тянем лениво (как reconcile выше): статический импорт
+        // './workspace' затянул бы '../db' в unit-тесты оркестратора.
+        const { computeWorkspaceId } = await import('./workspace');
+        const seedWsId = computeWorkspaceId(userId);
+        if (typeof dbMod.ensureSeededIfEmpty === 'function') await dbMod.ensureSeededIfEmpty(seedWsId);
         if (typeof dbMod.ensureWelcomeTaskIfNeeded === 'function') {
-          await dbMod.ensureWelcomeTaskIfNeeded(userId);
+          await dbMod.ensureWelcomeTaskIfNeeded(userId, seedWsId);
         }
       } catch (e) {
         logger.warn('[sync/orchestrator] free-plan local bootstrap failed:', e);
@@ -368,7 +377,9 @@ export async function syncNow(): Promise<SyncResult> {
       try {
         const dbMod = await import('../db');
         if (typeof dbMod.ensureSeededIfEmpty === 'function') {
-          const seeded = await dbMod.ensureSeededIfEmpty();
+          // F36: так же явно штампуем personal-ws текущего пользователя.
+          const { computeWorkspaceId } = await import('./workspace');
+          const seeded = await dbMod.ensureSeededIfEmpty(computeWorkspaceId(userId));
           if (seeded) {
             logger.info('[sync/orchestrator] базовые статусы засеяны (облако было без статусов)');
             await refreshStoreAfterPull(1); // обновить UI: появились колонки

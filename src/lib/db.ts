@@ -709,8 +709,17 @@ export async function clearUserData(): Promise<void> {
 // плодилась бы лишняя «стартовая задача» — это и есть баг №3). Работает и в
 // web (webDb.run), и в Tauri (getTauriDb().execute), заполняя оба зеркала.
 //
+// F36 (ADR 0028): параметр `seedWsIdOverride`. В Tauri `db.run()` пишет в
+// нативную SQLite fire-and-forget (без await), а эта функция читает
+// `personal_workspace_id` из НАТИВНОЙ базы — то есть сразу после
+// `reconcilePersonalWorkspace()` указателя там ещё может не быть, и сев
+// уходил на placeholder `ws_local` (задача при этом создавалась уже под
+// `ws_<uid>` → доска без колонок). Поэтому вызывающий, который знает userId,
+// обязан передать канонический `ws_<uid>` явно, а не полагаться на состояние
+// БД. Без параметра поведение прежнее (чтение указателя из settings).
+//
 // Возвращает true, если сев произошёл (статусов не было), иначе false.
-export async function ensureSeededIfEmpty(): Promise<boolean> {
+export async function ensureSeededIfEmpty(seedWsIdOverride?: string): Promise<boolean> {
   // 1. Проверяем, есть ли уже статусы. Считаем по «главному» хранилищу:
   //    в Tauri — нативная БД, в web — webDb.
   let statusCount = 0;
@@ -760,9 +769,13 @@ export async function ensureSeededIfEmpty(): Promise<boolean> {
   } catch (e) { console.warn('[ensureSeededIfEmpty] read client_id:', e); }
 
   // Wave A: personal workspace id для штампа seed-строк (аналогично seed()).
-  let seedWsId: string = 'ws_local';
+  // F36: приоритет — явно переданный ws-id (см. комментарий у сигнатуры).
+  let seedWsId: string = (seedWsIdOverride ?? '').trim() || 'ws_local';
   try {
-    if (IS_TAURI) {
+    if (seedWsId !== 'ws_local') {
+      // Явный ws-id получен — читать БД не нужно (и небезопасно: в Tauri
+      // указатель мог ещё не долететь до нативного зеркала).
+    } else if (IS_TAURI) {
       const d = await getTauriDb();
       const rows: any[] = await d.select(`SELECT value FROM settings WHERE key='personal_workspace_id'`);
       seedWsId = (String(rows[0]?.value ?? '').trim()) || 'ws_local';
@@ -958,8 +971,14 @@ export async function dedupeSeedStatuses(): Promise<number> {
 //   • маркера нет и задач нет       → создаём welcome + enqueue outbox + маркер.
 // clearUserData() удаляет маркер, поэтому новый аккаунт снова получит welcome.
 //
+// F36 (ADR 0028): параметр `seedWsIdOverride` — та же гарантия, что и у
+// ensureSeededIfEmpty(): ws-id берётся из аргумента, а не из нативного зеркала
+// settings (которое в Tauri обновляется fire-and-forget). Дополнительно статус
+// для welcome-задачи выбирается СТРОГО внутри целевого пространства — иначе
+// задача могла бы сослаться на статус чужого ws и стать невидимой на доске.
+//
 // Возвращает true, если welcome-задача была создана, иначе false.
-export async function ensureWelcomeTaskIfNeeded(_userId?: string): Promise<boolean> {
+export async function ensureWelcomeTaskIfNeeded(_userId?: string, seedWsIdOverride?: string): Promise<boolean> {
   const readScalar = async (sql: string, col: string): Promise<any> => {
     try {
       if (IS_TAURI) {
@@ -998,18 +1017,28 @@ export async function ensureWelcomeTaskIfNeeded(_userId?: string): Promise<boole
     return false;
   }
 
-  // Статус обязателен (tasks.status_id NOT NULL). Предпочитаем «Сегодня» (как в
-  // seed()), иначе — первый по порядку. Если статусов нет вовсе — не создаём.
-  let statusId = await readScalar(`SELECT id FROM statuses WHERE name='Сегодня' LIMIT 1`, 'id');
-  if (statusId == null) statusId = await readScalar(`SELECT id FROM statuses ORDER BY sort_order, id LIMIT 1`, 'id');
-  if (statusId == null) {
-    console.warn('[ensureWelcomeTaskIfNeeded] no statuses available, skipping welcome');
-    return false;
-  }
   const tagId = (await readScalar(`SELECT id FROM tags WHERE name='PRS' LIMIT 1`, 'id')) ?? null;
   const clientId = (await readScalar(`SELECT value FROM settings WHERE key='client_id' LIMIT 1`, 'value')) ?? null;
+  // F36: сначала явный ws-id из аргумента, только потом указатель из settings.
   const seedWsId =
-    (String((await readScalar(`SELECT value FROM settings WHERE key='personal_workspace_id' LIMIT 1`, 'value')) ?? '').trim()) || 'ws_local';
+    ((seedWsIdOverride ?? '').trim())
+    || (String((await readScalar(`SELECT value FROM settings WHERE key='personal_workspace_id' LIMIT 1`, 'value')) ?? '').trim())
+    || 'ws_local';
+
+  // Статус обязателен (tasks.status_id NOT NULL). Предпочитаем «Сегодня» (как в
+  // seed()), иначе — первый по порядку. F36: ищем ТОЛЬКО среди статусов целевого
+  // пространства — задача со статусом чужого ws не рендерится на доске.
+  const wsLit = seedWsId.replace(/'/g, "''");
+  let statusId = await readScalar(
+    `SELECT id FROM statuses WHERE name='Сегодня' AND workspace_id='${wsLit}' AND deleted_at IS NULL LIMIT 1`, 'id');
+  if (statusId == null) {
+    statusId = await readScalar(
+      `SELECT id FROM statuses WHERE workspace_id='${wsLit}' AND deleted_at IS NULL ORDER BY sort_order, id LIMIT 1`, 'id');
+  }
+  if (statusId == null) {
+    console.warn(`[ensureWelcomeTaskIfNeeded] no statuses in ${seedWsId}, skipping welcome`);
+    return false;
+  }
 
   const now = new Date().toISOString();
   const today = new Date();

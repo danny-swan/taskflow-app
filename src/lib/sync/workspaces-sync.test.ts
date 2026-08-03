@@ -428,6 +428,51 @@ describe('(e) reconcilePersonalWorkspace: ws_local → ws_<uid>', () => {
     expect(reconcilePersonalWorkspace(USER_ID)).toBe(false);
   });
 
+  it('F36: переклеивает сирот ws_local в дочерних таблицах, когда строки ws/членства под ws_local нет', async () => {
+    liveDb = null;
+    await setupDb(true); // привязана → personal-ws сразу ws_<uid>
+    const { reconcilePersonalWorkspace } = await import('./workspace');
+
+    // Состояние с реальной data.db пользователя (03.08.2026): строки workspaces/
+    // workspace_members есть ТОЛЬКО под ws_<uid>, а сид-справочник остался на
+    // placeholder'е ws_local (сев прошёл до появления указателя), а welcome-задача —
+    // уже под ws_<uid>. До фикса hasLocalRefs смотрел только на ws/членство и
+    // возвращал false → сироты не переклеивались никогда, доска была без колонок.
+    liveDb!.run(
+      `INSERT INTO statuses (name, color, sort_order, behavior, uuid, version, client_id, updated_at, workspace_id)
+       VALUES ('Сегодня','#1',0,'middle','st-f36',1,'c','t','ws_local')`,
+    );
+    liveDb!.run(
+      `INSERT INTO tags (name, color, sort_order, uuid, version, client_id, updated_at, workspace_id)
+       VALUES ('PRS','#2',0,'tg-f36',1,'c','t','ws_local')`,
+    );
+    const stId = liveDb!.exec(`SELECT id FROM statuses WHERE uuid='st-f36'`)[0].values[0][0];
+    liveDb!.run(
+      `INSERT INTO tasks (title, comment, status_id, created_at, updated_at, uuid, version, client_id, workspace_id)
+       VALUES ('Добро пожаловать в TaskFlow','',?,'t','t','tk-f36',1,'c',?)`,
+      [stId, WS],
+    );
+    // Ключевое условие сценария: под ws_local нет ни ws-строки, ни членства.
+    expect(liveDb!.exec(`SELECT COUNT(*) FROM workspaces WHERE uuid='ws_local'`)[0].values[0][0]).toBe(0);
+    expect(liveDb!.exec(`SELECT COUNT(*) FROM workspace_members WHERE workspace_id='ws_local'`)[0].values[0][0]).toBe(0);
+
+    const did = reconcilePersonalWorkspace(USER_ID);
+    expect(did).toBe(true);
+
+    // Сироты переехали в personal-ws — задача и её статус теперь в ОДНОМ ws.
+    expect(liveDb!.exec(`SELECT workspace_id FROM statuses WHERE uuid='st-f36'`)[0].values[0][0]).toBe(WS);
+    expect(liveDb!.exec(`SELECT workspace_id FROM tags WHERE uuid='tg-f36'`)[0].values[0][0]).toBe(WS);
+    expect(liveDb!.exec(`SELECT COUNT(*) FROM statuses WHERE workspace_id='ws_local'`)[0].values[0][0]).toBe(0);
+    const joined = liveDb!.exec(
+      `SELECT COUNT(*) FROM tasks t JOIN statuses s ON s.id=t.status_id
+        WHERE t.uuid='tk-f36' AND s.workspace_id=t.workspace_id`,
+    )[0].values[0][0];
+    expect(joined).toBe(1);
+
+    // Идемпотентность: сирот больше нет → повторный вызов ничего не меняет.
+    expect(reconcilePersonalWorkspace(USER_ID)).toBe(false);
+  });
+
   it('current указывает на чужой ws (нет членства) → переставляет на ws_<uid>', async () => {
     liveDb = null;
     await setupDb(true); // привязана под USER_ID, v11 → current = ws_<uid>

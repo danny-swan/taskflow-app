@@ -46,7 +46,7 @@ import {
 } from '../lib/snapshots';
 import { getEntitlement, isProOrTrial } from '../lib/entitlements';
 import { saveLocalAccountData, loadLocalAccountData } from '../lib/localAccountStore';
-import { reconcilePersonalWorkspace } from '../lib/sync/workspace';
+import { reconcilePersonalWorkspace, computeWorkspaceId } from '../lib/sync/workspace';
 import { getClientId } from '../lib/clientId';
 import * as db from '../lib/db';
 import { logger } from '../lib/logger';
@@ -281,8 +281,17 @@ export function AccountSwitchGate() {
               }
             }
             if (!restored) {
-              await db.ensureSeededIfEmpty();
-              await db.ensureWelcomeTaskIfNeeded(sessionUserId);
+              // F36 (ADR 0028): ws-id для штампа seed-строк передаём ЯВНО.
+              // reconcilePersonalWorkspace выше пишет `personal_workspace_id` через
+              // синхронный db.run(), который в Tauri доводит запись до нативной
+              // SQLite fire-and-forget, а ensureSeededIfEmpty читал указатель из
+              // нативной базы — и на свежем free-аккаунте видел пустоту: 7
+              // сид-статусов уезжали на `ws_local`, welcome-задача — на `ws_<uid>`,
+              // и «Задачи» открывались пустыми (доска рендерит колонки по
+              // статусам текущего ws).
+              const seedWsId = computeWorkspaceId(sessionUserId);
+              await db.ensureSeededIfEmpty(seedWsId);
+              await db.ensureWelcomeTaskIfNeeded(sessionUserId, seedWsId);
             }
             if (needsRestart) {
               // Не сеем welcome, не трогаем стор — после рестарта приложение
