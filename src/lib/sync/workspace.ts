@@ -20,6 +20,15 @@ import { enqueueOutbox } from '../outbox';
 /** Локальный placeholder-id personal-пространства для непривязанной базы. */
 export const LOCAL_WS_ID = 'ws_local';
 
+/**
+ * Дочерние sync-таблицы со ссылкой `workspace_id`, которые переносит
+ * переклейка `ws_local` → `ws_<uid>` (и по которым ищем сирот, F36/ADR 0028).
+ * `workspace_settings` обрабатывается отдельно (шаг 2 переклейки).
+ */
+const LOCAL_WS_CHILD_TABLES = [
+  'tasks', 'statuses', 'tags', 'task_templates', 'overdue_events', 'task_hold_periods',
+] as const;
+
 /** Детерминированный id personal-пространства из user_id (как на сервере). */
 export function computeWorkspaceId(userId: string): string {
   return 'ws_' + userId.toLowerCase().replace(/-/g, '');
@@ -272,6 +281,24 @@ function readPointer(key: string): string | null {
   }
 }
 
+/**
+ * Остались ли где-то в дочерних таблицах ссылки на placeholder `ws_local`
+ * (F36, ADR 0028). Проверяем ровно те таблицы, которые переносит шаг 1
+ * reconcileLocalPlaceholder. Отсутствие таблицы (база до v11) — не ошибка.
+ */
+function hasLocalChildRefs(): boolean {
+  for (const t of LOCAL_WS_CHILD_TABLES) {
+    try {
+      if (db.get<{ n: number }>(`SELECT 1 AS n FROM ${t} WHERE workspace_id=? LIMIT 1`, [LOCAL_WS_ID])) {
+        return true;
+      }
+    } catch {
+      // Таблицы может не быть на старой базе — пропускаем.
+    }
+  }
+  return false;
+}
+
 /** Есть ли у пользователя живое членство в данном ws в локальном зеркале. */
 function hasLocalMembership(userId: string, wsId: string): boolean {
   try {
@@ -309,7 +336,18 @@ function reconcileLocalPlaceholder(userId: string, target: string): boolean {
     !!db.get<{ n: number }>(
       'SELECT 1 AS n FROM workspace_members WHERE workspace_id=? LIMIT 1',
       [LOCAL_WS_ID],
-    );
+    ) ||
+    // F36 (ADR 0028): строки `workspaces`/`workspace_members` под `ws_local` может
+    // не быть вовсе (clearUserData их удаляет, а personal-ws пересоздаётся сразу
+    // под `ws_<uid>`), при этом ДОЧЕРНИЕ таблицы способны остаться на
+    // placeholder'е — например, когда сев справочника прошёл до появления
+    // указателя `personal_workspace_id` (доказано на data.db пользователя
+    // 03.08.2026: 7 сид-статусов на `ws_local`, welcome-задача на `ws_<uid>`).
+    // Такие строки-сироты невидимы для UI (фильтр по равенству workspace_id) и
+    // раньше не переклеивались никогда, потому что проверка смотрела только на
+    // ws/членство. Теперь наличие ЛЮБОЙ дочерней ссылки на `ws_local` включает
+    // переклейку — она же (шаг 1 ниже) и вылечивает базу.
+    hasLocalChildRefs();
   if (!hasLocalRefs) {
     // Нет placeholder'а. Всё же убедимся, что owner_id personal-ws проставлен.
     db.run(
@@ -326,7 +364,7 @@ function reconcileLocalPlaceholder(userId: string, target: string): boolean {
   );
 
   // 1. Переносим workspace_id во всех дочерних sync-таблицах.
-  for (const t of ['tasks', 'statuses', 'tags', 'task_templates', 'overdue_events', 'task_hold_periods']) {
+  for (const t of LOCAL_WS_CHILD_TABLES) {
     try {
       db.run(`UPDATE ${t} SET workspace_id=? WHERE workspace_id=?`, [target, LOCAL_WS_ID]);
     } catch (e) {

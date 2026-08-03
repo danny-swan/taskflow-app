@@ -46,6 +46,9 @@ vi.mock('../lib/entitlements', () => ({
 const reconcilePersonalWorkspace = vi.fn();
 vi.mock('../lib/sync/workspace', () => ({
   reconcilePersonalWorkspace: (...a: unknown[]) => reconcilePersonalWorkspace(...a),
+  // F36 (ADR 0028): Gate передаёт явный ws-id в сев/welcome — мок обязан
+  // экспортировать тот же детерминированный helper, что и реальный модуль.
+  computeWorkspaceId: (uid: string) => 'ws_' + String(uid).toLowerCase().replace(/-/g, ''),
 }));
 
 // F21 (ADR 0014): локальный per-account слот free-аккаунтов.
@@ -57,13 +60,14 @@ vi.mock('../lib/localAccountStore', () => ({
 }));
 
 const clearUserData = vi.fn(async () => {});
-const ensureSeededIfEmpty = vi.fn(async () => {});
-const ensureWelcomeTaskIfNeeded = vi.fn(async (_userId?: string) => false);
+const ensureSeededIfEmpty = vi.fn(async (_seedWsId?: string) => {});
+const ensureWelcomeTaskIfNeeded = vi.fn(async (_userId?: string, _seedWsId?: string) => false);
 const dbGet = vi.fn<(sql: string, params?: unknown[]) => unknown>(() => ({ n: 0 }));
 vi.mock('../lib/db', () => ({
   clearUserData: () => clearUserData(),
-  ensureSeededIfEmpty: () => ensureSeededIfEmpty(),
-  ensureWelcomeTaskIfNeeded: (u?: string) => ensureWelcomeTaskIfNeeded(u),
+  // F36 (ADR 0028): пробрасываем явный ws-id, который Gate обязан передать.
+  ensureSeededIfEmpty: (ws?: string) => ensureSeededIfEmpty(ws),
+  ensureWelcomeTaskIfNeeded: (u?: string, ws?: string) => ensureWelcomeTaskIfNeeded(u, ws),
   get: (sql: string, params?: unknown[]) => dbGet(sql, params),
 }));
 
@@ -124,8 +128,11 @@ describe('AccountSwitchGate — free-tier перепривязка (Bug F)', () 
     expect(setBoundUserId).toHaveBeenCalledWith('new-uid');
     expect(reconcilePersonalWorkspace).toHaveBeenCalledWith('new-uid');
     expect(ensureSeededIfEmpty).toHaveBeenCalledTimes(1);
+    // F36 (ADR 0028): сев штампует явный personal-ws, а не читает указатель из БД.
+    expect(ensureSeededIfEmpty).toHaveBeenCalledWith('ws_newuid');
     // Fix 1: free-tier тоже получает welcome-задачу локально.
-    expect(ensureWelcomeTaskIfNeeded).toHaveBeenCalledWith('new-uid');
+    // F36: ws-id передаётся вторым аргументом (не читается из БД).
+    expect(ensureWelcomeTaskIfNeeded).toHaveBeenCalledWith('new-uid', 'ws_newuid');
     // Fix 2: стор перечитывает привязку → computeRole увидит owner-роль.
     expect(reloadAccountBinding).toHaveBeenCalled();
     // Синхронизация у free заблокирована — не дёргаем.
@@ -204,7 +211,8 @@ describe('AccountSwitchGate — локальный слот free-аккаунт�
     render(<AccountSwitchGate />);
 
     await waitFor(() => expect(ensureSeededIfEmpty).toHaveBeenCalledTimes(1));
-    expect(ensureWelcomeTaskIfNeeded).toHaveBeenCalledWith('new-uid');
+    // F36: ws-id передаётся вторым аргументом (не читается из БД).
+    expect(ensureWelcomeTaskIfNeeded).toHaveBeenCalledWith('new-uid', 'ws_newuid');
     await waitFor(() =>
       expect(pushToast).toHaveBeenCalledWith(
         'Вы вошли под другим аккаунтом. Локальные данные очищены, снимок сохранён.',

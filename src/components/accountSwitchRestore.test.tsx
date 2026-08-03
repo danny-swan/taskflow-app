@@ -65,6 +65,9 @@ vi.mock('../lib/entitlements', () => ({
 const reconcilePersonalWorkspace = vi.fn();
 vi.mock('../lib/sync/workspace', () => ({
   reconcilePersonalWorkspace: (...a: unknown[]) => reconcilePersonalWorkspace(...a),
+  // F36 (ADR 0028): Gate передаёт явный ws-id в сев/welcome — мок обязан
+  // экспортировать тот же детерминированный helper, что и реальный модуль.
+  computeWorkspaceId: (uid: string) => 'ws_' + String(uid).toLowerCase().replace(/-/g, ''),
 }));
 
 // F21 (ADR 0014): localStorage-слот — быстрый путь без перезапуска.
@@ -76,13 +79,14 @@ vi.mock('../lib/localAccountStore', () => ({
 }));
 
 const clearUserData = vi.fn(async () => {});
-const ensureSeededIfEmpty = vi.fn(async () => {});
-const ensureWelcomeTaskIfNeeded = vi.fn(async (_userId?: string) => false);
+const ensureSeededIfEmpty = vi.fn(async (_seedWsId?: string) => {});
+const ensureWelcomeTaskIfNeeded = vi.fn(async (_userId?: string, _seedWsId?: string) => false);
 const dbGet = vi.fn<(sql: string, params?: unknown[]) => unknown>(() => ({ n: 0 }));
 vi.mock('../lib/db', () => ({
   clearUserData: () => clearUserData(),
-  ensureSeededIfEmpty: () => ensureSeededIfEmpty(),
-  ensureWelcomeTaskIfNeeded: (u?: string) => ensureWelcomeTaskIfNeeded(u),
+  // F36 (ADR 0028): пробрасываем явный ws-id, который Gate обязан передать.
+  ensureSeededIfEmpty: (ws?: string) => ensureSeededIfEmpty(ws),
+  ensureWelcomeTaskIfNeeded: (u?: string, ws?: string) => ensureWelcomeTaskIfNeeded(u, ws),
   get: (sql: string, params?: unknown[]) => dbGet(sql, params),
 }));
 
@@ -208,7 +212,11 @@ describe('F30 — авто-restore из файлового снимка (fallbac
     render(<AccountSwitchGate />);
 
     await waitFor(() => expect(ensureSeededIfEmpty).toHaveBeenCalledTimes(1));
-    expect(ensureWelcomeTaskIfNeeded).toHaveBeenCalledWith(NEW_UID);
+    // F36: ws-id передаётся вторым аргументом (не читается из БД).
+    expect(ensureWelcomeTaskIfNeeded).toHaveBeenCalledWith(
+      NEW_UID,
+      'ws_' + NEW_UID.toLowerCase().replace(/-/g, ''),
+    );
     expect(restoreSnapshot).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(pushToast).toHaveBeenCalledWith(
@@ -225,7 +233,11 @@ describe('F30 — авто-restore из файлового снимка (fallbac
     render(<AccountSwitchGate />);
 
     await waitFor(() => expect(ensureSeededIfEmpty).toHaveBeenCalledTimes(1));
-    expect(ensureWelcomeTaskIfNeeded).toHaveBeenCalledWith(NEW_UID);
+    // F36: ws-id передаётся вторым аргументом (не читается из БД).
+    expect(ensureWelcomeTaskIfNeeded).toHaveBeenCalledWith(
+      NEW_UID,
+      'ws_' + NEW_UID.toLowerCase().replace(/-/g, ''),
+    );
     // Пустышку восстанавливать нельзя — restoreSnapshot не должен был вызваться.
     expect(restoreSnapshot).not.toHaveBeenCalled();
   });
