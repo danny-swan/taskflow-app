@@ -24,6 +24,7 @@ const mk = (userId: string, over: Partial<PresenceMember> = {}): PresenceMember 
   userId,
   nickname: 'nickname' in over ? over.nickname! : `Ник ${userId}`,
   avatarVariant: over.avatarVariant ?? 1,
+  avatarColor: over.avatarColor ?? null,
   publicUserId: over.publicUserId ?? `TF-${userId.toUpperCase()}`,
 });
 

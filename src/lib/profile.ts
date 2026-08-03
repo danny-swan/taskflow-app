@@ -12,7 +12,11 @@
  *   • public_user_id (TF-XXXXXX) — ПУБЛИЧНЫЙ ID. Его юзер сообщает другим
  *     (будущий поиск/друзья). Сервер присваивает при регистрации, guard-триггер
  *     запрещает менять. Клиент его НЕ шлёт на UPDATE.
- *   • nickname / avatar_variant / bio — косметика профиля.
+ *   • nickname / avatar_variant / avatar_color / bio — косметика профиля.
+ *
+ * F41 (ADR 0032): avatar_color — ЯВНЫЙ цвет аватара (`#rrggbb`). Раньше цвет
+ * глифа брался из акцента темы, поэтому «свой» цвет менялся вместе с темой.
+ * NULL = цвет не задан → рисуем акцентом темы (обратная совместимость).
  *
  * profiles НЕ участвует в sync-цикле (outbox/push/pull). Профиль читается и
  * пишется отдельным Supabase-запросом (RLS own-row), поэтому эти поля не
@@ -28,11 +32,30 @@ export const BIO_MAX = 160;
 export const AVATAR_MIN = 1;
 export const AVATAR_MAX = 8;
 
+/** Формат явного цвета аватара — зеркало CHECK'а из миграции 0042. */
+export const AVATAR_COLOR_RE = /^#[0-9a-f]{6}$/i;
+
+/**
+ * Нормализует пользовательский ввод цвета: '' / null → null, `#RRGGBB` → нижний
+ * регистр. Бросает при неверном формате (тот же контракт, что и серверный CHECK).
+ */
+export function normalizeAvatarColor(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const v = value.trim().toLowerCase();
+  if (v === '') return null;
+  if (!AVATAR_COLOR_RE.test(v)) {
+    throw new Error('avatar_color должен быть в формате #rrggbb');
+  }
+  return v;
+}
+
 /** Профиль, каким его читает клиент. Внутренний `id` намеренно не тянем в UI. */
 export interface Profile {
   public_user_id: string;
   nickname: string | null;
   avatar_variant: number;
+  /** F41: явный цвет `#rrggbb`; null = акцент темы. */
+  avatar_color: string | null;
   bio: string | null;
   email: string;
   created_at: string;
@@ -42,6 +65,7 @@ export interface Profile {
 export interface ProfileUpdate {
   nickname?: string | null;
   avatar_variant?: number;
+  avatar_color?: string | null;
   bio?: string | null;
 }
 
@@ -76,12 +100,16 @@ export function validateProfileUpdate(patch: ProfileUpdate): ProfileUpdate {
     }
     out.avatar_variant = v;
   }
+  if ('avatar_color' in patch) {
+    out.avatar_color = normalizeAvatarColor(patch.avatar_color);
+  }
   return out;
 }
 
 // ─── Запросы к Supabase ─────────────────────────────────────────────────────
 
-const PROFILE_COLUMNS = 'public_user_id, nickname, avatar_variant, bio, email, created_at';
+const PROFILE_COLUMNS =
+  'public_user_id, nickname, avatar_variant, avatar_color, bio, email, created_at';
 
 /** Читает профиль текущего пользователя (RLS ограничивает own-row). */
 export async function fetchProfile(userId: string): Promise<Profile | null> {

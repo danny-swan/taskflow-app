@@ -60,7 +60,7 @@ export function PresenceIndicator() {
             data-testid="presence-avatar"
             className={'rounded-full ring-2 ring-surface bg-surface' + (i > 0 ? ' -ml-2' : '')}
           >
-            <Avatar variant={m.avatarVariant} size={26} />
+            <Avatar variant={m.avatarVariant} color={m.avatarColor} size={26} />
           </span>
         );
       })}

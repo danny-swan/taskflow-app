@@ -65,6 +65,8 @@ const PROFILE = {
   userId: 'me',
   nickname: 'Я',
   avatarVariant: 3,
+  // F41 (ADR 0032): явный цвет аватара едет в presence-meta.
+  avatarColor: '#ff8800',
   publicUserId: 'TF-ME0001',
 };
 
@@ -98,6 +100,9 @@ describe('subscribeWorkspacePresence', () => {
     expect(lastChannel.track).toHaveBeenCalledWith({
       nickname: 'Я',
       avatar_variant: 3,
+      // F41 (ADR 0032): явный цвет аватара едет вместе с формой, чтобы участники
+      // видели цвет, который человек выбрал сам, а не акцент своей темы.
+      avatar_color: '#ff8800',
       public_user_id: 'TF-ME0001',
     });
     // никаких email-полей в meta.

@@ -9,10 +9,15 @@
  * нейтральные (м/ж вариации), рисуются inline через currentColor + мягкая
  * подложка, поэтому одинаково читаются в тёмной и светлой теме.
  *
- *   <Avatar variant={n} size={40} /> — показ.
- *   <AvatarPicker value={n} onChange={fn} /> — выбор из восьми.
+ * F41 (ADR 0032): цвет глифа задаётся ЯВНО пропом `color` (`#rrggbb` из
+ * profiles.avatar_color) и от темы не зависит. Раньше цвет брался из класса
+ * `text-accent`, то есть менялся вместе с темой приложения. `color = null`
+ * (цвет не задан) сохраняет старое поведение — акцент темы.
+ *
+ *   <Avatar variant={n} color="#ff8800" size={40} /> — показ.
+ *   <AvatarPicker value={n} onChange={fn} /> — выбор формы из восьми.
  */
-import { AVATAR_MAX, AVATAR_MIN } from '../lib/profile';
+import { AVATAR_COLOR_RE, AVATAR_MAX, AVATAR_MIN } from '../lib/profile';
 
 export const AVATAR_VARIANTS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
@@ -102,18 +107,44 @@ function AvatarGlyph({ variant }: { variant: number }) {
   }
 }
 
+/**
+ * Мягкая подложка под глиф: тот же цвет с низкой альфой. Считаем rgba() вручную,
+ * а не через CSS color-mix(), чтобы не зависеть от версии системного WebView.
+ * Невалидный/пустой вход → null (подложка остаётся темовой).
+ */
+export function avatarTint(color: string | null | undefined, alpha = 0.14): string | null {
+  if (!color || !AVATAR_COLOR_RE.test(color.trim())) return null;
+  const hex = color.trim().slice(1);
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 export interface AvatarProps {
   variant: number;
+  /** Явный цвет `#rrggbb` (profiles.avatar_color); null/undefined = акцент темы. */
+  color?: string | null;
   size?: number;
   className?: string;
 }
 
-/** Кружок-аватар: мягкая подложка + глиф акцентным цветом. */
-export function Avatar({ variant, size = 40, className = '' }: AvatarProps) {
+/** Кружок-аватар: мягкая подложка + глиф явным (или акцентным) цветом. */
+export function Avatar({ variant, color = null, size = 40, className = '' }: AvatarProps) {
+  const tint = avatarTint(color);
+  const explicit = tint !== null;
   return (
     <span
-      className={`inline-flex items-center justify-center rounded-full bg-surface-alt border border-border-soft text-accent ${className}`}
-      style={{ width: size, height: size }}
+      className={
+        'inline-flex items-center justify-center rounded-full border border-border-soft ' +
+        (explicit ? '' : 'bg-surface-alt text-accent ') +
+        className
+      }
+      style={{
+        width: size,
+        height: size,
+        ...(explicit ? { color: color as string, backgroundColor: tint as string } : null),
+      }}
       aria-hidden="true"
     >
       <svg
@@ -131,13 +162,21 @@ export function Avatar({ variant, size = 40, className = '' }: AvatarProps) {
 export interface AvatarPickerProps {
   value: number;
   onChange: (variant: number) => void;
+  /** Цвет, которым отрисовать варианты в сетке (превью выбранного цвета). */
+  color?: string | null;
   disabled?: boolean;
   /** Подпись для screen-reader'ов (двуязычность решает вызывающий). */
   label?: string;
 }
 
 /** Сетка из 8 аватаров с визуальным выделением выбранного. */
-export function AvatarPicker({ value, onChange, disabled = false, label }: AvatarPickerProps) {
+export function AvatarPicker({
+  value,
+  onChange,
+  color = null,
+  disabled = false,
+  label,
+}: AvatarPickerProps) {
   return (
     <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-2">
       {AVATAR_VARIANTS.map(v => {
@@ -159,7 +198,7 @@ export function AvatarPicker({ value, onChange, disabled = false, label }: Avata
                 : 'ring-1 ring-transparent hover:ring-border-soft')
             }
           >
-            <Avatar variant={v} size={40} />
+            <Avatar variant={v} color={color} size={40} />
           </button>
         );
       })}

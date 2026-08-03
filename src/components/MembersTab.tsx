@@ -11,13 +11,20 @@
 //   • editor/viewer: только список + «Покинуть пространство» (удаляет своё
 //     членство).
 //
-// Ников других участников у нас нет (own-row RLS на профилях), поэтому кроме себя
-// («вы») показываем короткий id. Приглашения читаются с сервера через RPC-обёртки.
+// F40 (ADR 0031): раньше вместо имён показывались первые 8 символов внутреннего
+// uuid и одинаковый аватар-заглушка — на profiles действует own-row RLS, и ников
+// других участников у клиента не было. Теперь публичный минимум профилей
+// (ник / TF-id / форма и цвет аватара / «о себе») приходит через SECURITY DEFINER
+// RPC get_workspace_member_profiles (миграция 0043) с кэшем в localStorage.
+// Показываем ник, если он задан, иначе TF-id; клик по имени открывает карточку.
+// Логика членства и приглашений не менялась (ADR 0008/0009/0011).
 import { useEffect, useState } from 'react';
 import { Trash2, UserPlus, ArrowUp, ArrowDown, LogOut, Clock } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { ConfirmDialog } from './ConfirmDialog';
 import { InviteMemberModal } from './InviteMemberModal';
+import { MemberInfoModal } from './MemberInfoModal';
+import { useWorkspaceMemberProfiles, memberDisplayName } from '../lib/memberProfiles';
 import { useStore, type WorkspaceMember } from '../store/useStore';
 import { useInvitesStore } from '../store/useInvitesStore';
 import { workspaceHasPendingOutbox } from '../lib/outbox';
@@ -50,6 +57,10 @@ export function MembersTab() {
   const [removeId, setRemoveId] = useState<string | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [cancelId, setCancelId] = useState<string | null>(null);
+  const [infoUserId, setInfoUserId] = useState<string | null>(null);
+
+  // F40: публичные профили участников текущего пространства (RPC + кэш).
+  const { byId: memberProfiles } = useWorkspaceMemberProfiles(currentWorkspaceId);
 
   const rows = members.filter(m => m.workspace_id === currentWorkspaceId);
   const isOwner = rows.some(m => m.user_id === boundUserId && m.role === 'owner');
@@ -68,10 +79,16 @@ export function MembersTab() {
         ? tr(lang, 'ws_members_role_editor')
         : tr(lang, 'ws_members_role_viewer');
 
+  // F40: ник → иначе TF-id → иначе нейтральная подпись. Внутренний uuid в UI
+  // больше не попадает ни при каких условиях.
   const displayName = (m: WorkspaceMember): string => {
     if (m.user_id && m.user_id === boundUserId) return tr(lang, 'ws_members_you');
-    return m.user_id ? m.user_id.slice(0, 8) : '—';
+    if (!m.user_id) return '—';
+    return memberDisplayName(memberProfiles[m.user_id]) ?? tr(lang, 'ws_members_unknown');
   };
+
+  const infoProfile = infoUserId ? memberProfiles[infoUserId] ?? null : null;
+  const infoRole = infoUserId ? rows.find(m => m.user_id === infoUserId)?.role : undefined;
 
   return (
     <div className="max-w-2xl">
@@ -105,8 +122,23 @@ export function MembersTab() {
           const isSelf = !!m.user_id && m.user_id === boundUserId;
           return (
             <div key={m.id} className="flex items-center gap-3 px-3 py-2.5 border-b border-border-soft last:border-b-0">
-              <Avatar variant={1} size={32} />
-              <span className="flex-1 text-[13px] truncate">{displayName(m)}</span>
+              <Avatar
+                variant={m.user_id ? memberProfiles[m.user_id]?.avatar_variant ?? 1 : 1}
+                color={m.user_id ? memberProfiles[m.user_id]?.avatar_color ?? null : null}
+                size={32}
+              />
+              {m.user_id && memberProfiles[m.user_id] ? (
+                <button
+                  type="button"
+                  onClick={() => setInfoUserId(m.user_id)}
+                  title={tr(lang, 'ws_member_info_hint')}
+                  className="flex-1 min-w-0 text-left text-[13px] truncate hover:text-accent hover:underline"
+                >
+                  {displayName(m)}
+                </button>
+              ) : (
+                <span className="flex-1 text-[13px] truncate">{displayName(m)}</span>
+              )}
               <span className="text-[12px] text-muted px-1">{roleLabel(m.role)}</span>
 
               {isOwner && !isSelf && m.role === 'viewer' && (
@@ -185,6 +217,14 @@ export function MembersTab() {
           onClose={() => setInviteOpen(false)}
         />
       )}
+
+      <MemberInfoModal
+        open={infoProfile !== null}
+        lang={lang}
+        profile={infoProfile}
+        roleLabel={infoRole ? roleLabel(infoRole) : undefined}
+        onClose={() => setInfoUserId(null)}
+      />
 
       <ConfirmDialog
         open={removeId !== null}

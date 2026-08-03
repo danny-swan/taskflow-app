@@ -45,6 +45,15 @@ const dict = {
     ws_members_added: 'Участник добавлен',
     ws_members_you: 'вы',
     ws_members_empty: 'Пока нет участников',
+    // F40 (ADR 0031) — ник/TF-id и карточка участника вместо куска uuid.
+    ws_members_unknown: 'Участник',
+    ws_member_info_title: 'Профиль участника',
+    ws_member_info_nickname: 'Ник',
+    ws_member_info_no_nickname: 'Ник не задан',
+    ws_member_info_bio: 'О себе',
+    ws_member_info_no_bio: 'Ничего не указано',
+    ws_member_info_id: 'ID',
+    ws_member_info_hint: 'Нажмите на имя участника, чтобы посмотреть его профиль',
     // Wave B PR-b-04 — участники (invite-flow) + приглашения.
     ws_members_invite_button: 'Пригласить',
     ws_members_promote_editor: 'Сделать редактором',
@@ -370,6 +379,15 @@ const dict = {
     ws_members_added: 'Member added',
     ws_members_you: 'you',
     ws_members_empty: 'No members yet',
+    // F40 (ADR 0031) — nickname/TF-id and member card instead of a uuid slice.
+    ws_members_unknown: 'Member',
+    ws_member_info_title: 'Member profile',
+    ws_member_info_nickname: 'Nickname',
+    ws_member_info_no_nickname: 'No nickname set',
+    ws_member_info_bio: 'About',
+    ws_member_info_no_bio: 'Nothing here yet',
+    ws_member_info_id: 'ID',
+    ws_member_info_hint: 'Click a member name to view their profile',
     // Wave B PR-b-04 — members (invite flow) + invitations.
     ws_members_invite_button: 'Invite',
     ws_members_promote_editor: 'Make editor',

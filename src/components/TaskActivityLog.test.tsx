@@ -90,11 +90,15 @@ describe('TaskActivityLog', () => {
     expect(screen.getByText('Алиса')).toBeTruthy();
   });
 
-  it('офлайн-автор — короткий id (не email)', () => {
+  // F40 (ADR 0031): кусок uuid в UI больше не показываем. Если профиль автора
+  // не известен ни через presence, ни через кэш публичных профилей — нейтральная
+  // подпись «Участник» (email не показывается никогда).
+  it('офлайн-автор без профиля — «Участник» (ни uuid, ни email)', () => {
     activityResult = { records: [rec({ userId: 'abcdef01-2345-6789' })], hasMore: false, loadMore, reload };
-    render(<TaskActivityLog taskUuid="t1" />);
+    const { container } = render(<TaskActivityLog taskUuid="t1" />);
     fireEvent.click(screen.getByRole('button', { name: /История изменений/i }));
-    expect(screen.getByText('abcdef01')).toBeTruthy();
+    expect(screen.getByText('Участник')).toBeTruthy();
+    expect(container.innerHTML).not.toContain('abcdef01');
   });
 
   it('«Показать ещё» рендерится и дёргает loadMore', () => {
