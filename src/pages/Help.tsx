@@ -133,7 +133,7 @@ const sectionsRu: HelpSection[] = [
             <ul className="mt-1 ml-4 list-disc space-y-1">
               <li><strong>Навигация</strong> — переход на Задачи, Календарь, Дашборд, Статистику, Настройки, Помощь.</li>
               <li><strong>Задачи</strong> — подстрочный поиск по названию (до 8 попаданий). Задачи в технических статусах (Удалено) не показываются.</li>
-              <li><strong>Действия</strong> — Новая задача, Переключить тему (свет/темно), Переключить вид (список/канбан), Экспорт в JSON.</li>
+              <li><strong>Действия</strong> — Новая задача, Переключить тему (свет/темно), Переключить вид (список/карточки), Экспорт в JSON.</li>
             </ul>
             <p className="mt-2"><strong>Стрелки ⇑/⇓</strong> переключают выделение, <strong>Enter</strong> — выполнить, <strong>Esc</strong> — закрыть. Клик по затемнённому фону тоже закрывает палитру.</p>
           </>
@@ -326,8 +326,8 @@ const sectionsRu: HelpSection[] = [
         q: 'Где хранятся мои задачи?',
         a: (
           <>
-            <p>Все задачи, комментарии, тэги, настройки и шаблоны лежат в локальной SQLite-базе (<code>data.db</code>) рядом с приложением. Приложение работает полностью локально — вы всегда владеете своими данными.</p>
-            <p className="mt-2">Если вы вошли в аккаунт (Pro/Trial), задачи, тэги, статусы и шаблоны <strong>синхронизируются между устройствами</strong> через облако Supabase. Синхронизация опциональна: без входа всё остаётся только на этом устройстве.</p>
+            <p>Все задачи, комментарии, тэги, настройки и шаблоны лежат в локальной SQLite-базе (<code>data.db</code>) рядом с приложением, внутри активного <strong>пространства</strong> (workspace). Приложение работает полностью локально — вы всегда владеете своими данными.</p>
+            <p className="mt-2">Если вы вошли в аккаунт (Pro/Trial), задачи, тэги, статусы, шаблоны и сами пространства <strong>синхронизируются между устройствами</strong> через облако Supabase. Синхронизация опциональна: без входа (или на бесплатном плане) всё остаётся только на этом устройстве.</p>
             <p className="mt-2">Аккаунт (email + пароль) нужен для авторизации через Supabase — восстановление пароля и облачная синхронизация.</p>
             <p className="mt-2"><strong>Offline-грейс</strong>: если сети нет, приложение работает без повторного входа в течение 7 дней — все данные лежат локально.</p>
           </>
@@ -342,7 +342,10 @@ const sectionsRu: HelpSection[] = [
               <li><strong>Конфликты:</strong> правило last-write-wins — побеждает более позднее изменение (по <code>updated_at</code>).</li>
               <li><strong>Удаление:</strong> soft-delete — запись помечается удалённой, но остаётся в облаке для истории.</li>
               <li><strong>Склейка:</strong> записи сопоставляются по уникальному UUID — дубликаты не создаются.</li>
+              <li><strong>Пространства:</strong> вместе с задачами синхронизируются и сами пространства (общие и личные) — список пространств, участники и роли.</li>
             </ul>
+            <p className="mt-2">На <strong>бесплатном плане</strong> синхронизации нет вообще: пространства (<code>workspaces</code>), задачи и профиль-настройки живут только локально, на этом устройстве. Общие пространства на free недоступны — только личные, и не больше двух.</p>
+            <p className="mt-2">Профиль (ник, аватар, «о себе», TF-id) синхронизируется отдельно от задач — напрямую через Supabase при каждом входе в аккаунт, а не через общий цикл push/pull.</p>
             <p className="mt-2">Запустить синхронизацию вручную можно в <strong>Настройки → Синхронизация</strong> кнопкой «Синхронизировать сейчас». В релизной сборке она также запускается автоматически: при старте, возврате фокуса и через 2 секунды после любого изменения.</p>
           </>
         ),
@@ -351,13 +354,14 @@ const sectionsRu: HelpSection[] = [
         q: 'Я вошёл под другим аккаунтом — что будет с моими задачами?',
         a: (
           <>
-            <p>Локальная база — один файл на устройство. Если вы выходите и входите под <strong>другим аккаунтом</strong>, приложение замечает это и предлагает выбор, что делать с текущими локальными данными:</p>
+            <p>Локальная база — один файл на устройство. Если вы выходите и входите под <strong>другим аккаунтом</strong>, приложение замечает это и предлагает выбор, что делать с текущими локальными данными личного пространства:</p>
             <ul className="list-disc pl-5 mt-2 space-y-1">
               <li><strong>Загрузить облачные:</strong> локальные данные очищаются, и скачиваются задачи нового аккаунта из облака.</li>
               <li><strong>Оставить локальные:</strong> текущие задачи остаются и будут записаны в облако нового аккаунта.</li>
               <li><strong>Объединить:</strong> локальные и облачные задачи сливаются вместе.</li>
             </ul>
             <p className="mt-2">Перед любым из этих действий приложение <strong>автоматически создаёт снимок</strong> текущей локальной базы. Даже если вы выберете «Загрузить облачные», старые локальные задачи можно вернуть из снимка.</p>
+            <p className="mt-2">Сами <strong>общие пространства</strong> этого выбора не касаются — они хранятся как строки в Supabase и привязаны к аккаунту-владельцу/участию, а не к устройству: после входа под своим аккаунтом вы снова увидите своё личное и общие пространства, в которые вас пригласили.</p>
           </>
         ),
       },
@@ -404,6 +408,89 @@ const sectionsRu: HelpSection[] = [
           <>
             <p>Supabase free-tier приостанавливает проект после 7 дней без активности — первые запросы после возобновления занимают 10-30 секунд. С v0.9.22 включен keep-alive: приложение при каждом старте дёргает базу fire-and-forget-запросом, плюс GitHub Actions пингает её раз в 3 дня. В 90% случаев база не успевает уснуть.</p>
             <p className="mt-2">Если всё-таки видите задержку на первом входе — это пробуждение, последующие запросы пойдут мгновенно.</p>
+          </>
+        ),
+      },
+    ],
+  },
+  {
+    title: '🗂 Пространства и участники',
+    items: [
+      {
+        q: 'Что такое пространство (workspace)?',
+        a: (
+          <>
+            <p>Пространство — это отдельный набор задач, статусов и тэгов — своего рода отдельная «доска» внутри приложения. У каждого пользователя есть минимум одно <strong>личное</strong> пространство — оно создаётся автоматически и видно только вам.</p>
+            <p className="mt-2">Кроме личных можно создавать <strong>общие</strong> пространства и приглашать в них других участников — для совместной работы над одними и теми же задачами. Создание общего пространства доступно на планах <strong>Pro/Trial</strong>; на бесплатном можно создавать только дополнительные личные пространства (до 2 всего); на платных лимит — до 7 пространств суммарно (личных и общих вместе).</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как переключаться между пространствами?',
+        a: (
+          <>
+            <p>Переключатель пространств — вверху сайдбара (кнопка с текущим названием и стрелкой). В списке две группы — «Личные» и «Общие»; активное пространство всегда показано первым в своей группе, остальные — по алфавиту. В общих пространствах видна ваша роль (значок у редактора/наблюдателя; у владельца и в личных значка нет). Если общих пространств ещё нет — подсказка в списке покажет ваш TF-id, чтобы вас могли туда пригласить.</p>
+            <p className="mt-2">Из этого же меню можно создать новое пространство (кнопка «Создать») или открыть его настройки (ссылка «Настройки пространства» видна, если у вас роль редактора или выше).</p>
+          </>
+        ),
+      },
+      {
+        q: 'Что такое «Вкладка по умолчанию» при переключении пространства?',
+        a: (
+          <>
+            <p>При переключении пространства (а также при входе в аккаунт) приложение автоматически переходит на вашу <strong>«Вкладку по умолчанию»</strong> — она задаётся в Настройки → Общие (Задачи, Календарь, Дашборд или Статистика). Это сделано, чтобы не оставаться, например, на вкладке «Статистика» после перехода в другое пространство.</p>
+            <p className="mt-2">На первом запуске приложения этот переход не срабатывает нарочно — маршрут уже разрешает роутер; переход происходит только когда действительно сменился пользователь или пространство.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как пригласить участника в общее пространство?',
+        a: (
+          <>
+            <p>Откройте переключатель пространств → «Настройки пространства» → вкладка «Участники» → кнопка «Пригласить» (видна только владельцу пространства). Введите <strong>TF-id</strong> человека в формате <code>TF-XXXXXX</code> (его можно посмотреть в Настройки → Аккаунт → блок «Профиль» → «Ваш ID»), выберите роль — и отправьте приглашение.</p>
+            <p className="mt-2">Приглашение повиснет со статусом «ожидает» в списке приглашений пространства — его можно отозвать кнопкой «Отозвать», пока приглашённый его не принял. У приглашённого в сайдбаре есть секция «Мои приглашения» с кнопками принять/отклонить.</p>
+            <p className="mt-2">Создавать общие пространства и приглашать в них могут только Pro/Trial-аккаунты; приглашать можно и пользователей с бесплатным планом — они смогут состоять в чужих общих пространствах как editor/viewer.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Какие бывают роли участников?',
+        a: (
+          <>
+            <ul className="space-y-1 list-disc pl-4">
+              <li><strong>Владелец (owner)</strong> — создатель пространства. Приглашает/удаляет участников, меняет их роли, полный доступ к задачам. Сам владелец из пространства не выходит и сам себя не удаляет.</li>
+              <li><strong>Редактор (editor)</strong> — может создавать, редактировать и удалять задачи, видит настройки пространства, но не управляет участниками.</li>
+              <li><strong>Наблюдатель (viewer)</strong> — только просмотр, без возможности изменять задачи или настройки.</li>
+            </ul>
+            <p className="mt-2">Владелец меняет роль между редактором и наблюдателем стрелочками повышения/понижения в списке участников. Свою собственную роль владелец не меняет и сам себя из списка участников удалить не может.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как выйти из общего пространства или удалить участника?',
+        a: (
+          <>
+            <p>Во вкладке «Участники» настроек пространства: если вы <strong>не владелец</strong> — кнопка «Покинуть пространство» (с подтверждением) убирает только ваше собственное членство.</p>
+            <p className="mt-2">Если вы <strong>владелец</strong> — рядом с каждым участником есть иконка корзины «Удалить участника» — после подтверждения его членство удаляется. Сам владелец выйти из своего пространства не может — только удалить его целиком в Настройках пространства.</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как устроена идентичность: TF-id и ник?',
+        a: (
+          <>
+            <p>У каждого аккаунта есть публичный идентификатор <strong>TF-id</strong> в формате <code>TF-XXXXXX</code> — он выдаётся автоматически и не меняется. Посмотреть свой ID можно в Настройки → Аккаунт → блок «Профиль» → «Ваш ID» (есть кнопка копирования). Именно этот ID вы сообщаете тем, кто хочет пригласить вас в общее пространство.</p>
+            <p className="mt-2">Кроме ID есть необязательный <strong>ник</strong> (до 32 символов) — его задаёте там же, в блоке «Профиль». В списке участников показывается ник, а если он не задан — вместо него показывается TF-id. Клик по имени участника в списке открывает карточку участника с аватаром, ником, «о себе» и TF-id (без email и других приватных данных).</p>
+          </>
+        ),
+      },
+      {
+        q: 'Как настроить профиль и аватар?',
+        a: (
+          <>
+            <p>В Настройки → Аккаунт, выше блока с email и датами регистрации/последнего входа, есть блок <strong>«Профиль»</strong>: ник, аватар с кнопкой «Изменить», поле «О себе» (до 160 символов) и «Ваш ID» с кнопкой копирования.</p>
+            <p className="mt-2">Кнопка «Изменить» открывает отдельное окно выбора аватара, где отдельно выбираются <strong>форма</strong> (один из 8 вариантов) и <strong>цвет</strong> (системный пикер, HEX-поле или готовые свотчи); превью показывает результат сразу на светлой и тёмной подложке. <strong>Цвет задаётся явно</strong> и не меняется вместе с темой приложения — раньше глиф красился акцентом темы и «уезжал» при её смене, теперь цвет хранится отдельно в профиле.</p>
+            <p className="mt-2">Ник и аватар видны только участникам ваших общих пространств. Даже если у вас сейчас нет общих пространств, заполнить профиль имеет смысл заранее — он сразу будет виден, как только вас пригласят в общее пространство.</p>
           </>
         ),
       },
@@ -590,7 +677,7 @@ const sectionsEn: HelpSection[] = [
             <ul className="mt-1 ml-4 list-disc space-y-1">
               <li><strong>Navigation</strong> — jump to Tasks, Calendar, Dashboard, Stats, Settings, Help.</li>
               <li><strong>Tasks</strong> — substring match by title (up to 8 hits). Tasks in technical statuses (Deleted) are not shown.</li>
-              <li><strong>Actions</strong> — New task, Toggle theme (light/dark), Toggle view (list/kanban), Export to JSON.</li>
+              <li><strong>Actions</strong> — New task, Toggle theme (light/dark), Toggle view (list/cards), Export to JSON.</li>
             </ul>
             <p className="mt-2"><strong>Arrow keys ⇑/⇓</strong> move the selection, <strong>Enter</strong> — run, <strong>Esc</strong> — close. Clicking the darkened backdrop also closes the palette.</p>
           </>
@@ -783,9 +870,10 @@ const sectionsEn: HelpSection[] = [
         q: 'Where are my tasks stored?',
         a: (
           <>
-            <p>All tasks live in a local SQLite database on your machine — everything works fully offline, no network required. The database file lives in the TaskFlow app data folder (Windows: <code>%APPDATA%\\TaskFlow\\</code>). You always own your data.</p>
-            <p className="mt-2">When you're signed in (Pro/Trial), tasks, tags, statuses and templates <strong>sync across your devices</strong> via the Supabase cloud. Sync is optional: without signing in, everything stays only on this device.</p>
+            <p>All tasks live in a local SQLite database on your machine — everything works fully offline, no network required. The database file lives in the TaskFlow app data folder (Windows: <code>%APPDATA%\\TaskFlow\\</code>), inside the active <strong>workspace</strong>. You always own your data.</p>
+            <p className="mt-2">When you're signed in (Pro/Trial), tasks, tags, statuses, templates, and the workspaces themselves <strong>sync across your devices</strong> via the Supabase cloud. Sync is optional: without signing in (or on the free plan), everything stays only on this device.</p>
             <p className="mt-2">The Supabase account (email + password) is used for authentication — sign-in, password recovery and cloud sync.</p>
+            <p className="mt-2"><strong>Offline grace period</strong>: if there's no network, the app keeps working without re-authentication for 7 days — all data stays local.</p>
           </>
         ),
       },
@@ -798,7 +886,10 @@ const sectionsEn: HelpSection[] = [
               <li><strong>Conflicts:</strong> last-write-wins — the more recent change wins (by <code>updated_at</code>).</li>
               <li><strong>Deletion:</strong> soft-delete — the row is marked deleted but stays in the cloud for history.</li>
               <li><strong>Matching:</strong> rows are matched by a unique UUID — no duplicates are created.</li>
+              <li><strong>Workspaces:</strong> workspaces themselves (shared and personal) sync too — the workspace list, members and roles.</li>
             </ul>
+            <p className="mt-2">On the <strong>free plan</strong> there is no sync at all: workspaces (<code>workspaces</code>), tasks and profile settings live only locally, on this device. Shared workspaces aren't available on free — only personal ones, up to two.</p>
+            <p className="mt-2">Your profile (nickname, avatar, bio, TF-id) syncs separately from tasks — directly via Supabase on every sign-in, not through the regular push/pull cycle.</p>
             <p className="mt-2">You can run sync manually in <strong>Settings → Sync</strong> with the "Sync now" button. In release builds it also runs automatically: on startup, focus return, and 2 seconds after any change.</p>
           </>
         ),
@@ -807,13 +898,14 @@ const sectionsEn: HelpSection[] = [
         q: 'I signed in with a different account — what happens to my tasks?',
         a: (
           <>
-            <p>The local database is one file per device. If you sign out and sign in with a <strong>different account</strong>, the app detects this and asks what to do with your current local data:</p>
+            <p>The local database is one file per device. If you sign out and sign in with a <strong>different account</strong>, the app detects this and asks what to do with your current local data in your personal workspace:</p>
             <ul className="list-disc pl-5 mt-2 space-y-1">
               <li><strong>Load cloud data:</strong> local data is cleared and the new account's tasks are downloaded from the cloud.</li>
               <li><strong>Keep local data:</strong> your current tasks stay and get written to the new account's cloud.</li>
               <li><strong>Merge:</strong> local and cloud tasks are merged together.</li>
             </ul>
             <p className="mt-2">Before any of these actions the app <strong>automatically creates a snapshot</strong> of the current local database. Even if you choose "Load cloud data", the old local tasks can be restored from the snapshot.</p>
+            <p className="mt-2">Your <strong>shared workspaces</strong> aren't affected by this choice — they live as rows in Supabase tied to the owning account/membership, not to the device: once you sign back in with your own account, you'll see your personal and shared workspaces again, including the ones you were invited to.</p>
           </>
         ),
       },
@@ -865,6 +957,89 @@ const sectionsEn: HelpSection[] = [
           <>
             <p>Free-tier Supabase pauses a project after 7 days of inactivity — the first requests after wake-up take 10-30 seconds. Since v0.9.22 keep-alive is enabled: on every start the app fires a fire-and-forget request against the database, plus GitHub Actions pings it every 3 days. In 90% of cases the database never gets a chance to sleep.</p>
             <p className="mt-2">If you still see a delay on the first sign-in, that's the wake-up — subsequent requests fire instantly.</p>
+          </>
+        ),
+      },
+    ],
+  },
+  {
+    title: '🗂 Workspaces & members',
+    items: [
+      {
+        q: 'What is a workspace?',
+        a: (
+          <>
+            <p>A workspace is a separate set of tasks, statuses and tags — essentially its own "board" inside the app. Every user has at least one <strong>personal</strong> workspace — it's created automatically and is visible only to you.</p>
+            <p className="mt-2">Besides personal workspaces you can create <strong>shared</strong> ones and invite other members into them — for working together on the same tasks. Creating a shared workspace is available on the <strong>Pro/Trial</strong> plans; on the free plan you can only create additional personal workspaces (up to 2 total); on paid plans the limit is up to 7 workspaces total (personal and shared combined).</p>
+          </>
+        ),
+      },
+      {
+        q: 'How do I switch between workspaces?',
+        a: (
+          <>
+            <p>The workspace switcher sits at the top of the sidebar (a button with the current name and an arrow). The list has two groups — "Personal" and "Shared"; the active workspace is always shown first in its group, the rest are sorted alphabetically. In shared workspaces you'll see your role (a badge for editor/viewer; owners and personal workspaces show no badge). If you have no shared workspaces yet, a hint in the list shows your TF-id so others can invite you.</p>
+            <p className="mt-2">From the same menu you can create a new workspace (the "Create" button) or open its settings (the "Workspace settings" link is visible if your role is editor or higher).</p>
+          </>
+        ),
+      },
+      {
+        q: 'What is the "Default tab" when switching workspaces?',
+        a: (
+          <>
+            <p>When you switch workspaces (and also when you sign in), the app automatically navigates to your <strong>"Default tab"</strong> — set in Settings → General (Tasks, Calendar, Dashboard or Stats). This exists so you don't get stuck, say, on the "Stats" tab after moving to another workspace.</p>
+            <p className="mt-2">On the very first app launch this redirect intentionally doesn't fire — the router already resolves the initial route; the jump only happens when the user or workspace actually changed.</p>
+          </>
+        ),
+      },
+      {
+        q: 'How do I invite a member to a shared workspace?',
+        a: (
+          <>
+            <p>Open the workspace switcher → "Workspace settings" → the "Members" tab → the "Invite" button (visible only to the workspace owner). Enter the person's <strong>TF-id</strong> in the <code>TF-XXXXXX</code> format (you can find yours in Settings → Account → "Profile" block → "Your ID"), pick a role, and send the invite.</p>
+            <p className="mt-2">The invite sits with a "pending" status in the workspace's invite list — you can cancel it with the "Cancel" button as long as the invitee hasn't accepted yet. The invitee sees a "My invites" section in the sidebar with accept/reject buttons.</p>
+            <p className="mt-2">Only Pro/Trial accounts can create shared workspaces and invite members into them; you can invite free-plan users too — they can be members of someone else's shared workspace as editor/viewer.</p>
+          </>
+        ),
+      },
+      {
+        q: 'What member roles exist?',
+        a: (
+          <>
+            <ul className="space-y-1 list-disc pl-4">
+              <li><strong>Owner</strong> — the workspace creator. Invites/removes members, changes their roles, has full access to tasks. The owner can't leave the workspace or remove themselves.</li>
+              <li><strong>Editor</strong> — can create, edit and delete tasks, sees workspace settings, but doesn't manage members.</li>
+              <li><strong>Viewer</strong> — view-only, can't change tasks or settings.</li>
+            </ul>
+            <p className="mt-2">The owner switches a member's role between editor and viewer with the promote/demote arrows in the members list. The owner can't change their own role or remove themselves from the members list.</p>
+          </>
+        ),
+      },
+      {
+        q: 'How do I leave a shared workspace or remove a member?',
+        a: (
+          <>
+            <p>In the workspace settings' "Members" tab: if you're <strong>not the owner</strong> — the "Leave workspace" button (with confirmation) removes only your own membership.</p>
+            <p className="mt-2">If you're the <strong>owner</strong> — each member has a trash-can "Remove member" icon next to them — confirming it removes their membership. The owner can't leave their own workspace — only delete it entirely from the workspace settings.</p>
+          </>
+        ),
+      },
+      {
+        q: 'How does identity work: TF-id and nickname?',
+        a: (
+          <>
+            <p>Every account has a public identifier called <strong>TF-id</strong> in the <code>TF-XXXXXX</code> format — it's assigned automatically and never changes. You can find your ID in Settings → Account → "Profile" block → "Your ID" (with a copy button). This is the ID you share with anyone who wants to invite you to a shared workspace.</p>
+            <p className="mt-2">Besides the ID there's an optional <strong>nickname</strong> (up to 32 characters) — set in the same "Profile" block. The members list shows the nickname, and if it's not set, it shows the TF-id instead. Clicking a member's name in the list opens their member card with avatar, nickname, bio and TF-id (no email or other private data).</p>
+          </>
+        ),
+      },
+      {
+        q: 'How do I set up my profile and avatar?',
+        a: (
+          <>
+            <p>In Settings → Account, above the block with your email and registration/last-login dates, there's a <strong>"Profile"</strong> block: nickname, avatar with a "Change" button, a "Bio" field (up to 160 characters), and "Your ID" with a copy button.</p>
+            <p className="mt-2">The "Change" button opens a separate avatar picker window, where you choose the <strong>shape</strong> (one of 8 options) and the <strong>colour</strong> (a system colour picker, a HEX field, or ready-made swatches) independently; the preview shows the result on both a light and a dark background at once. <strong>The colour is set explicitly</strong> and doesn't change along with the app theme — it used to be tinted by the theme accent and "drift" whenever the theme changed; now the colour is stored separately in the profile.</p>
+            <p className="mt-2">Your nickname and avatar are only visible to members of your shared workspaces. Even if you have no shared workspaces right now, filling in your profile ahead of time makes sense — it'll be visible right away once someone invites you to a shared workspace.</p>
           </>
         ),
       },

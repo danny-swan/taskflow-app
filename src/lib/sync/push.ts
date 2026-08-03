@@ -9,7 +9,14 @@
  *    группу upsert'ов и один на группу delete'ов.
  * 3. Для каждой группы формируем payload (маппер id→uuid через mappers.ts).
  * 4. Отправляем в Supabase через .upsert() (для op='upsert') или
- *    .update({deleted_at: now()}) (для op='delete' — soft delete).
+ *    .update({deleted_at, updated_at, version, client_id}) по ключу строки
+ *    (для op='delete' — soft delete). Почему именно UPDATE, а не upsert с уже
+ *    погашенной локальной строкой: PostgREST-upsert — это INSERT .. ON CONFLICT,
+ *    и Postgres требует ПРОХОЖДЕНИЯ INSERT-политики RLS даже когда фактически
+ *    выполняется ветка DO UPDATE. Для sync_workspace_members INSERT разрешён
+ *    только владельцу пространства, поэтому «покинуть пространство» у editor'а
+ *    падало с 42501 (permanent → строка молча оседала в outbox), хотя отдельная
+ *    политика self-leave UPDATE такое гашение разрешает. См. ADR 0033 / F42.
  * 5. Успех → удаляем строки из outbox.
  *    Ошибка → attempt_count++, last_error, last_attempt_at.
  *    Если attempt_count >= MAX_ATTEMPTS — запись остаётся в outbox с ошибкой,
@@ -210,10 +217,9 @@ export async function pushBatch(userId: string, clientId: string): Promise<PushR
   if (groups.length === 0) return result;
 
   for (const g of groups) {
-    // Собираем payload'ы. Для op='delete' достаточно послать deleted_at + uuid,
-    // но проще: перечитать локальную строку (там deleted_at уже стоит) и
-    // отправить полный payload через upsert. Это гарантирует, что удалённая
-    // строка попадёт даже если её не было в облаке.
+    // Собираем payload'ы: перечитываем локальную строку (при soft delete в ней
+    // уже стоит deleted_at) и прогоняем через маппер. Для op='delete' из готового
+    // payload'а берутся только поля гашения — сама отправка идёт UPDATE'ом.
     const payloads: any[] = [];
     const validIds: number[] = [];
     for (const r of g.rows) {
@@ -239,10 +245,30 @@ export async function pushBatch(userId: string, clientId: string): Promise<PushR
 
     if (payloads.length === 0) continue;
 
-    // Отправка. Для upsert и delete используем один и тот же upsert — потому
-    // что при soft delete локальная строка уже имеет deleted_at, а payload
-    // формируется из локальной строки. Идентично для op='upsert' и op='delete'.
     const onConflict = g.spec.onConflict ?? 'id';
+
+    // op='delete' — гасим строку UPDATE'ом по её ключу, а не upsert'ом (см.
+    // шапку модуля и ADR 0033). Строк в delete-группе обычно единицы, поэтому
+    // сразу идём построчно: один UPDATE на строку, свой вердикт на строку.
+    if (g.op === 'delete') {
+      for (let i = 0; i < payloads.length; i++) {
+        const rowErr = await softDeleteRow(g.spec.cloud, payloads[i], onConflict);
+        if (!rowErr) {
+          markSuccess([validIds[i]]);
+          result.pushed += 1;
+        } else {
+          markFailure([validIds[i]], rowErr);
+          result.failed += 1;
+          if (!result.firstError) result.firstError = rowErr;
+          logPushFailure(g, rowErr);
+        }
+      }
+      if (result.pushed > 0) {
+        logger.info(`[sync/push] ${g.spec.cloud} (delete): ${payloads.length} rows processed`);
+      }
+      continue;
+    }
+
     const batchErr = await upsertRows(g.spec.cloud, payloads, onConflict);
     if (!batchErr) {
       markSuccess(validIds);
@@ -301,6 +327,44 @@ async function upsertRows(cloud: string, rows: any[], onConflict: string): Promi
   }
 }
 
+/**
+ * Поля, которые уходят при soft delete. Намеренно узкий набор: гашение не должно
+ * переписывать содержимое строки (роль, заголовок и т.п.) — только пометить её
+ * удалённой и обновить служебные метки. Узкий payload ещё и не задевает WITH CHECK
+ * тех политик, которые проверяют неизменность ключевых полей.
+ */
+const SOFT_DELETE_FIELDS = ['deleted_at', 'updated_at', 'version', 'client_id'] as const;
+
+/**
+ * Гасит одну строку в облаке UPDATE'ом по её ключу (`onConflict` спека: 'id' или
+ * составной, как 'workspace_id,key'). Если строки в облаке нет — UPDATE меняет 0
+ * строк и это УСПЕХ: гасить нечего, локальная строка уже помечена удалённой.
+ * Возвращает текст ошибки или null.
+ */
+async function softDeleteRow(cloud: string, row: any, onConflict: string): Promise<string | null> {
+  const keyCols = onConflict.split(',').map(c => c.trim()).filter(Boolean);
+  const patch: Record<string, unknown> = {};
+  for (const f of SOFT_DELETE_FIELDS) {
+    if (row[f] !== undefined) patch[f] = row[f];
+  }
+  // deleted_at обязателен: без него UPDATE не был бы гашением.
+  if (patch.deleted_at == null) patch.deleted_at = new Date().toISOString();
+  try {
+    let q: any = supabase.from(cloud).update(patch);
+    for (const col of keyCols) {
+      if (row[col] === undefined || row[col] === null) {
+        return `soft delete: payload has no key column "${col}" for ${cloud}`;
+      }
+      q = q.eq(col, row[col]);
+    }
+    const { error } = await q;
+    if (error) return error.message;
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
 /** Логирует неудачу push'а: FK-violation — как ожидаемое ожидание родителя. */
 function logPushFailure(
   g: { spec: TableSpec; op: 'upsert' | 'delete' },
@@ -339,6 +403,8 @@ export async function pushAll(userId: string, clientId: string): Promise<PushRes
 
 // Экспорт для тестов — чтобы можно было проверять внутреннюю логику.
 export const _internals = {
+  softDeleteRow,
+  SOFT_DELETE_FIELDS,
   isReadyForRetry,
   isPermanentError,
   isForeignKeyViolation,

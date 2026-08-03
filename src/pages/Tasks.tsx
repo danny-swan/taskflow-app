@@ -367,7 +367,7 @@ export function TasksPage() {
                 role="tab"
                 aria-selected={tasksView === 'kanban'}
                 onClick={() => setTasksView('kanban')}
-                title={lang === 'ru' ? 'Канбан' : 'Kanban'}
+                title={lang === 'ru' ? 'Карточки' : 'Cards'}
                 className={
                   'flex items-center gap-1 px-2 py-1 text-[12px] rounded-[5px] transition-colors ' +
                   (tasksView === 'kanban'
@@ -376,7 +376,7 @@ export function TasksPage() {
                 }
               >
                 <LayoutGrid size={13} />
-                <span>{lang === 'ru' ? 'Канбан' : 'Kanban'}</span>
+                <span>{lang === 'ru' ? 'Карточки' : 'Cards'}</span>
               </button>
             </div>
             {/* v0.8.13: split-кнопка «+ Новая задача» │ ▾. Основная часть
