@@ -412,6 +412,39 @@ function pickDefaultWorkspaceId(list: Workspace[]): string | null {
 }
 
 /**
+ * F31: гидрировать `currentWorkspaceId` из settings ТОЧНО ТАК ЖЕ, как это
+ * делал `init()` (холодный старт — работает у пользователя). Извлечено в
+ * отдельный helper, чтобы reloadAccountBinding() (путь смены аккаунта) мог
+ * переиспользовать ровно ту же логику вместо того, чтобы оставлять
+ * in-memory currentWorkspaceId залипшим от предыдущего аккаунта.
+ *
+ * Логика (буквально то, что раньше было инлайном в init()):
+ *  1. читаем `current_workspace_id` из settings;
+ *  2. если он валиден в переданном наборе `workspaces` — используем его;
+ *  3. иначе — `pickDefaultWorkspaceId(workspaces)`;
+ *  4. если итоговый id отличается от сохранённого — синхронно персистим
+ *     обратно в settings (чтобы дефолт закрепился, а не пересчитывался
+ *     на каждый вызов).
+ *
+ * Чистая функция относительно параметров (кроме чтения/записи settings через
+ * db) — возвращает выбранный id (или null, если пространств нет вовсе).
+ */
+function hydrateCurrentWorkspaceId(workspaces: Workspace[]): string | null {
+  const savedWsId = (readSetting('current_workspace_id') || '').trim() || null;
+  const currentWorkspaceId =
+    savedWsId && workspaces.some(w => w.id === savedWsId)
+      ? savedWsId
+      : pickDefaultWorkspaceId(workspaces);
+  // Синхронизируем persist, если дефолт отличается от сохранённого.
+  if (currentWorkspaceId && currentWorkspaceId !== savedWsId) {
+    try {
+      db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['current_workspace_id', currentWorkspaceId]);
+    } catch (e) { console.warn('[hydrateCurrentWorkspaceId] persist current_workspace_id failed:', e); }
+  }
+  return currentWorkspaceId;
+}
+
+/**
  * ws-id для НОВОЙ строки: текущее пространство стора, иначе persist'нутый
  * current_workspace_id, иначе personal_workspace_id. Гарантирует, что новые
  * задачи/статусы/теги/шаблоны не создаются с NULL workspace_id (иначе они
@@ -581,17 +614,11 @@ export const useStore = create<State>((set, get) => ({
     const workspaces = readWorkspacesFromDb();
     const workspaceMembers = readMembersFromDb();
     const boundUserId = (map.bound_user_id || '').trim() || null;
-    const savedWsId = (map.current_workspace_id || '').trim() || null;
-    const currentWorkspaceId =
-      savedWsId && workspaces.some(w => w.id === savedWsId)
-        ? savedWsId
-        : pickDefaultWorkspaceId(workspaces);
-    // Синхронизируем persist, если дефолт отличается от сохранённого.
-    if (currentWorkspaceId && currentWorkspaceId !== savedWsId) {
-      try {
-        db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', ['current_workspace_id', currentWorkspaceId]);
-      } catch (e) { console.warn('[init] persist current_workspace_id failed:', e); }
-    }
+    // F31: логика выбора current workspace вынесена в hydrateCurrentWorkspaceId
+    // (переиспользуется reloadAccountBinding() на пути смены аккаунта). Поведение
+    // init() не изменилось — это чистый рефактор, helper делает то же самое, что
+    // раньше было инлайном здесь.
+    const currentWorkspaceId = hydrateCurrentWorkspaceId(workspaces);
 
     set({
       ready: true,
@@ -755,6 +782,15 @@ export const useStore = create<State>((set, get) => ({
     set({ boundUserId });
     get().loadWorkspaceMembers();
     get().loadWorkspaces();
+    // F31: гидрировать currentWorkspaceId из settings так же, как init() —
+    // иначе после смены аккаунта in-memory currentWorkspaceId залипает от
+    // предыдущего аккаунта и ws-scoped фильтр прячет задачи (список пуст
+    // при верном счётчике). См. диагноз по data.db+log 2026-08-03 (f31_brief.md).
+    // Важно: вызывается ПОСЛЕ loadWorkspaces() — чтобы get().workspaces был уже
+    // новым набором входящего аккаунта.
+    const ws = get().workspaces;
+    const cwid = hydrateCurrentWorkspaceId(ws);
+    set({ currentWorkspaceId: cwid, overdueMode: readOverdueModeForWs(cwid) });
   },
 
   createWorkspace(name, kind) {
