@@ -1549,8 +1549,18 @@ export function run(sql: string, params: any[] = []): { changes: number; lastIns
       const rs = webDb.exec('SELECT changes() AS c, last_insert_rowid() AS i')[0];
       const c = (rs?.values[0]?.[0] as number) ?? 0;
       const i = (rs?.values[0]?.[1] as number) ?? 0;
-      // Fire-and-forget to Tauri DB
-      getTauriDb().then((d: any) => d.execute(sql, params)).catch(console.warn);
+      // F37 (ADR 0029): запись в нативную SQLite по-прежнему НЕ блокирует
+      // синхронный run(), но ставится в ОДНУ последовательную очередь, а не
+      // «в полёт» независимыми промисами. Две причины:
+      //   1) порядок. Раньше `getTauriDb().then(d => d.execute(...))` для каждой
+      //      команды создавал независимый промис: при пачке команд (clearUserData
+      //      → applyBackup слота) IPC-ответы могли примениться не в порядке
+      //      вызова, и DELETE мог лечь ПОСЛЕ INSERT — в зеркале данные есть, в
+      //      файле нет, после рестарта задача «пропадала».
+      //   2) наблюдаемость. Теперь есть точка ожидания `flushNativeWrites()`,
+      //      которую можно дождаться перед выходом из аккаунта, снимком и
+      //      подменой файла БД.
+      enqueueNativeWrite(sql, params);
       scheduleSave();
       return { changes: c, lastInsertRowid: i };
     }
@@ -1562,6 +1572,45 @@ export function run(sql: string, params: any[] = []): { changes: number; lastIns
   const i = (rs?.values[0]?.[1] as number) ?? 0;
   scheduleSave();
   return { changes: c, lastInsertRowid: i };
+}
+
+/**
+ * F37 (ADR 0029): последовательная очередь записей в нативную SQLite (Tauri).
+ *
+ * `run()` обязан остаться синхронным (весь стор построен на этом), поэтому SQL
+ * применяется к sql.js-зеркалу сразу, а в нативную базу уходит асинхронно. Но
+ * «асинхронно» ≠ «в произвольном порядке»: цепочка ниже гарантирует, что
+ * команды доедут до файла в том же порядке, в котором их вызвал код.
+ *
+ * Ошибка одной команды не рвёт цепочку (звено ловит её и логирует), иначе одна
+ * неудачная запись остановила бы все последующие.
+ */
+let nativeWriteChain: Promise<void> = Promise.resolve();
+
+function enqueueNativeWrite(sql: string, params: any[]): void {
+  nativeWriteChain = nativeWriteChain.then(async () => {
+    try {
+      const d = await getTauriDb();
+      await d.execute(sql, params);
+    } catch (e) {
+      console.warn('[db] native write failed:', e);
+    }
+  });
+}
+
+/**
+ * Ждёт, пока все поставленные в очередь записи доедут до нативного файла БД.
+ *
+ * Вызывать перед действиями, после которых состояние в памяти будет потеряно
+ * или файл будет подменён: выход из аккаунта, смена аккаунта, создание снимка,
+ * restoreSnapshot, перезапуск приложения. В web-режиме — no-op.
+ */
+export async function flushNativeWrites(): Promise<void> {
+  if (!IS_TAURI) return;
+  // Двойной await: пока ждём текущую цепочку, в неё могли добавиться новые
+  // звенья (например обработчики, сработавшие от того же действия).
+  await nativeWriteChain;
+  await nativeWriteChain;
 }
 
 let saveTimer: any = null;
