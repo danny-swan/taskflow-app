@@ -1,0 +1,1150 @@
+# TaskFlow — полный аудит: roadmap эволюции, архитектура, связи, безопасность и платежи
+
+**Дата первого аудита:** 09.07.2026. Последующие изменения фиксируются внутри блоков (хронология, Wave-итоги, чек-листы) с явными датами — верхняя дата НЕ обновляется.
+**Статус: живой рабочий документ.** Не переписывается целиком, дополняется точечно. Правила поддержки — в отдельном файле [`roadmap-guidelines.md`](./roadmap-guidelines.md). Кратко: историю не переписываем задним числом, релизы дополняем в хронологии, архитектура/находки — в соответствующих разделах, устаревшее переносим в **раздел 10 «Исторический архив»**, а не удаляем.
+Смотри также компаньон-документ `taskflow_erd_data_dictionary.md` (точная схема из живой базы Supabase, тоже живой) — этот роадмап ссылается на него, а не дублирует структуру таблиц.
+**Репозиторий:** [github.com/danny-swan/taskflow-app](https://github.com/danny-swan/taskflow-app). Ветки: `main` (production, source of truth для релизов) и `develop` (текущая работа). Первый стабильный релиз — [v1.0.0](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.0) (11.07.2026), актуальный — см. хронологию раздела 1.
+**Метод (первый аудит):** git-история (`git log -p --all`), GitHub Secrets/Variables/Workflows, память прошлых сессий, три независимых кодинг-аудита (архитектура+sync-регрессия; безопасность+платежи; код-локейшны+критические связи+проверка открытых вопросов по коду).
+
+> Навигация: раздел 1 — хронология с ссылками на коммиты и код. Раздел 2 — карта сервисов/секретов. **Раздел 3 — критические связи ("что с чем жёстко связано").** Раздел 4 — регрессия sync. **Раздел 5 — блок находок (баги/дыры) с критичностью и историей фиксов.** Раздел 6 — исторический этап `develop` (Wave 1–4). Раздел 7 — пост-v1.0.0 направления (живой). Раздел 8 — что аудит покрыл, а что нет. Приложения — миграции, источники, ADR-индекс. **Раздел 10 — исторический архив (устаревшие чек-листы и снапшоты).**
+
+---
+
+## 1. Хронология и ключевые milestones
+
+### Эпоха рождения (09.05.2026) — v0.6 → v0.7
+- [`f7745c0`](https://github.com/danny-swan/taskflow-app/commit/f7745c0) — первый коммит, TaskFlow v0.6.
+- Попытка перейти с localStorage на файловый SQLite через Tauri ([`7a19f0c`](https://github.com/danny-swan/taskflow-app/commit/7a19f0c)) — **не удалась и была полностью откачена** ([`b805e09`](https://github.com/danny-swan/taskflow-app/commit/b805e09)..[`04670be`](https://github.com/danny-swan/taskflow-app/commit/04670be), серия "restore from v0.7.2").
+- Правильная замена: [`e1528f5`](https://github.com/danny-swan/taskflow-app/commit/e1528f5) — **`tauri-plugin-sql`** с кастомным путём к файлу. Это и есть текущая архитектура БД — сам слой сегодня живёт в `src/lib/db.ts` (dual-backend: web → sql.js, desktop → tauri-plugin-sql).
+- *Урок:* первый серьёзный архитектурный разворот в проекте.
+
+### v0.8.x (09-10.05, потом 05-06.06.2026) — фичи десктоп-приложения
+Сайдбар, канбан-основа, импорт JSON/CSV/XLSX, drag&drop, backup export/import, шаблоны задач, undo для удаления/завершения. Код сегодня:
+- Канбан: `src/components/KanbanBoard.tsx:101-167` (`@dnd-kit`, `onDragEnd`).
+- Drag&drop в списке задач: `src/components/Tasks.tsx:197-261`.
+- Импорт JSON/CSV/XLSX: `src/components/Settings.tsx:854-878` (папарсер `papaparse` для CSV, `xlsx`/SheetJS для XLSX).
+- Backup export/import: `db.buildBackup()` / `db.applyBackup()` — `src/lib/db.ts:1050` / `:1074` (режимы `merge`/`replace`).
+- Шаблоны задач: `src/store/useStore.ts:70-85` (CRUD), `createTaskFromTemplate` — `:948-968`.
+- Undo удаления/завершения (10-сек окно): `deleteTaskWithUndo` — `src/store/useStore.ts:674-694`, таймер на `:675`.
+
+Несколько hotfix-релизов на порядок `migrate → seed` (v0.8.3/v0.8.4) и white-screen/seed-баги (v0.8.5-0.8.17) — тема "миграции выполняются раньше/позже сида" всплывёт и позже (в связке с Bug #1 раздела 4).
+
+### v0.9.0-v0.9.34 (07.06, 02-05.07.2026) — UI-полировка
+- Канбан-вид (v0.9.0), Календарь/Неделя/DatePicker — `src/components/Calendar.tsx`, `src/components/DatePicker.tsx`.
+- Онбординг переписан 5+ раз (v0.9.16→v0.9.19), финальный тултип-онбординг — [`901f714`](https://github.com/danny-swan/taskflow-app/commit/901f714) (v0.9.34), код: `src/components/Onboarding.tsx`.
+- Custom Theme — `src/lib/customTheme.ts` + `src/components/ThemeProvider.tsx`.
+- Command Palette — `src/components/CommandPalette.tsx`, горячая клавиша Ctrl/Cmd+K: `src/App.tsx:55-67`.
+- Auto-cleanup (опт-ин) — `runAutoCleanup`: `src/store/useStore.ts:485-535`, запуск при старте: `src/App.tsx:146-152`.
+- Timezone fix.
+
+### Переход в облако: v0.9.8-v0.9.24 (03-04.07.2026) — фундамент бэкенда
+Ключевой этап — здесь появляются все внешние сервисы:
+
+| Версия | Коммит | Событие | Код сегодня |
+|---|---|---|---|
+| v0.9.8 | [`98af5d5`](https://github.com/danny-swan/taskflow-app/commit/98af5d5) | Tauri auto-updater + Framer Motion | `src/lib/updater.ts:72`, macOS GitHub-fallback `:40`; конфиг `src-tauri/tauri.conf.json:38-45` |
+| **v0.9.9** | [`1ab2298`](https://github.com/danny-swan/taskflow-app/commit/1ab2298) | **Supabase Auth впервые подключён**, телеметрия, Privacy Policy | `src/lib/supabase.ts:40` |
+| v0.9.10 | [`e6eafe3`](https://github.com/danny-swan/taskflow-app/commit/e6eafe3) | CSP разрешает Supabase-домены (фикс "Failed to fetch") | — |
+| v0.9.11 | [`5580b86`](https://github.com/danny-swan/taskflow-app/commit/5580b86) | Google OAuth (deep link) + `delete_account` — первая Edge Function | `signInWithGoogle` — `src/lib/auth.ts:252-272`; кнопка `src/components/AuthScreen.tsx:407-432` |
+| v0.9.13 | [`d2a7f32`](https://github.com/danny-swan/taskflow-app/commit/d2a7f32) | Security-фикс: валидация JWT в `delete_account` через anon-клиент | — |
+| v0.9.14/v0.9.15 | — | Password reset, change email/password; (по заметкам прошлых сессий) поднят лимит писем Supabase 2→30/час, включены bilingual email-шаблоны | `requestPasswordReset`/`updatePassword`/`updateEmail` — `src/lib/auth.ts:193-219`; UI — `src/components/PasswordResetModal.tsx:106-226` |
+| **v0.9.20** | [`68f07f7`](https://github.com/danny-swan/taskflow-app/commit/68f07f7) | **Vitest** + unit-тесты + CI gate | 24 тест-файла `*.test.ts(x)`; CI `.github/workflows/test.yml:21-47` |
+| **v0.9.21** | [`6694fec`](https://github.com/danny-swan/taskflow-app/commit/6694fec) | **Playwright E2E** + CI gate | 5 спеков в `e2e/`; CI `.github/workflows/test.yml:49-87` |
+| **v0.9.23** | [`3144424`](https://github.com/danny-swan/taskflow-app/commit/3144424) | **Sentry** + **Cloudflare Turnstile** капча + privacy fix (имя автора в PRIVACY.md) | Sentry: `initSentry` — `src/lib/sentry.ts:68-94`, скрабинг PII — `scrubEvent:36-66`. Turnstile: виджет `src/components/AuthScreen.tsx:327-350`, токен передаётся в `signUp/signIn` через `src/lib/auth.ts:173-186,226-239` — своей edge-функции верификации нет, проверка на стороне Supabase Auth Attack Protection |
+| v0.9.24 | [`dd781ff`](https://github.com/danny-swan/taskflow-app/commit/dd781ff) | Hotfix Turnstile CSP, минимальная длина пароля 6→8 | — |
+
+Дополнительно из памяти прошлых сессий (нет прямых коммитов, настраивалось через дашборды сервисов, не в git):
+- **Resend SMTP** принят взамен встроенного Supabase SMTP из-за лимита 2 письма/час: `smtp.resend.com:465`, логин `resend`, пароль — API-ключ Resend (`re_...`). Отправитель сначала `onboarding@resend.dev`, затем `noreply@yourtaskflow.app`. Сегодня в коде используется уже не SMTP, а прямой вызов Resend API из `supabase/functions/send-user-email/index.ts` и `activation-notify/index.ts`.
+- **Домен** `yourtaskflow.app` зарегистрирован на Namecheap; лендинг на GitHub Pages; DNS — apex A-запись + www CNAME; TLS через Let's Encrypt; MX/DKIM/DMARC/SPF — Namecheap Private Email.
+- **Sentry**: организация `swans-org`, проект `taskflow`, регион EU (Frankfurt) — сделано для соответствия региону Supabase (тоже EU/Frankfurt, GDPR-мотив).
+
+### Sync foundation: dev.1-dev.5 (05-06.07.2026) — облачная синхронизация
+| Версия | Коммит | Событие |
+|---|---|---|
+| dev.1 | [`d5b4873`](https://github.com/danny-swan/taskflow-app/commit/d5b4873) (облако) / [`dae3152`](https://github.com/danny-swan/taskflow-app/commit/dae3152) (клиент) | Миграции `0001_init.sql`/`0002_sync_schema.sql`, клиентская схема (`client_id`,`updated_at`,`deleted_at`,`version`) |
+| dev.2 | [`268e96e`](https://github.com/danny-swan/taskflow-app/commit/268e96e) | Outbox-таблица + trigger schedule, UUIDv7 на INSERT, auto-bump `version` |
+| dev.3 | [`f0e1172`](https://github.com/danny-swan/taskflow-app/commit/f0e1172) | Backfill outbox, Zustand-интеграция, `PendingSyncChip` в Sidebar |
+| **dev.4** | [`fafba20`](https://github.com/danny-swan/taskflow-app/commit/fafba20) | **Первый рабочий push+pull+LWW sync** — `src/lib/sync/push.ts` (backoff 1/2/4/8/16 мин, 5 попыток), `src/lib/sync/pull.ts` (LWW по `updated_at`), `src/lib/sync/index.ts` (orchestrator, state machine) |
+| dev.5 | [`6c7a06c`](https://github.com/danny-swan/taskflow-app/commit/6c7a06c) | `sync_overdue_events`, Realtime (5 каналов), debounced pull (600мс), классификация постоянных/временных ошибок |
+
+### Монетизация и платежи: dev.6.x (06-07.07.2026) — самый насыщенный этап
+| Версия | Коммит | Событие |
+|---|---|---|
+| dev.6 | [`a0a2d70`](https://github.com/danny-swan/taskflow-app/commit/a0a2d70) | Freemium + Trial (14 дней, `supabase/functions/start-trial/index.ts:99-130`) + Subscription + Lifetime |
+| dev.6.1 | [`d2d2833`](https://github.com/danny-swan/taskflow-app/commit/d2d2833) | Secrets cleanup — секреты вынесены из кода в env |
+| dev.6.2/6.3 | [`81b1f46`](https://github.com/danny-swan/taskflow-app/commit/81b1f46) / [`748c76e`](https://github.com/danny-swan/taskflow-app/commit/748c76e) | CI-фиксы (Supabase env → GitHub Secrets, release-regex под `-dev.N.M`) |
+| **dev.6.4** | [`422d1a9`](https://github.com/danny-swan/taskflow-app/commit/422d1a9) | **YooKassa checkout**: `create-payment`, `payment-webhook`; фронт `ec1f079` (SubscriptionBlock), `6db25d5` (deep-link preselect) |
+| dev.6.4.1 | [`086700c`](https://github.com/danny-swan/taskflow-app/commit/086700c) | Активация кнопок покупки в Settings |
+| 🔺 **dev.6.4.2** | [`1c2d34e`](https://github.com/danny-swan/taskflow-app/commit/1c2d34e) | **Security-инцидент №1**: GRANT для service_role + перевод webhook на raw-fetch |
+| 🔺 **dev.6.4.3** | [`8115130`](https://github.com/danny-swan/taskflow-app/commit/8115130) | **Security-инцидент №2**: GRANT SELECT для authenticated на entitlements/payment |
+| 🔺 **dev.6.4.4** | [`b194764`](https://github.com/danny-swan/taskflow-app/commit/b194764) | **Security-инцидент №3 (самый широкий)**: GRANT на sync_*+profiles, REVOKE trigger functions |
+| dev.6.5.0 | [`f4fb605`](https://github.com/danny-swan/taskflow-app/commit/f4fb605) | pgTAP-тесты (`supabase/tests/01_grants_test.sql`, `plan(74)`, 14 таблиц хардкодом) + CI workflow |
+| dev.6.5.1 | [`058983c`](https://github.com/danny-swan/taskflow-app/commit/058983c) | Recurring/refund/cancel единым релизом — таблица `payment_methods` (миграция 0014), `renew-subscription`, `cancel-subscription` |
+| dev.6.5.2 | [`26af04a`](https://github.com/danny-swan/taskflow-app/commit/26af04a) | Self-service отвязка карты — `supabase/functions/detach-payment-method/index.ts` |
+| dev.6.5.3 | [`6da627d`](https://github.com/danny-swan/taskflow-app/commit/6da627d) | Schema↔code alignment (миграция 0016 — **источник F2/F3**, см. раздел 5) |
+| dev.6.6 | [`127013a`](https://github.com/danny-swan/taskflow-app/commit/127013a) | Admin panel `/admin` — `src/components/AdminPage.tsx:113-734`, `admin-actions/index.ts:141-266`, RPC `0017_admin_rpc.sql` |
+| dev.6.7-6.7.2 | — | UX-правки Settings |
+| dev.6.8.0 | [`785b365`](https://github.com/danny-swan/taskflow-app/commit/785b365) | Trial с привязкой карты |
+| — | [`3f63dc8`](https://github.com/danny-swan/taskflow-app/commit/3f63dc8) | Защитный фикс: webhook `.from()` → AdminClient raw fetch |
+| dev.6.8.1 | [`7b42119`](https://github.com/danny-swan/taskflow-app/commit/7b42119) | Flash-of-free fix, вкладка "Синхронизация" возвращена |
+| **dev.6.9.0** | [`1e5e3f5`](https://github.com/danny-swan/taskflow-app/commit/1e5e3f5) | **Изоляция локальной БД по аккаунту** (`bound_user_id` — `src/lib/snapshots.ts:175-240`) + снимки — safety net |
+| dev.6.9.1 | [`ced8a7c`](https://github.com/danny-swan/taskflow-app/commit/ced8a7c) | Тесты на migration v8, `clearUserData`, `bound_user_id` |
+| dev.6.9.2 | [`7fae387`](https://github.com/danny-swan/taskflow-app/commit/7fae387) | `renew-subscription` cron → `apikey` + `x-cron-secret`, `verify_jwt=false` |
+| dev.6.9.3 | [`4d945db`](https://github.com/danny-swan/taskflow-app/commit/4d945db) | UX "автопродление" вместо "привязать карту" |
+| 🔺 **dev.6.10.0** | [`261d6e1`](https://github.com/danny-swan/taskflow-app/commit/261d6e1)/[`c700473`](https://github.com/danny-swan/taskflow-app/commit/c700473) | **Sync-инцидент**: fix 4 sync/snapshot бага (детали — раздел 4) |
+| dev.6.10.1 | [`d14a4e4`](https://github.com/danny-swan/taskflow-app/commit/d14a4e4) | Починка привязки СБП/карты — **побочный эффект: перевёл запись `payment_method_id` на uuid, но `renew-subscription` не обновили → породил F1, см. раздел 5** |
+| dev.6.10.2 | — | Фикс 404 на `return_url` для update-card/trial → `/pay/success` |
+| dev.6.10.3 | [`7bf8243`](https://github.com/danny-swan/taskflow-app/commit/7bf8243) | Defer orphan tasks, gate account-switch для free plan, seed statuses on empty cloud |
+| dev.6.10.4 | [`78474de`](https://github.com/danny-swan/taskflow-app/commit/78474de) | Восстановленные строки снимка сохраняют sync-идентичность |
+| **dev.6.10.5** | [`f764e23`](https://github.com/danny-swan/taskflow-app/commit/f764e23) (сегодня, 09.07) | Дашборд "Текущий срез", ручное назначение тэга, undo-delete 10с |
+
+### Разрыв в релизах (закрыт v1.0.0)
+GitHub Releases/теги останавливались на `v0.9.35-dev.6.4.3` (07.07, 11:32 UTC). Всё после (dev.6.4.4 → dev.6.10.5, 30+ версий) существовало только как коммиты в `develop`, без тега и релиза. **Закрыто** выпуском v1.0.0 (11.07.2026, см. ниже). Промежуточные dev.6.5–dev.6.10 ретегировать задним числом не стали (осознанное решение).
+
+### v1.0.0 — первый стабильный релиз (11.07.2026)
+| Событие | Коммит / ссылка | Комментарий |
+|---|---|---|
+| Bump 1.0.0 в `package.json` на `develop` | `0596900` | Готовность к merge to main |
+| Merge `develop` → `main` | `2057048` (--no-ff) | 97 коммитов develop-линии влиты в `main` |
+| Тег `v1.0.0` | [`a2d3794`](https://github.com/danny-swan/taskflow-app/commit/a2d3794b081fc96d6554020c5669b1ae3c8d335e) | Первый не-pre-release тег |
+| CI сборка v1.0.0 | run 29162679376 | 179/179 unit, E2E ✅, Windows (NSIS+MSI RU/EN+portable) + macOS universal dmg |
+| Публикация релиза | [v1.0.0](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.0) | Стабильный, двуязычные release notes (RU/EN) в стиле v0.9.34 |
+| Анон-ключ в CI заменён на publishable | secret `SUPABASE_ANON_KEY` = `sb_publishable_EDGdl5gun3Ud60AQMymq9A_VWUFpS-a` | В клиенте через `VITE_SUPABASE_ANON_KEY` из env, ключ не хардкодится. Legacy anon ещё активен, отключать только после миграции service_role на sb_secret (см. раздел 7) |
+| admin-actions передеплой (CORS для dev-origin) | edge v6 → v7 | CORS для `http://localhost:5173` восстановлен |
+
+### v1.0.1 — патч (11.07.2026)
+| Событие | Коммит / ссылка | Комментарий |
+|---|---|---|
+| PR #69 — `fix(sidebar): move sync status chip to bottom` | [PR #69](https://github.com/danny-swan/taskflow-app/pull/69), коммит `5a6ed65`, merge `cc6d760` | `PendingSyncChip` перенесён под навигацию (к переключателю языка) — пункты меню больше не прыгают при появлении/исчезновении sync-чипа |
+| Bump 1.0.1 в `package.json` на `main` | `0c0b2bb` | Согласовано с тегом |
+| Тег `v1.0.1` → релиз | [v1.0.1](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.1) | Стабильный патч, те же артефакты (NSIS+MSI+portable+dmg+latest.json), автообновление с v1.0.0 работает |
+| `APP_ALLOWED_ORIGINS` добавлен `http://tauri.localhost` | Supabase Edge Functions env | Починило «Failed to fetch» в админке из собранного Tauri v2 на Windows (WebView2 шлёт origin `http://tauri.localhost`). Функции читают env в рантайме — передеплой не потребовался |
+| Обновление roadmap (раздел H — чеки ФНС) | `89461e3` | Зафиксирована находка: ЮKassa с 23.12.2025 прекратила выдачу чеков НПД (в этом рефакторинге — раздел 7) |
+
+### Post-v1.0.1 фиксы (12.07.2026)
+
+> Серия из трёх PR-ов по багам/фичам, смёржены в `main` 12.07.2026 и выпущены как [v1.0.2](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.2) в тот же день (см. раздел 7.4). Серверная часть (миграция `0025_task_hold_periods` = supabase-name `sync_task_hold_periods`) — ✅ ПРИМЕНЕНА НА ПРОД 12.07.2026 (version `20260712112352`), бэкфилл отработал (таблица пуста — висящих холдов у 4 прод-аккаунтов нет). RLS включен, GRANT authenticated выдан, realtime-публикация обновлена.
+
+| Событие | Коммит / ссылка | Комментарий |
+|---|---|---|
+| PR #70 — `fix(tasks): не открывать попап при возврате задачи в работу` | [PR #70](https://github.com/danny-swan/taskflow-app/pull/70), squash `3310aa4` | Bug B1: в `TaskCard.tsx` guard `onCardClick` не блокировал `reopenOpen` — клик по кнопке внутри `ConfirmDialog` (portal) всплывал по React-дереву в `onClick` карточки и та открывала попап со старым снимком task-объекта. Поле в базе — `finish_date` (не `completed_at`). +127/−1, 2 файла, 212 vitest тестов зелёные |
+| PR #71 — `fix(entitlements): устранить race в useEntitlement` | [PR #71](https://github.com/danny-swan/taskflow-app/pull/71), squash `91d7aa1` | Bug B2: `useEntitlement` инициализировал `loading = useState(!!userId)`, `setLoading(true)` жил в `useEffect` — при `userId: null → user-1` один коммит guard `AdminPage` видел устаревшее `entLoading=false` и редиректил на `/`. Фикс — вариант А: синхронный расчёт `loading`/`status` на рендере через сравнение `userId` с `resolvedFor`. Серверная защита не тронута. +178/−15, 242 vitest теста |
+| Релиз десктопа v1.0.2 | [тег v1.0.2](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.2), коммит `1f0921d`, [CI run 29191151289](https://github.com/danny-swan/taskflow-app/actions/runs/29191151289) | Собраны Windows (NSIS + MSI RU/EN + portable) и macOS (universal dmg), latest.json подписан — v1.0.0/v1.0.1 юзеры получат обновление через auto-updater. 264/264 vitest, E2E Playwright зелёные |
+| PR #72 — `feat(stats): реальный расчёт столбца «Холд» (task_hold_periods)` | [PR #72](https://github.com/danny-swan/taskflow-app/pull/72), squash `2602371` | F6: новая sync-таблица `task_hold_periods (task_id, started_at, ended_at, user_id, ...)`. **Клиент — единственный автор**: записи интервалов в `addTask`/`updateTask`/`softDeleteTask` (как `overdue_events`), серверного триггера НЕТ — работает в local-only режиме, нет дубликатов при sync. Миграция `0025_task_hold_periods.sql` (RLS + GRANT + бэкфилл висящих холдов + realtime). Клиент-миграция `v10`. `Stats.tsx` теперь читает «Холд» из `holdMap`. Формула дней: `end − start` (02.06→05.06 = 3д, открытый интервал — до `now()`, несколько периодов плюсуются). +801/−6, 15 файлов, 258 vitest тестов зелёные, pgTAP `01_grants_test.sql` расширен 74→83 |
+| Правка roadmap: раздел 3 (🟡-блок) | `2570a42` | Переименование в «Структурные точки...» + отметка Wave 3 future-table probe в п. 2 |
+
+**Применение на прод (после мержа):**
+- B1/B2 (фронт-фиксы) — уедут на прод только с релизом десктопа (v1.0.2 ещё не собран).
+- F6 (Холд) — миграция `0025` НЕ применена на прод (требует отдельного захода через Supabase-коннектор — идемпотентна, содержит бэкфилл).
+
+### v1.0.3 — базовая кастомизация профиля (12.07.2026)
+
+> Первый шаг к профилям: публичный ID `TF-XXXXXX` + профильные поля (никнейм/аватар/bio). Модель аккаунтов и данных не менялась. Серверная миграция `0026_profile_customization` — ✅ ПРИМЕНЕНА НА ПРОД 12.07.2026 (подробности — в блоке «Post-v1.0.2» раздела 7 и Appendix А, строка 0026).
+
+| Событие | Коммит / ссылка | Комментарий |
+|---|---|---|
+| PR #73 — `feat(profile): базовая кастомизация профиля (public ID + профильные поля)` | [PR #73](https://github.com/danny-swan/taskflow-app/pull/73), squash `7db27a6` | Новые колонки `profiles`: `public_user_id` (UNIQUE NOT NULL, `TF-XXXXXX`), `nickname` (≤32), `avatar_variant` (1..8), `bio` (≤160). Функции генерации ID + guard-триггер неизменяемости + DEFAULT `public_user_id`. UI — блок профиля в Настройки→Аккаунт (`Avatar.tsx`, `ProfileBlock.tsx`, `profile.ts`). `profiles` НЕ в sync. +1207/−1, 292 vitest, pgTAP `08_profile_test.sql` `plan(24)` — весь набор зелёный (поправлена pgTAP-регрессия через DEFAULT + assert в `04`) |
+| Релиз десктопа v1.0.3 | [тег v1.0.3](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.3), коммит `a3d11a5`, [CI run 29194889212](https://github.com/danny-swan/taskflow-app/actions/runs/29194889212) | Собраны Windows (NSIS + MSI RU/EN + portable) и macOS (universal dmg), `latest.json` (`version: 1.0.3`) — v1.0.0–1.0.2 юзеры получат обновление через auto-updater. 292/292 vitest, E2E Playwright зелёные. Версия синхронизирована из тега CI-ом |
+
+**Применение на прод:** серверная миграция `0026` (вкл. DEFAULT на `public_user_id`) — ✅ применена через Supabase-коннектор, бэкфилл 4/4 профилей, guard проверен. Клиент уехал на прод-юзеров с v1.0.3.
+
+---
+
+## 2. Карта архитектуры и интеграций — "что с чем связано"
+
+### 2.1. Клиент (TypeScript/React + Tauri)
+
+```
+useStore.ts (Zustand, 981 строка) — src/store/useStore.ts
+   │  мутации: addTask/updateTask/deleteTaskWithUndo/addTag/createTaskFromTemplate/...
+   ▼
+db.ts (1293 строки, dual-backend) — src/lib/db.ts
+   │  web: sql.js (IndexedDB)     Tauri: tauri-plugin-sql (файл SQLite)
+   ▼
+migrations.ts (611 строк, PRAGMA user_version, TARGET_VERSION=9)
+   │
+   ▼
+sync/outbox.ts → sync/mappers.ts → sync/push.ts ⇄ sync/pull.ts → sync/index.ts (оркестратор syncNow())
+                                                                      │
+                                                              sync/realtime.ts (Supabase Realtime)
+snapshots.ts — снимки локальной БД, реестр per-user (bound_user_id, registryKey)
+```
+
+- **Единственный стор** — `src/store/useStore.ts:204`. Все мутации: пишет в SQLite → `enqueueOutbox` (`src/lib/outbox.ts:16-21,45`, дедуп по `(entity_table, entity_uuid)`) → `refresh()`.
+- **Синхронизируемые таблицы (6, с 12.07.2026):** `tasks`, `statuses`, `tags`, `task_templates`, `overdue_events`, `task_hold_periods` (добавлена в PR #72). Порядок push — родители раньше детей: `PUSH_ORDER` = statuses → tags → tasks → templates → overdue_events → task_hold_periods.
+- `settings` синхронизируется в облачной схеме (`sync_settings`), но **не пушится/не пуллится клиентом** — сделано осознанно.
+- **Push:** батчи ≤50, экспоненциальный backoff 1→2→4→8→16мин, `MAX_ATTEMPTS=5`, `.upsert(onConflict:'id')` (`sync/push.ts:218`), delete — soft.
+- **Pull:** курсор per-table в `settings`, LWW по `updated_at`, `DeferRowError` для сирот.
+- **Realtime:** канал `sync-realtime-<userId>`, debounce 600мс, слушает 5 sync_* таблиц.
+
+### 2.2. Supabase backend
+
+**Миграции**: 21 применённая на проде (сверено через Supabase 12.07.2026 — `list_migrations`), локальные файлы `supabase/migrations/0001`→`0024` включают переименованные версии (см. Приложение А). Покрывают базовую схему, sync-схему, entitlements/payments, GRANT-хардненинг (3 итерации), payment_methods + pg_cron автопродление, security-хардненинг Wave 2/3/4.
+
+**12 Edge Functions** (`supabase/functions/`) — все ACTIVE на проде. Конкретные версии здесь НЕ фиксируются (меняются при каждом деплое) — актуальные см. в Supabase Dashboard или через `list_edge_functions`. verify_jwt: там, где `true`, требуется валидный юзер-JWT; где `false` — вход по external secret (webhook/cron) или sender.
+
+| Функция | verify_jwt | Назначение | Ключевые строки |
+|---|---|---|---|
+| `create-payment` | true | Создание платежа (покупка / update-card 1₽) + 54-ФЗ чек (на СМЗ/НПД со стороны ЮKassa больше не выдаётся — см. раздел 7 про ФНС) | `TIERS` прайс-лист `:69-94`; `UPDATE_CARD_SPEC` `:102-106`; режим update-card `:165-170,254-257` |
+| `payment-webhook` | false (вход по IP+HMAC) | Проверка вебхуков, entitlements, сохранение карт, refund | `savePaymentMethod` `:822-844`; `handlePaymentCanceled` `:635-691`; `initiateRefund` `:847` |
+| `renew-subscription` | false (вход по `CRON_SHARED_SECRET`) | Часовой cron, списание, downgrade после 3 фейлов | Выборка кандидатов `:222-237`; поиск метода `:292`; `MAX_ATTEMPTS=3`, `TIER_AMOUNTS:286` |
+| `change-plan` | true | Upgrade monthly→annual | — |
+| `cancel-subscription` | true | Отключение автопродления (сохраняет доступ до valid_until) | — |
+| `reactivate-subscription` | true | Отмена cancel_at_period_end | `:118-125` |
+| `detach-payment-method` | true | Отвязать карту (отключает auto_renew) | `:102-171` |
+| `admin-actions` | true (+ admin-check внутри) | Admin-only действия | `:141-266` |
+| `activation-notify` | false (вход по `INTERNAL_SHARED_SECRET`) | Письмо-активация | Resend, см. `activation_notified_at` в миграции 0009 |
+| `send-user-email` | false (вход по `INTERNAL_SHARED_SECRET`) | Транзакционные письма (шаблоны `:187,256,340`) | Resend |
+| `start-trial` | true | 14-дневный trial (`TRIAL_DAYS=14`) | `:99-130` |
+| `delete_account` | false (сам валидирует JWT через `verifyJwt`) | Полное удаление аккаунта (auth + все связанные таблицы) | — |
+
+**RLS** включён на всех пользовательских таблицах; платёжные таблицы — authenticated только SELECT своей строки, запись только service_role.
+
+### 2.3. Секреты и переменные
+
+**Клиент (публичное, попадает в бандл):** `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_SENTRY_DSN`, `VITE_TURNSTILE_SITE_KEY`, `VITE_APP_VERSION`, `VITE_ADMIN_EMAILS`, `VITE_PAY_CLOUDTIPS_URL`, `VITE_PAY_TON`, `VITE_PAY_USDT_TRC20/ERC20`, `VITE_PAY_PRICE_MONTHLY/ANNUAL/LIFETIME`.
+
+**Edge Functions (секретные):** `SUPABASE_URL/ANON_KEY/SERVICE_ROLE_KEY/SECRET_KEYS`; `YOOKASSA_SHOP_ID/SECRET_KEY/API_BASE/RETURN_URL_BASE/SKIP_IP_CHECK`; `RESEND_API_KEY/FROM`, `ADMIN_EMAIL(S)`, `PUBLIC_APP_URL`; `INTERNAL_SHARED_SECRET`, `CRON_SHARED_SECRET`, `WEBHOOK_SECRET`.
+
+**GitHub Actions:** Secrets — `ADMIN_EMAILS`, `SENTRY_AUTH_TOKEN`, `SENTRY_DSN`, `SUPABASE_ANON_KEY`, `SUPABASE_URL`, `TAURI_SIGNING_PRIVATE_KEY(+_PASSWORD)`, `TURNSTILE_SITE_KEY`. Variables — `SENTRY_ORG=swans-org`, `SENTRY_PROJECT=taskflow`.
+
+**Бизнес-контекст:** YooKassa shop `account_id=1402561` — **LIVE** (`test=false`), рекуррент активен для bank_card/yoo_money/sbp/tinkoff_bank, SberPay — pending. Самозанятость (НПД 4%), ИНН 774334883780.
+
+### 2.4. CI/CD
+`build.yml` (релиз по тегу v*), `test.yml` (tsc+vitest+Playwright gate), `db-tests.yml` (pgTAP на Postgres 15), `supabase-ping.yml` (keep-alive каждые 3 дня), `generate-updater-keys.yml` (разовый).
+
+---
+
+## 3. Критические скрытые взаимосвязи — что с чем жёстко связано
+
+Это прямой ответ на вопрос "что можно упустить в будущих изменениях, если не помнить о связях". Ниже — каталог мест, где два+ модуля/таблицы/функции скрыто зависят друг от друга, так что правка одной стороны без другой создаёт баг. **Формат: если трогаешь А — не забудь Б.**
+
+> Блок «🔴 Уже сломано» (F1/F2/F3 по `payment_method_id`, `renewal_attempts`, `card_brand`), актуальный на 09.07.2026, перемещён в раздел 10 (исторический архив). F1 закрыт в Wave 1, F3 в Wave 3, F2 закрыт в десктопе v1.0.0 — в качестве активных жёстких зависимостей больше не числятся. Соответствующие находки F1–F3 (с историей фиксов и ссылками) — в разделе 5.
+
+### 🟡 Структурные точки, которые легко сломать при следующей правке
+
+> Это НЕ список открытых багов — это каталог мест, где два+ модуля/таблицы/функции скрыто зависят друг от друга. Сейчас всё работает, но правка одной стороны без другой создаст баг. Убрать эти связи можно только рефакторингом, поэтому каталог ведётся как чек-лист «что перепроверить при следующей правке этой области».
+
+**1. Один синкаемый столбец = 5 мест для правки в каждой из sync-таблиц.** Добавление нового поля в любую из 6 sync-таблиц (с 12.07.2026: +`task_hold_periods`) требует согласованной правки: миграция → GRANT/RLS → push-mapper (`sync/mappers.ts`) → pull-mapper → TS-интерфейс. Пропуск одного — поле молча не синкается или ломает `upsert(onConflict:'id')` (`sync/push.ts:218`). Именно этот класс ошибки уже дважды сработал (statuses/tags в прошлой сессии, и card_brand/renewal_attempts выше). При добавлении `task_hold_periods` в PR #72 все 5 мест пройдены явно (см. чек-лист в описании PR).
+
+**2. pgTAP-тест на GRANT/RLS хардкодит список таблиц** (частично смягчено в Wave 3, но не устранено). `supabase/tests/01_grants_test.sql` — `plan(83)` на 12.07.2026 (был 74 до PR #72), явно перечисляет таблицы. **Новая таблица без ручного дополнения этого теста пройдёт CI по целевым проверкам, даже если её собственные права настроены неверно**.
+
+**Смягчено:** миграция `0021_wave3_revoke_default_privileges_footgun` добавила **future-table probe** — генерическую pgTAP-проверку, что у любой новой таблицы в `public` НЕТ автоматических GRANT для `authenticated`/`anon`, которые были источником инцидентов dev.6.4.2/6.4.3/6.4.4. Теперь «footgun default privileges» ловится автоматически.
+
+**Остаётся:** сам статический `plan(...)` не обновляется автоматически — если новая таблица требует специфичные права (не только отсутствие default GRANT), тест не поймает регрессию в этих правах без ручного дополнения. Фактический счётчик `plan` растёт вручную вместе с новыми синк-таблицами: 74 (до Wave) → 83 (с PR #72 и `task_hold_periods`).
+
+**3. Определение "кто админ" размазано по 4 местам:** `0017_admin_rpc.sql:43` (инлайн в RPC) и `:72-78` (`is_admin_user()`, повторяет ту же логику) + фронт `entitlements.ts:162-164` (`ADMIN_EMAILS` OR seed/lifetime) + `admin-actions/index.ts:141-266`. Изменение критерия в одном месте без остальных → фронт покажет `/admin`, а серверная проверка откажет (или наоборот, что хуже). Отдельно был race на входе в `/admin` с первого клика (`useEntitlement` стартовал с `loading=false`) — закрыт PR #71 (12.07.2026), guard теперь видит синхронный `loading`/`status`. Архитектурно размазанность определения админа по 4 местам — не устранена.
+
+**4. Admin-гейт на фронте — это только UX, не защита.** `src/App.tsx:284` + `AdminPage.tsx` — клиентский гейт. Вся реальная защита — в `admin-actions` и RLS `0017`. Если серверная проверка когда-нибудь ослабнет, скрытие роута на фронте не защитит.
+
+**5. `next_renewal_at` ↔ частичный индекс ↔ выборка cron.** Индекс `idx_entitlements_next_renewal` (0014:136-138, условие `auto_renew=true AND cancel_at_period_end=false`) должен совпадать с WHERE в `renew-subscription:222-237`. `reactivate-subscription` и `detach-payment-method` меняют именно эти флаги — если один из них не выставит их согласованно, строка либо выпадет из выборки (не продлится), либо попадёт туда без валидного метода оплаты.
+
+**6. Idempotence-Key ЮKassa зависит от счётчика попыток.** `renew-subscription:316-318` строит ключ детерминированно из `(userId, valid_until, attemptNo)`. Если счётчик рассинхронен — риск коллизии ключа (повторный запрос вернёт старый результат) или, наоборот, двойного списания.
+
+**7. Snapshot restore не ре-энкьюит outbox.** `restoreSnapshot` → `db.applyBackup('replace')` (`snapshots.ts:405`, `db.ts:1074`) заменяет локальные строки, но **не** ставит их в `sync_outbox` и не бампает `version`/`client_id`. После восстановления снимка данные могут не уехать в облако до следующей ручной правки.
+
+**8. Изоляция аккаунтов держится на паре `bound_user_id` ↔ `registryKey`.** `setBoundUserId`/`checkAccountBinding` (`snapshots.ts:192,240`) должны быть согласованы с `registryKey(userId)` (`:44-46`). Рассинхрон = утечка снимков одного аккаунта в другой на общем устройстве. Явная миграция со старого shared-ключа в коде — маркер, что это уже когда-то путалось.
+
+**9. Прайс-лист тарифов продублирован в 3+ местах.** `TIERS` в `create-payment:69-94`, `TIER_AMOUNTS` в `renew-subscription:286`, плюс фронт `/checkout` и `valid_until`-логика в webhook. Сам код содержит комментарий-напоминание "синхронизировать с другими местами" (`create-payment:64-68`) — это авторское признание, что цену легко забыть поменять везде сразу.
+
+**Общий вывод:** структурно самый рискованный паттерн в проекте — "одна сущность, несколько копий состояния в разных сервисах/слоях" (счётчики, id, цены, права). Каждый раз, когда добавляется новое поле/таблица/цена/роль, стоит явно пройтись по пунктам 1–9 этого списка и проверить, не появилась ли ещё одна скрытая копия.
+
+---
+
+## 4. Регрессионная проверка: старая логика vs новая (nothing broken)
+
+| Проверка | Результат |
+|---|---|
+| Полнота sync statuses/tags | ✅ push/pull симметричны, boolean 0/1↔bool конвертируется верно |
+| Bug #1 (dev.6.10.0): seed-строки без uuid не попадали в облако | ✅ Фикс актуален |
+| Bug #2: `AccountSwitchGate` стирал локальную БД вслепую | ✅ Фикс актуален — `cloudHasData()` гейт |
+| Bug #3: общий реестр снимков между аккаунтами | ✅ Фикс актуален — изолирован по `bound_user_id` |
+| Bug #4: задачи с неизвестным status_id падали в первый статус | ✅ Улучшено в dev.6.10.3 — `DeferRowError` вместо fallback |
+| `deleteTaskWithUndo` (10с) × pull-синхронизация | ✅ Гонки нет |
+
+**Вывод:** признаков регрессий ранее исправленных багов в HEAD `develop` не обнаружено.
+
+---
+
+## 5. Отдельный блок находок — баги, уязвимости, архитектурные риски
+
+### 🔴 Активные баги (уже сломано, чинить первым)
+
+| # | Находка | Где | Критичность | Что делать |
+|---|---|---|---|---|
+| **F1** | `payment_method_id`: webhook пишет внутренний uuid, `renew-subscription` ищет/шлёт его как external_id ЮKassa — автопродление не работает ни у кого | `payment-webhook/index.ts:391,485,572`, `renew-subscription/index.ts:292,324` | **HIGH** | В `renew-subscription` сначала резолвить `payment_methods.external_id` по внутреннему uuid, слать в ЮKassa именно `external_id`. Добавить тест "что webhook записал ↔ что renew читает". Проверить `renewal_attempts_log` на всплеск `payment_method_inactive` — возможны уже пострадавшие |
+| **F2** | Счётчик попыток продления: бэкенд пишет `renewal_attempts_count`, фронт читает старую `renewal_attempts` → UI показывает неверные данные | `entitlements.ts:364`, `renew-subscription/index.ts:231` | MEDIUM | Перевести фронт-SELECT на `renewal_attempts_count`, добавить триггер синхронизации колонок или удалить старую |
+| **F3** ✅ | Бренд карты в UI пустой — webhook пишет `card_type`/`card_first6`, фронт читает `card_brand` | `payment-webhook/index.ts:823-828`, `Settings.tsx` (было `card_brand`) | LOW-MEDIUM | **✅ ИСПРАВЛЕНО (Wave 3, PR #65).** `Settings.tsx` переведён на чтение `card_type` (канонная колонка бренда с миграции 0016). 🟡 фронт — на прод уедет отдельным релизом десктопа. `entitlements.ts` уже читал `card_type` ранее |
+| **F4** | Письмо о неудачном платеже не шлётся, если отказ пришёл как `payment.canceled` прямо в webhook (не через cron) | `payment-webhook/index.ts:635-691` (`handlePaymentCanceled`) | MEDIUM | Добавить вызов `notifyRenewalFailed`/аналог в этой ветке |
+| **B1** ✅ | (баг 12.07.2026) Кнопка «Вернуть в работу»: после выбора статуса в диалоге таск не менял статус и открывался попап детального редактирования — клики внутри `ConfirmDialog` (portal) всплывали в `onClick` карточки через React-дерево | `src/components/TaskCard.tsx` (guard `onCardClick`) | HIGH (UX-блокер основного сценария) | **✅ ИСПРАВЛЕНО (PR [#70](https://github.com/danny-swan/taskflow-app/pull/70), squash `3310aa4`, 12.07.2026).** В guard `onCardClick` добавлен `reopenOpen` рядом с `confirmDelete`. Покрыто 3 vitest-кейсами в `TaskCard.test.tsx`. ✅ Уехал на прод с [v1.0.2](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.2) 12.07.2026 |
+| **B2** ✅ | (баг 12.07.2026) Первый клик по «Администрирование» редиректил на «Задачи» (второй клик работал) — race в `useEntitlement`: `loading` инициализировался `useState(!!userId)`, `setLoading(true)` жил в `useEffect`, при `userId: null→user-1` один коммит guard `AdminPage` видел `entLoading=false` → `navigate('/')` | `src/lib/entitlements.ts` (`useEntitlement`) | MEDIUM (UX) | **✅ ИСПРАВЛЕНО (PR [#71](https://github.com/danny-swan/taskflow-app/pull/71), squash `91d7aa1`, 12.07.2026).** Синхронный расчёт `loading`/`status` на рендере — через сравнение текущего `userId` с `resolvedFor`. Серверная защита не тронута. Регресс-тест `useEntitlement.race.test.tsx` (переход `null→user-1` + админ/не-админ/ошибка). ✅ Уехал на прод с [v1.0.2](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.2) 12.07.2026 |
+| **F6** ✅🟡 | (фича 12.07.2026) Столбец «Холд» в статистике — раньше не отражал реальную длительность пребывания в «Приостановлено». Теперь — сумма всех холд-интервалов в днях (разница дат, открытый интервал — до `now()`, несколько периодов плюсуются) | новая таблица `task_hold_periods` + `src/lib/holdPeriods.ts` + хуки в `addTask`/`updateTask`/`softDeleteTask` + `Stats.tsx:158` | MEDIUM (точность статистики) | **✅ СМЁРЖЕНО (PR [#72](https://github.com/danny-swan/taskflow-app/pull/72), squash `2602371`, 12.07.2026) + ✅ МИГРАЦИЯ `0025_task_hold_periods.sql` ПРИМЕНЕНА НА ПРОД 12.07.2026 (version `20260712112352`) + ✅ ВЫПУЩЕНО В [v1.0.2](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.2) 12.07.2026.** Клиент — единственный автор интервалов (как `overdue_events`), серверного триггера НЕТ (архитектурное решение сабагента, одобрено пользователем 12.07.2026 — «big no new bugs»). Тесты: `holdPeriods.test.ts` (19 кейсов, вкл. `hold→work→hold`=2 интервала, soft-delete, открытый интервал), pgTAP `07_task_hold_periods_test.sql` (структура/триггеры/realtime/cascade), pgTAP `01`+`02` расширены. **Применена через Supabase-коннектор 12.07.2026**, бэкфилл отработал (0 висящих холдов в момент применения) |
+| **F7** ✅ | (баг 15.07.2026, `feat/workspaces`) Первая облачная синхронизация нового пространства падала с **403 / 42501** — созданное пространство «не долетало» до сервера, `sync_outbox` копился (растущий «pending sync: N»), при переключении аккаунта данные терялись. Корень (доказан прод-SQL-пробами): клиент пушит через PostgREST `upsert` = `INSERT ... ON CONFLICT DO UPDATE ... RETURNING *`; для `INSERT ... RETURNING` Postgres применяет к возвращаемой строке **SELECT-политику**, а она у workspace-таблиц завязана на `has_workspace_role(...,'viewer')` → членство в `sync_workspace_members`. Но при СОЗДАНИИ пространства членство-owner ещё не существует на сервере → SELECT=false → RETURNING запрещён → весь upsert отклонён. Чистый `INSERT` (без RETURNING) проходил — поэтому баг не ловился ранними пробами. Вторично: клиентский `isPermanentError` (push.ts) классифицировал 403/RLS как ПОСТОЯННУЮ ошибку → строки застревали в outbox с `attempt_count=MAX` | сервер: RLS SELECT-политики всех `sync_*`-таблиц пространства; клиент: `src/lib/sync/push.ts` (`isPermanentError`), `src/lib/migrations.ts` | **HIGH** (блокер облачных пространств) | **✅ ИСПРАВЛЕНО (PR [#103](https://github.com/danny-swan/taskflow-app/pull/103), OPEN → feat/workspaces; миграция `0037_owner_bootstrap_rls_upsert.sql` ✅ ПРИМЕНЕНА НА ПРОД 15.07.2026 через execute_sql; клиент — миграция v14).** Введено УЗКОЕ bootstrap-окно: `is_workspace_bootstrap(ws,uid)` = владелец И в пространстве ещё НЕТ активного членства; как только появляется первое членство — bootstrap выключается, доступ строго по `has_workspace_role` (не даёт утечки stale-owner при self-leave). SELECT/UPDATE `sync_workspaces` += инлайн `owner_id=auth.uid() AND NOT workspace_has_active_members(id)` (инлайн, не через `is_workspace_bootstrap`, т.к. SECURITY DEFINER-функция не видит in-flight строку RETURNING); дочерние/settings/activity_log(SELECT) += `is_workspace_bootstrap(workspace_id,uid)`. Новые функции `is_workspace_bootstrap(text,uuid)`, `workspace_has_active_members(text)` (STABLE SECURITY DEFINER, REVOKE anon/public, GRANT authenticated, `search_path=public,pg_catalog`). Клиент v14 разово сбрасывает застрявшие по RLS/403 outbox-строки. Верификация: pgTAP `18_upsert_returning_bootstrap_test.sql` (RED→GREEN) + выравнены `14`/`10`, весь набор 18/18 зелёный; прод-пробы под ролью владельца. Роли (0031/0035) не менялись. Ретроспектива отладки — см. §7.8 и `taskflow_plan_next_session.md` |
+| **F8** ✅ | (баг 21.07.2026, `feat/workspaces`) **Принятие приглашения не показывало приглашённому чужое shared-пространство** — `accept_invite` (RPC) отрабатывал успешно (200, членство на сервере создавалось), но пространство и его задачи так и не появлялись у приглашённого; в Console ошибок нет. Корень (доказан код-анализом + прод-SQL-пробой под ролью приглашённого): баг **чисто клиентский**. Клиентский pull (`src/lib/sync/pull.ts`) дублировал фильтр `.eq('user_id', me)` для `sync_workspaces` и всех data-таблиц (tasks/statuses/tags/templates/overdue/hold) — в чужом пространстве строки принадлежат ВЛАДЕЛЬЦУ (`user_id`=other), поэтому клиент их отсекал, хотя серверный RLS отдаёт их по членству (проба: сервер вернул 1 ws + 3 задачи, клиентский фильтр → 0 и 0, пришла только строка членства). Вторично: `listWorkspaceIds` (`src/lib/sync/workspace.ts`) строил набор пространств из локальной таблицы `workspaces`, куда чужой ws никогда не попадал → **chicken-and-egg** (чтобы вытянуть ws — он уже должен быть локально). RLS корректен, миграция БД НЕ нужна | клиент: `src/lib/sync/pull.ts` (фильтры pull), `src/lib/sync/mappers.ts` (pullScope specs), `src/lib/sync/workspace.ts` (`listWorkspaceIds`) | **HIGH** (блокер совместной работы — приглашения не работали end-to-end) | **✅ ИСПРАВЛЕНО (PR [#103](https://github.com/danny-swan/taskflow-app/pull/103), OPEN → feat/workspaces; коммит `bc50b2d`; только клиент, БЕЗ миграций).** Двухфазный pull: (1) `sync_workspace_members` тянется по `user_id=me` первым; (2) набор `workspace_id` пересчитывается из свежеподтянутого членства (новая `listMembershipWorkspaceIds`), затем `sync_workspaces` (скоуп `id`) и все data-таблицы (скоуп `workspace_id`) тянутся ПО ПРОСТРАНСТВУ, а не по `user_id` — это разрывает chicken-and-egg. Каждый ws тянется отдельно со своим per-ws курсором (иначе свежий shared-ws со «старыми» `updated_at` отсёкся бы общим курсором ведущего ws). Верификация: новый vitest `pull.twophase.test.ts` (RED→GREEN, мок PostgREST с RLS-семантикой) + весь набор 556/556 зелёный, `tsc -b`+`vite build` успешно. Ретроспектива: диагноз пошёл строго по протоколу — сначала код-анализ, затем дифференциальная прод-проба под ролью приглашённого, и только потом фикс. См. §7.9 |
+| **F5** ✅ | Дубль письма `renewal_failed` + двойной инкремент `renewal_attempts_count`: при синхронном `canceled` от ЮKassa cron шлёт письмо/инкремент, и webhook по тому же платежу делает то же ещё раз (побочка фикса F4, дедупликации между путями нет) | `renew-subscription/index.ts:405-423` (синхр. `canceled`, письмо стр.412) вс. `payment-webhook/index.ts:704-726` | MEDIUM | **✅ ИСПРАВЛЕНО (Wave 2, ветка `wave2-fixes`).** Принцип "единственный владелец": из синхр. ветки `canceled` cron убраны `logAttempt`+`incrementAttempts`+`notifyRenewalFailed` — для СОЗДАННЫХ платежей письмо/счётчик/лог делает только webhook `payment.canceled`. Cron лишь выставляет `last_renewal_attempt_at` (чтобы не дёрнуть юзера повторно). Письмо cron сохранено ТОЛЬКО в ветке HTTP-ошибки API (платёж не создан, webhook не придёт). Покрыто unit-тестом `renew-subscription/test.ts`. ✅ ПРИМЕНЕНО НА ПРОД 2026-07-10 — edge `renew-subscription` **v9** (id `27d6ffbb-616d-4d76-bece-2ab6efb4aa90`, ACTIVE, `verify_jwt=false`); на проде синхронная `canceled`-ветка cron больше не шлёт письмо/не инкрементит счётчик/не пишет лог, только обновляет `last_renewal_attempt_at`. См. `dup_email_analysis.md` |
+| **F9** ✅ | (баг 21.07.2026, `feat/workspaces`) **Первое (системное personal) пространство нового пользователя без дефолтных статусов и welcome-задачи** — после чистой установки и создания аккаунта в первом ws нет статусов/welcome; второе, созданное вручную — получает нормально. Корень (доказан TDD-тестом на реальном Tauri-пути): баг **Tauri-only** (native SQLite), web-`seed()` проставлял `workspace_id` корректно. Две причины: (1) `tauriSeed()` НЕ проставлял `workspace_id` засеянным строкам; (2) гидрация native→webDb в `initDb()` теряла колонку `workspace_id`. Итог: сид-строки с `workspace_id=NULL` выпадали из ws-scoped выборок UI. DDL не нужно (колонки с v11) | `src/lib/db.ts` (`tauriSeed`, `initDb` гидрация) | **HIGH** (UX новых пользователей) | **✅ ИСПРАВЛЕНО (PR [#104](https://github.com/danny-swan/taskflow-app/pull/104) → feat/workspaces; коммит `9832ca9`; только клиент, БЕЗ миграций).** `tauriSeed()` читает `personal_workspace_id` (fallback `ws_local`) и проставляет `workspace_id` в INSERT статусов/тегов/welcome; гидрация сохраняет `workspace_id` для 6 sync-таблиц. Верификация: новый vitest `db.firstWorkspaceSeed.test.ts` (RED→GREEN, реальный Tauri-путь через sql.js-адаптер, 2 кейса) + весь набор 556/556 зелёный, `tsc -b`+`vite build` ок. См. §7.10 |
+| **F10** ✅ | (UX-баг 21.07.2026, `feat/workspaces`) **«pending sync: N» показывался free/paywalled пользователю** — у нового пользователя без подписки чип показывал «pending sync: 13» при статусе `paywalled` и «последняя синхронизация: никогда» — сбивало с толку (синк для free недоступен). Корень: `PendingSyncChip` (`Sidebar.tsx`) скрывался только по `count===0` | `src/components/Sidebar.tsx`, `src/lib/pendingSync.ts` | MEDIUM (UX) | **✅ ИСПРАВЛЕНО (PR [#104](https://github.com/danny-swan/taskflow-app/pull/104) → feat/workspaces; коммит `9832ca9`; только клиент).** Извлечён чистый предикат `shouldHidePendingChip(status,count,isDev)` в `src/lib/pendingSync.ts`: при недоступном синке (`paywalled`/`skipped`) чип скрыт ВСЕГДА (вкл. dev); для Pro/trial/lifetime поведение прежнее. **Outbox НЕ чистили** (отдельное продуктовое решение — см. §7.10 Открытые вопросы). Верификация: новый vitest `pendingSync.chip.test.ts` (RED→GREEN, 5 кейсов) + весь набор 556/556 зелёный. См. §7.10 |
+| **F11** ✅ | (баг 21.07.2026, `feat/workspaces`) **Лимит пространств учитывал чужие shared и блокировал приём приглашений** — два симптома одной первопричины (учёт «своего» и «чужого» в одном счётчике): (1) **клиент** — гейт создания в `CreateWorkspaceModal` считал `workspaces.length` (ВСЕ пространства пользователя, включая чужие shared, где он editor/viewer), поэтому участие в чужих пространствах ложно съедало лимит на СОЗДАНИЕ своих; (2) **сервер** — `accept_invite` (0032) блокировал приём чужого инвайта по `count(ВСЕ членства) >= get_workspace_limit(uid,'shared')`, а членство-owner есть у каждого своего ws (0027) → платный с ≥7 своими ws не мог принять ни одного приглашения. Продуктовое решение (пользователь, 21.07.2026): «свой лимит — это твой лимит, приглашения других его не ограничивают; сколько тебя пригласят — столько доп. пространств у тебя и будет»; free НЕ может принимать вообще (shared = только платные). Серверный лимит на СОЗДАНИЕ (`enforce_workspace_limit`, 0029) считает по `sync_workspaces.owner_id` — корректен, не менялся | клиент: `src/components/CreateWorkspaceModal.tsx`, `src/lib/workspaceLimits.ts` (+`countOwnedWorkspaces`), `src/store/workspaceScope.ts` (`useWorkspaceRoles`); сервер: `accept_invite` (миграция 0038) | **HIGH** (лимиты считались неверно; платные не могли принимать приглашения) | **✅ ИСПРАВЛЕНО (PR [#105](https://github.com/danny-swan/taskflow-app/pull/105) → feat/workspaces, merge `a212fbe`; клиент + миграция `0038_accept_invite_limit_by_plan.sql` ✅ ПРИМЕНЕНА НА ПРОД 21.07.2026 через apply_migration).** Клиент: create-гейт считает только ВЛАДЕЕМЫЕ ws через `countOwnedWorkspaces` + `useWorkspaceRoles` (Record<wsId,'owner'|'editor'|'viewer'|null>). Сервер: `accept_invite` теперь гейтит ТОЛЬКО по плану — `get_workspace_limit(uid,'shared')<=0` → `22023 'shared workspaces require a paid plan'`; зависимость от числа членств убрана (платные принимают любое число инвайтов, свои ws бюджет не расходуют; free блокируется). Верификация: vitest `workspaceLimits.test.ts`+`CreateWorkspaceModal.test.tsx`, pgTAP `15` (C11 free-block, C12–14 multi-accept, C5 переписан на успех) + `16` (D2 текст ошибки); полный набор pgTAP 597/597, vitest 567/567, `tsc -b`+build exit 0 на HEAD `feat/workspaces`. **Прод-проба (ROLLBACK, реальный вызов):** pro с 12 членствами (>7) принимает чужой инвайт ✅; free блокируется `22023` ✅. См. §7.11 |
+| **F12** ✅ | (баг 22.07.2026, `feat/workspaces`) **Админка не видела новых free-пользователей и их email (P4)** — администратор в `AdminPage` не видел недавно зарегистрированных пользователей без подписки. Корень: `loadUsers()` строил список ОТ таблицы `user_entitlements` (`from('user_entitlements')` → `userIds` → `rpc('get_users_emails')`), но триггер `handle_new_user` создаёт строку только в `profiles` (free-план = отсутствие строки в `user_entitlements`), поэтому free-юзеры без entitlement вообще не попадали в список, и их email не показывался. Подтверждено на проде (2026-07-22): 6 в `auth.users`/`profiles`, 3 в `user_entitlements` → 3 невидимых free-юзера. `profiles` — полный источник (email + `public_user_id`). View `admin_users_summary` уже строится от `profiles`, но `security_invoker=on` + нет GRANT → клиенту недоступен (и правильно) | клиент: `src/pages/AdminPage.tsx` (`loadUsers`, типы, рендер TF-ID, поиск); сервер: view `admin_users_summary` + новая RPC `get_admin_users_summary` (миграция 0039) | **MEDIUM** (админка не видит free-юзеров/новые email) | **✅ ИСПРАВЛЕНО (прямой коммит [`8317f0d`](https://github.com/danny-swan/taskflow-app/commit/8317f0d9f99acf2153549d0601b58e3c740507d7) в `feat/workspaces`, без отдельного PR; миграция `0039_admin_users_summary_rpc.sql`; ADR 0006).** Решение (Вариант Б): источник — `profiles`, доступ клиенту через SECURITY DEFINER RPC `get_admin_users_summary()` с admin-гейтом `is_admin_user()` (по паттерну ADR 0002, а НЕ GRANT на view); view дополнен `public_user_id`. Клиент: один вызов RPC вместо двух запросов, показывает TF-ID, ищет по нему. Верификация: pgTAP `19` (anon без EXECUTE; обычный юзер → Forbidden; admin видит free-юзера без entitlement — прямая регрессия P4; view += `public_user_id`, security_invoker сохранён, authenticated без SELECT), vitest `AdminPage.mapUsers.test.ts` (маппинг nullable entitlement); `tsc -b`/vitest/`vite build` зелёные. **Прод-проба (ROLLBACK): admin видит free-юзера без entitlement ✅; не-admin → `Forbidden` ✅.** Миграция ✅ ПРИМЕНЕНА НА ПРОД 2026-07-22 (пост-проверка на живом проде: admin видит 6 юзеров, 3 free). См. §7.12 |
+| **F13** ✅ | (баг 22.07.2026, `feat/workspaces`) **Краш при открытии задачи в общем пространстве + дубль «Мои задачи» + залипшая ошибка sync (эпик «Пространства после смены аккаунта/переустановки»)** — при открытии задачи в shared-ws окно ошибки (AppErrorBoundary); после «Перезагрузить» пропадали общие пространства, появлялся задублированный пустой «Мои задачи», часть личных задач не отображалась, красная `sync_workspaces_client_id_fkey` (23503). Диагностика (код-анализ + детерминированный vitest-репро + прод-пробы под ROLLBACK) — ОДИН корневой краш (A) и два следствия (B, C): **A (корень)** — `useTaskActivity` (`useTaskActivityStore.ts`) в селекторе пустого журнала возвращал ИНЛАЙН `[]` вместо стабильной `EMPTY_RECORDS` → zustand на `useSyncExternalStore` видит новую ссылку каждый снапшот → бесконечный ре-рендер → React `Maximum update depth exceeded` → AppErrorBoundary; краш только в shared, т.к. `TaskActivityLog` рендерится лишь там (`TaskModal.tsx`). Соседний `useWorkspaceActivity` уже использовал `EMPTY_RECORDS` — в task-хуке забыли. **B (следствие)** — на проде РОВНО одна personal-ws; дубль пустого «Мои задачи» — локальный артефакт (осиротевшая personal `ws_<olduid>` от прошлого аккаунта, оставшаяся после смены аккаунтов + аварийный reload от краша A). **C (следствие)** — мапперы push слали `client_id: row.client_id ?? clientId`; протухший `row.client_id` стороннего устройства (из pull/смены аккаунтов), которого нет в `sync_devices`, → FK 23503; `push.ts` трактует любой 23503 как «ждём parent workspace» → бесконечный ретрай → залипшая «ошибка sync». Прод-проба под ROLLBACK воспроизвела FK; у аккаунта 21 device. Схема БД НЕ менялась | клиент: `src/store/useTaskActivityStore.ts` (`useTaskActivity` → `EMPTY_RECORDS`), `src/lib/sync/mappers.ts` (9 мапперов: `client_id: clientId`), `src/lib/sync/workspace.ts` (`reconcilePersonalWorkspace` += `dedupePersonalWorkspaces`) | **HIGH** (блокер: задача в shared не открывается) | **✅ ИСПРАВЛЕНО (`feat/workspaces`; только клиент, БЕЗ миграций; ADR 0007).** A: селектор пустого журнала возвращает стабильную `EMPTY_RECORDS` (правило: zustand-селектор «пустого» результата обязан быть стабильной ссылкой). C: при push `client_id` ВСЕГДА текущее (зарегистрированное) устройство — протухший `row.client_id` не утекает обратно; `push.ts` не тронут (оставшийся FK-сценарий — только `workspace_id`, трактовка «ждём родителя» верна). B: `dedupePersonalWorkspaces` soft-delete'ит осиротевшие чужие personal-строки ЛОКАЛЬНО (без `enqueueOutbox` — чужой `user_id`), shared не трогает, идемпотентно. Верификация: vitest `useTaskActivity.selector.test.tsx` (стабильность ссылки, 2 кейса), `workspaces-sync.test.ts` += Bug B (гасит осиротевшую personal, не трогает shared, не пишет в outbox, идемпотентно) + Bug C (маппер игнорирует протухший `row.client_id`); `useTaskActivityStore`/`push` зелёные; `tsc -b`+`vite build`. См. §7.13 |
+| **F15** ✅ | (баг 22.07.2026, `feat/workspaces`) **accept_invite падал 23505 после leave** — после F14/ADR 0008 (работающий leave) повторный invite в тот же ws от owner нельзя было принять — клиент показывал «Не удалось выполнить действие. Попробуйте позже.», PostgREST возвращал HTTP 409 на `POST /rpc/accept_invite`, в логах Postgres — `duplicate key … sync_workspace_members_workspace_id_user_id_key` (sqlstate 23505). Корень: тело `public.accept_invite` (0032/0038) делало голый `INSERT INTO sync_workspace_members`, а уникальный индекс `sync_workspace_members_workspace_id_user_id_key` покрывает `(workspace_id, user_id)` без предиката `WHERE deleted_at IS NULL` — конфликт с soft-deleted строкой (оставшейся после leave). Существовал с 0032 (Wave B); не проявлялся до F14, потому что leave не работал. Прод-проба под ROLLBACK на `sejpmzrmtgcvevukggkx` под JWT `fc592c97…` с `inv_6b84eb6b…` воспроизвела 23505; повторная проба с upsert-версией показала успешную реактивацию `wsm_13afdb1b…`. Схема таблиц НЕ менялась | сервер: `public.accept_invite` (миграция `0040_accept_invite_upsert_membership.sql`) | **HIGH** (блокер повторного приёма invite после leave, затрагивает всех пользователей на проде после F14) | **✅ ИСПРАВЛЕНО (`feat/workspaces`; ADR 0009).** `INSERT ... ON CONFLICT (workspace_id, user_id) DO UPDATE`: реактивация soft-deleted строки (`deleted_at=null`, `role=EXCLUDED.role`, `invited_by=EXCLUDED.invited_by`, `joined_at=now()`, `updated_at=now()`, `version=coalesce(version,0)+1`); `id` сохраняем — клиентский pull-matcher работает по uuid. Прочие проверки accept_invite (target-only, pending, не истёк, тарифный гейт по плану — 0038) сохранены. Верификация: pgTAP `20_accept_invite_reactivation_test.sql` (план 6, INSERT-путь + UPDATE-путь + стабильность uuid); миграция `0040_accept_invite_upsert_membership.sql` ✅ ПРИМЕНЕНА НА ПРОД 22.07.2026 через `apply_migration`. См. §7.15 |
+| **F16** ✅ | (баг, `feat/workspaces`, 22.07.2026) **локальная SQLite физически повреждалась (веб-режим), shared workspaces пропадали после рестарта** — консоль F12 показывала `database disk image is malformed` (code 11) и `UNIQUE constraint failed` на `workspaces.uuid` / `workspace_members.uuid` / `task_activity_log.uuid` (code 2067). Корень: повреждение затрагивало преимущественно индексы — `applyCloudRow*` (`src/lib/sync/pull.ts`) делал `SELECT ... WHERE uuid=?`, битый индекс не находил строку → applier уходил в ветку `INSERT` → физический уникальный индекс всё равно видел существующую строку → `UNIQUE constraint failed`. Ошибка тонула в `firstError` (pull формально завершался с `200 OK`, но ничего не персистилось), а на следующем старте `prunePhantomWorkspaces` (pull.ts) удалял shared-ws без локального membership (которое не успело восстановиться на битой базе) — сайдбар пустел окончательно. Анонсирован в [ADR 0009](../adr/0009-accept-invite-upsert-membership.md) («Что осталось»). Клиентский дефект, серверных миграций нет | клиент: `src/lib/db.ts` (`detectAndRecoverCorruption`), `src/lib/sync/pull.ts` (`SqliteCorruptError`, `withCorruptionGuard`, `prunePhantomWorkspaces` guard), `src/lib/sync/index.ts` (`syncNow`), `src/App.tsx` | **HIGH** (потеря видимости shared-workspaces после рестарта у части пользователей, без явной ошибки в UI) | **✅ ИСПРАВЛЕНО (`feat/workspaces`; ADR 0010).** `detectAndRecoverCorruption()` в `src/lib/db.ts` вызывается в начале `initDb()` до `ensureSchema`/`migrate`/`hydrate`: `PRAGMA integrity_check` на десериализованной базе (веб: sql.js из LocalStorage; Tauri: `getTauriDb()`), при обнаружении порчи — сброс локального хранилища (веб: `localStorage.removeItem` для `STORAGE_KEY`/`STORAGE_KEY_TS`; Tauri: `DROP TABLE IF EXISTS` по известным таблицам) и флаг `window.__taskflow_corruption_recovered` для тоста в `App.tsx`. Каждый `applyCloudRow*` в `pull.ts` обёрнут `withCorruptionGuard` — при сигнатуре порчи (`database disk image is malformed`/`code: 11`/`SQLITE_CORRUPT`) поднимает новый `SqliteCorruptError`; `pullTable`/`pullSpecPaged`/`pullAll` пропагируют `corruption:true` и НЕ вызывают `prunePhantomWorkspaces` в этом цикле; `prunePhantomWorkspaces` также получила собственный защитный guard в начале тела. `syncNow()` при `corruption:true` показывает тост и делает `window.location.reload()`, пропуская push в этом цикле. Верификация: vitest `src/lib/db.corruption.test.ts` (3 сценария: чистое хранилище, битые байты, валидная база) + `tsc --noEmit` 0 ошибок. Схема таблиц НЕ менялась → миграций/ERD нет. См. §7.16 |
+| **F17** ✅ | (баг 22.07.2026, `feat/workspaces`) **shared-пространства пропадали после рестарта из-за 2067 UNIQUE на workspace_members(workspace_id, user_id)** — приглашённый видел shared-ws сразу после accept, но после рестарта сайдбар показывал только personal. Консоль: `UNIQUE constraint failed: workspace_members.workspace_id, workspace_members.user_id` (code 2067). Изначально ошибочно списано на порчу SQLite (F16/ADR 0010, эскалация 2067→corruption). Корень (доказан прод-SQL под ролью приглашённого): БД НЕ битая. При accept-invite клиент создаёт локальную membership-строку со СВОИМ случайным `uuidv7`, а сервер (accept_invite, F15/0040) хранит СВОЙ канонический uuid для той же `(workspace_id, user_id)`. `applyCloudRowMembers` (pull.ts) матчился ТОЛЬКО по uuid → серверный uuid не находил локальную строку → applier уходил в `INSERT` → локальный НЕ-partial индекс `idx_workspace_members_ws_user` уже занят → 2067 → pull падал, `prunePhantomWorkspaces` вычищал shared-ws | клиент: `src/lib/sync/pull.ts` (`applyCloudRowMembers` fallback-матчинг + `isSqliteCorruptionMessage` откат 2067-паттернов), `src/lib/db.ts` (комментарий к `__corruption_probe`) | **HIGH** (блокер видимости shared-ws после рестарта; ошибочно маскировался под порчу SQLite в F16) | **✅ ИСПРАВЛЕНО (`feat/workspaces`; только клиент, БЕЗ миграций; ADR 0011).** `applyCloudRowMembers`: (1) lookup по uuid (LWW, как раньше), (2) при промахе — fallback по `(workspace_id, user_id)`; если найдена — ВСЕГДА переклеиваем `uuid=row.id`, прочие поля по LWW; edge-case (серверный uuid уже занят другой строкой) → DELETE дубликата byPair + `logger.warn`, (3) только при полном промахе — INSERT. Откат F16-эскалации: из `isSqliteCorruptionMessage` убраны 4 UNIQUE-паттерна (2067 больше НЕ трактуется как порча — штатная коллизия, чинится матчером); `__corruption_probe` в db.ts сохранён (ловит реальную порчу на изолированной temp-таблице). Верификация: vitest `pull.twophase.test.ts` += 3 F17-кейса (переклейка uuid без 2067 + LWW-ветка + регрессия uuid-match), полный `db.corruption.test.ts`+`pull.test.ts` зелёные, `tsc --noEmit` 0 ошибок. См. §7.17 |
+| **F14** ✅ | (баг 22.07.2026, `feat/workspaces`) **Участники shared не видны + приглашённый не может выйти + пространства исчезают при рестарте** — три симптома одного узла (двухфазный pull членства + обработчик leave). **Симптом 1:** owner/editor видит в `MembersTab` только себя — `WORKSPACE_MEMBERS_SPEC.pullScope='user_id'` тянул `.eq('user_id', me)`, строки со-участников того же ws не доходили (прод-проба: RLS `sync_workspace_members_select_ws_role` отдаёт ВСЕ строки членства ws под JWT участника → до-тяг по `workspace_id` безопасен). **Симптом 3:** рестарт → все shared-ws исчезают и не возвращаются — Phase 1 pull членства инкрементальный по курсору; при рестарте серверные членства не менялись → 0 строк → локально погашенные членства не восстанавливались, `prunePhantomWorkspaces` (allow-list из локального членства) удалял shared-ws. **Симптом 2:** кнопка leave без эффекта — `removeWorkspaceMember` вызывал только `loadWorkspaceMembers()`, НЕ `loadWorkspaces()`, сайдбар (EXISTS-фильтр по членству) не перечитывался (серверный leave работал). Схема БД НЕ менялась | клиент: `src/lib/sync/pull.ts` (`pullAll`/`pullTable`/`pullSpecPaged` — полный pull членства в 2 скоупах), `src/store/useStore.ts` (`removeWorkspaceMember`) | **HIGH** (блокеры shared: участники не видны, из ws не выйти, ws пропадают) | **✅ ИСПРАВЛЕНО (`feat/workspaces`; только клиент, БЕЗ миграций; ADR 0008).** A (симптомы 1+3): членство пуллится ПОЛНО (от epoch, курсор не трогаем) в двух скоупах — проход A `user_id=me` (восстанавливает свои строки → симптом 3), проход B `workspace_id IN (мои ws)` (со-участники → симптом 1); data-таблицы остаются инкрементальными. B (симптом 2): `removeWorkspaceMember` += `loadWorkspaces()` + переключение current на дефолт при выходе из текущего ws (паттерн `deleteWorkspace`). Верификация: vitest `pull.twophase.test.ts` += симптом 1 (обе membership-строки локально после прохода B) + симптом 3 (полный pull восстанавливает при «будущем» курсоре, prune не убивает ws), `workspaces.actions.test.ts` += leave текущего ws (сайдбар без покинутого + current → personal); `tsc -b`+`vitest`+`vite build`. **Прод-проба (ROLLBACK):** RLS отдаёт со-уча��тников по `workspace_id` (VISIBLE=2). См. §7.14 |
+
+### 🟡 Уязвимости безопасности
+
+| # | Находка | Где | Критичность | Что делать |
+|---|---|---|---|---|
+| N4 ✅ | View `admin_users_summary` без `security_invoker` (`reloptions=null` — подтверждено 10.07 на живой схеме). **Уточнение:** гранты anon/authenticated на view = только `TRUNCATE,REFERENCES,TRIGGER`, **`SELECT` НЕТ** → прямого чтения через PostgREST уже нет, фактическая утечка не воспроизводится — реальная критичность LOW | живая схема (исходно `migrations/0001_init.sql`) | LOW (было MEDIUM) | **✅ ИСПРАВЛЕНО (миграция `0020_wave2_security_hardening.sql`).** `ALTER VIEW ... SET (security_invoker = on)` + `REVOKE ALL ... FROM anon, authenticated`. Тело view не менялось. Покрыто `tests/04_wave2_test.sql`. ✅ ПРИМЕНЕНО НА ПРОД 2026-07-10 (миграция `0020`; проверено на живой схеме: `admin_users_summary` имеет `reloptions security_invoker=on`, SELECT для anon/authenticated отозван) |
+| N5 ✅ | View `sync_status_summary` — аналогично (`reloptions=null`, гранты без `SELECT`, подтверждено 10.07) | живая схема (исходно `migrations/0002_sync_schema.sql`) | LOW (было MEDIUM) | **✅ ИСПРАВЛЕНО (миграция `0020`).** `security_invoker=on` + `REVOKE ALL FROM anon, authenticated`. Покрыто `tests/04_wave2_test.sql`. ✅ ПРИМЕНЕНО НА ПРОД 2026-07-10 (проверено на живой схеме: `sync_status_summary` — `security_invoker=on`, SELECT для authenticated отозван) |
+| N8 ✅ | Webhook доверяет `X-Forwarded-For` в IP-whitelist (подделываемый заголовок) + вебхук диспетчеризовал по `event` из тела, не сверяя со статусом реального платежа | `payment-webhook/index.ts` | MEDIUM | **✅ ИСПРАВЛЕНО (Wave 3, PR #65, `payment-webhook` v24 на проде 2026-07-10).** `_shared/yookassa-verify.ts::assessVerifiedPayment` строго сверяет `event` со `status` из dual-verify (`GET /v3/payments/{id}`) — подделанное `payment.succeeded` по pending/canceled больше не активирует подписку. Отдельно: убедиться, что `YOOKASSA_SKIP_IP_CHECK` выключен в проде |
+| N6 ✅ | `ALTER DEFAULT PRIVILEGES` авто-выдаёт SELECT на будущие таблицы — тот же класс footgun, что вызвал 3 прошлых GRANT-инцидента | миграции | LOW-MEDIUM | **✅ ИСПРАВЛЕНО (Wave 3, миграция `0021`, ПРИМЕНЕНА НА ПРОД 2026-07-10).** `0021` откатывает `ALTER DEFAULT PRIVILEGES` из 0010/0011 — будущие таблицы больше не получают a/r/w автоматически. pgTAP `01_grants_test.sql` расширен future-table probe. (Остаточные `Dxtm` — платформенные дефолты Supabase, не наши; см. «Wave 3 — итог») |
+| N9 ✅ | Нет сверки суммы платежа с прайсом в webhook | `payment-webhook` | LOW | **✅ ИСПРАВЛЕНО (Wave 3, PR #65, `payment-webhook` v24 на проде 2026-07-10).** `_shared/pricing.ts::verifyPaymentAmount` сверяет `amount.value`+currency против серверного `TIER_PRICING` (единый источник истины) |
+| N10 ✅ | Идемпотентность зависит от `attempt_no` — при timeout возможен повтор | `renew-subscription` | LOW | **✅ ИСПРАВЛЕНО (Wave 3, PR #65, см. ADR 0003, `renew-subscription` v10 на проде 2026-07-10).** `_shared/renewal-idempotency.ts::selectActiveRenewalPayment` — сверка `GET /v3/payments` до создания платежа: активный (pending/waiting_for_capture/succeeded) → второй не создаём |
+| N13 ✅ | Нет rate limiting на публичных эндпоинтах | `create-payment`, `start-trial`, webhook | LOW | **✅ ИСПРАВЛЕНО (Wave 4, PR #68, ПРИМЕНЕНО НА ПРОД 2026-07-11).** Table-based limiter в Postgres: миграция `0024` (`rate_limits` + RPC `check_rate_limit`, fail-open by design, cron-cleanup `*/5`), модуль `_shared/rate-limit.ts`. Применён в 3 edge-функциях: `create-payment` **v18** (user 10/60s + IP 30/60s), `start-trial` **v10** (user 3/3600s + IP 5/3600s), `payment-webhook` **v26** (IP 60/60s). См. ADR 0004 |
+| N1 | Утёкшие anon JWT в старом коммите `a0a2d70` (удалены в `d2d2833`, но ключ формально валиден) | git-история | LOW | Ротация anon-ключа в Supabase |
+| N2 | `.gitignore` не покрывает `.env.production/.development/.test` | — | LOW | Добавить `.env.*`, исключить `!.env.example` |
+| N3 | `VITE_ADMIN_EMAILS` в клиентском бандле (UI-only) | — | LOW | Задокументировать как UI-only |
+| N11 ✅ | CORS `*` на state-changing функциях | trial/cancel/detach | LOW | **✅ ИСПРАВЛЕНО (Wave 4, PR #67, ПРИМЕНЕНО НА ПРОД 2026-07-11).** `Allow-Origin` ограничен доменом приложения; функции с CORS-фиксом передеплоены на прод |
+| N12 ✅ | `profiles` UPDATE-политика без `WITH CHECK` | RLS | LOW | **✅ ИСПРАВЛЕНО (миграция `0020`).** Политика `profiles_update_own` пересоздана (DROP+CREATE) с `WITH CHECK ((select auth.uid()) = id)`; `USING` сохранён. `profiles_select_own` не тронута. Покрыто `tests/04_wave2_test.sql` (в т.ч. функциональная проверка: смена `id` на чужой блокируется, SQLSTATE 42501). ✅ ПРИМЕНЕНО НА ПРОД 2026-07-10 (проверено на живой схеме: `profiles_update_own` имеет `WITH CHECK (auth.uid()=id)`, `USING` сохранён) |
+| N14 ✅ | `verify_jwt` не зафиксирован в конфиге для всех функций | `config.toml` | LOW | **✅ ИСПРАВЛЕНО (Wave 4, PR #67).** `verify_jwt` явно прописан для всех функций в `supabase/config.toml` (webhook/renew/send-email/activation-notify → `false`; клиентские → `true`). 🟡 **Known-limitation:** `delete_account` на проде задеплоена с `verify_jwt=false` (исторический артефакт), хотя код сам валидирует JWT (`userClient.auth.getUser()` → 401) и `config.toml` фиксирует intent `true`. Значение вступит в силу при следующем деплое `delete_account` (не входил в PR-A). Не расхождение по безопасности — код проверяет JWT независимо от флага |
+| **N15** ✅ | **(новое, 10.07)** RPC `get_users_emails(user_ids uuid[])` — `SECURITY DEFINER`, `EXECUTE` доступен `authenticated` (подтверждено 10.07 на живой схеме: `security_definer=true`, `can_execute=authenticated`, `search_path=public,auth` — зафиксирован, это хорошо). Любой залогиненный юзер может дёргать через `/rest/v1/rpc/get_users_emails` | Postgres function `public.get_users_emails` | **MEDIUM-HIGH** | **✅ ИСПРАВЛЕНО (миграция `0020`, см. ADR 0002).** Проверены ВСЕ вызовы: единственный — `src/pages/AdminPage.tsx:189` из КЛИЕНТА под authenticated-JWT админа (service_role на клиенте нет). Поэтому глобальный REVOKE сломал бы админку → выбран вариант "внутренний admin-гейт": EXECUTE для `authenticated` сохранён, но тело функции требует `public.is_admin_user()` (единый источник истины: `source='seed' AND plan='lifetime'`), иначе `EXCEPTION 'Forbidden: admin only'`. `search_path=public,auth` не тронут. Покрыто `tests/04_wave2_test.sql` (обычный юзер → Forbidden, admin → email). ✅ ПРИМЕНЕНО НА ПРОД 2026-07-10 (проверено на живой схеме: `get_users_emails(uuid[])` — SECURITY DEFINER с admin-гейтом `is_admin_user`, EXECUTE только authenticated, для anon отозван) |
+| N16 🟡 | `auth_leaked_password_protection` выключена (проверка паролей по HaveIBeenPwned) | Auth settings | LOW | **🟡 PENDING — ТРЕБУЕТ РУЧНОГО ДЕЙСТВИЯ (Wave 4, PR #67).** Код/конфиг готовы, ops-гайд `docs/ops/supabase-auth-hardening.md`. Финальный тумблер включается ВРУЧНУЮ в Supabase Dashboard (Auth → Providers → Email → Leaked password protection). На 2026-07-11 ещё не включён — ждёт ручного действия пользователя в дашборде |
+| N17 🟡 | `pg_net` установлен в схему `public`, а не в отдельную | extensions | LOW | **🟡 ЧАСТИЧНО (Wave 4, PR #67, ПРИМЕНЕНО НА ПРОД 2026-07-11).** Миграция `0023` идемпотентно пытается `ALTER EXTENSION pg_net SET SCHEMA extensions` (обёрнута в EXCEPTION на случай non-relocatable версии). На проде расширение **осталось в `public`** — перенос не состоялся (known-limitation). Реального риска нет (API pg_net живёт в схеме `net`, cron-джобы её и зовут), но отклонение от «идеала» сохраняется |
+| N18 ✅ | `search_path` не зафиксирован у `tg_payment_methods_touch_updated_at` | triggers | LOW | **✅ ИСПРАВЛЕНО (Wave 4, PR #67, ПРИМЕНЕНО НА ПРОД 2026-07-11).** Миграция `0022` фиксирует `SET search_path` у public-функций без явного search_path (advisor `function_search_path_mutable`) |
+
+### ✅ Уже исправлено ранее — регрессий не обнаружено
+GRANT-инцидент 0007→0010-0013; pgTAP-тесты на гранты (dev.6.5.0); webhook на raw-fetch AdminClient (`3f63dc8`); секретов service_role/YooKassa в истории git не обнаружено.
+
+**Рекомендуемый порядок работ (согласован с пользователем 10.07, работа начата):**
+1. **Wave 1 — ✅ ЗАВЕРШЁН (10.07.2026):** F1 + F2 + F3 + F4 (один заход, один и тот же файловый контур: `payment-webhook`, `renew-subscription`, `entitlements.ts`)
+2. **Wave 2 — ✅ ЗАВЕРШЁН И ПРИМЕНЁН НА ПРОД (10.07.2026, ветка `wave2-fixes` → PR #63, merge `058bfd6`):** **F5** (дубль `renewal_failed`, edge `renew-subscription`) + N4 + N5 (views, утечка PII) + N12 (RLS без WITH CHECK) + **N15** (RPC-утечка email — приоритет как у N4/N5, возможно выше). N4/N5/N12/N15 — миграция Supabase `0020`; F5 — деплой edge-функции (два разных вида применения на прод). ✅ ПРИМЕНЕНО НА ПРОД 2026-07-10: миграция `0020_wave2_security_hardening` применена, edge `renew-subscription` v9 задеплоена — см. "Wave 2 — итог" ниже
+3. **Wave 3 — ✅ ЗАВЕРШЁН НА ПРОДЕ (10.07.2026, ветка `wave-3-hardening` → PR #65, merge `49ec66d`; docs-follow-up `wave-3-docs-and-deploy` → PR #66):** N6 (default privileges) + N9 (сверка суммы) + N8 (dual-verify assessment) + N10 (идемпотентность) + F3 (Settings.tsx card_brand→card_type) + CI-пробел (Deno edge-job). N6 — миграция `0021` применена на прод. N9/N8/N10 — edge-функции `payment-webhook` **v24** и `renew-subscription` **v10** задеплоены на прод (`verify_jwt=false`), подтверждено через `list_edge_functions`. F3 — фронт, требует релиза десктопа.
+4. **Wave 4 — ✅ ЗАВЕРШЁН НА ПРОДЕ (11.07.2026, два пакета):** PR-A `wave-4a-hardening` → PR [#67](https://github.com/danny-swan/taskflow-app/pull/67) (merge `082a3ac`) — N11 (CORS) + N14 (verify_jwt) + N18 (миграция `0022`) + N17 (миграция `0023`, частично) + N16 (ops-гайд, требует ручного тумблера). PR-B `wave-4b-rate-limit` → PR [#68](https://github.com/danny-swan/taskflow-app/pull/68) (merge `ace0c07`) — N13 (rate limiting, миграция `0024`, оставлен последним — наибольший объём). Итог см. ниже «Wave 4 — итог»
+
+_N1/N2/N3 в текущий заход не включены по явному запросу пользователя (ротация ключа/`.gitignore`/документирование — вне очереди F1-F4+N4-N14, можно сделать отдельно, эффорт минимальный)._
+
+### Wave 1 — итог деплоя (10.07.2026)
+
+Код: ветка `wave1-fixes` → PR [#61](https://github.com/danny-swan/taskflow-app/pull/61) → merge commit `bc55c09` в `develop` (исходный фикс-коммит `408cf50`).
+
+| Находка | Статус | Где живёт фикс |
+|---|---|---|
+| **F1** (HIGH, автопродление) | ✅ **На проде.** `renew-subscription` v8 (id `27d6ffbb-616d-4d76-bece-2ab6efb4aa90`), контент проверен через `get_edge_function` | edge function `renew-subscription` |
+| **F4** (письмо `renewal_failed` из webhook-пути) | ✅ **На проде.** `payment-webhook` v23 (id `73f8fc4c-de58-401e-b588-62d98c79ea34`), содержит `MAX_RENEWAL_ATTEMPTS`/`renewal_failed` в `handlePaymentCanceled`, контент проверен через `get_edge_function` | edge function `payment-webhook` |
+| **F2** (`renewal_attempts` → `renewal_attempts_count` во фронте) | 🟡 **Смержено в `develop`, НЕ на проде.** Это фронтовый файл (`entitlements.ts`), не edge function — нужен отдельный релиз приложения (десктоп/веб), путь деплоя фронта в этой сессии не выяснялся | `src/lib/entitlements.ts` |
+| **F3** (`card_brand` → `card_first6` во фронте) | 🟡 **Смержено в `develop`, НЕ на проде.** Тот же файл и та же причина, что у F2 | `src/lib/entitlements.ts` |
+| Bonus: `change-plan/index.ts:118` dead-код `card_brand`→`card_type` | ⏸ **Не деплоился.** Был в том же коммите, но пользователь одобрил деплой только `payment-webhook` и `renew-subscription` — `change-plan` осознанно вне текущего скоупа | edge function `change-plan` (не тронута) |
+
+**⚠️ Инцидент во время деплоя (для прозрачности — "делаем один раз как надо"):** при деплое `renew-subscription` первая попытка (v7) по ошибке ушла на прод с placeholder-контентом вместо реального фикса — короткое окно, когда прод-функция была неработоспособна. Ошибка была замечена и исправлена в течение той же сессии повторным деплоем (v8) с верным содержимым, подтверждённым через `get_edge_function`. Активных вызовов `renew-subscription` (cron автопродления) в это окно не проверялось намеренно — при необходимости можно поднять логи/`payment_events`/`renewal_attempts_log` за это время, чтобы подтвердить отсутствие сбоев у реальных пользователей.
+
+**Риски, требующие отдельного решения (не исправляются автоматически фиксом F1):**
+
+> **Контекст (подтверждено пользователем 10.07):** приложение десктопное, **живых пользователей ещё не было** (только тестовые). Поэтому риски прод-данных (ниже №‖1 и №2) практически неактуальны — пострадавших нет, чинить/чистить прод-данные не нужно.
+
+1. ~~Осиротевшие `user_entitlements` (`payment_method_id IS NULL AND plan='pro' AND auto_renew=true`)~~ — **неактуально**, живых пользователей не было.
+2. ~~Ошибочно даунгрейженные в `free` из-за F1~~ — **неактуально** по той же причине.
+3. ✅ **Подтверждено и оформлено как F5** (см. таблицу активных багов выше и `dup_email_analysis.md`): дубль `renewal_failed` при синхронном `canceled` от ЮKassa — реальный узкий сценарий + бонусом двойной инкремент счётчика. Включено в Wave 2 (по решению пользователя 10.07).
+
+### Wave 2 — итог (10.07.2026)
+
+Код: ветка `wave2-fixes` → PR [#63](https://github.com/danny-swan/taskflow-app/pull/63) → merge commit `058bfd6` в `develop`. **✅ ПРИМЕНЕНО НА ПРОД 2026-07-10** — миграция `0020_wave2_security_hardening` применена на прод Supabase (проект `sejpmzrmtgcvevukggkx`), edge `renew-subscription` задеплоена (v9). Всё проверено на живой схеме ПОСЛЕ применения.
+
+| Находка | Статус | Где живёт фикс | Применение на прод |
+|---|---|---|---|
+| **F5** (дубль письма/счётчика/лога) | ✅ На проде | `supabase/functions/renew-subscription/index.ts` (синхр. `canceled`-ветка) + unit-тест `test.ts` | ✅ 2026-07-10 — edge `renew-subscription` **v9** (id `27d6ffbb-616d-4d76-bece-2ab6efb4aa90`, ACTIVE, `verify_jwt=false`) |
+| **N4** (`admin_users_summary` security_invoker) | ✅ На проде | миграция `0020_wave2_security_hardening.sql` | ✅ 2026-07-10 (миграция `0020`) — на живой схеме `security_invoker=on`, SELECT для anon/authenticated отозван |
+| **N5** (`sync_status_summary` security_invoker) | ✅ На проде | миграция `0020` | ✅ 2026-07-10 (миграция `0020`) — на живой схеме `security_invoker=on`, SELECT для authenticated отозван |
+| **N12** (`profiles_update_own` WITH CHECK) | ✅ На проде | миграция `0020` | ✅ 2026-07-10 (миграция `0020`) — на живой схеме `WITH CHECK (auth.uid()=id)`, `USING` сохранён |
+| **N15** (RPC `get_users_emails` admin-гейт) | ✅ На проде | миграция `0020` (см. ADR 0002) | ✅ 2026-07-10 (миграция `0020`) — на живой схеме SECURITY DEFINER + admin-гейт `is_admin_user`, EXECUTE только authenticated, anon отозван |
+| pgTAP-покрытие Wave 2 | ✅ | `supabase/tests/04_wave2_test.sql` (plan 15, все проходят) + добавлен в `.github/workflows/db-tests.yml` | CI |
+
+**Проверено на живой схеме после применения (2026-07-10):**
+1. Миграция `0020` (идемпотентная) применена на прод; порядок соблюдён: сначала миграция (N4/N5/N12/N15), затем деплой `renew-subscription` v9 (F5). Все находки подтверждены прямым запросом к живой схеме — см. столбец «Применение на прод» выше.
+2. **Пре-существующий, вне скоупа Wave 2:** downgrade при исчерпании попыток делается только в cron через `incrementAttempts`. Для платежей, отменённых webhook'ом (`payment.canceled`), после F4/F5 downgrade инициирует webhook (`handlePaymentCanceled`), а не cron. Убедиться, что webhook действительно доводит счётчик до `MAX_RENEWAL_ATTEMPTS` и делает downgrade — иначе юзер может застрять в `pro` без списаний. Это НЕ регрессия F5 (F5 лишь убрал дубль), но стоит перепроверить сквозной сценарий отдельно.
+3. Docs-файлы (`docs/audit/roadmap.md`, `docs/adr/*`, `docs/architecture/erd.md`) исходно жили только на ветке `docs/setup-adr-audit`, а не на `develop`; через PR #63 они принесены в `develop` вместе с фиксами Wave 2, статус консистентен.
+
+### Wave 3 — итог (харденинг платежей/инфры, 10.07.2026)
+
+Код: ветка `wave-3-hardening` → PR [#65](https://github.com/danny-swan/taskflow-app/pull/65) → merge commit `49ec66d0321c7d0405748c73692b52e86dbf2b15` в `develop`. Миграция `0021_revoke_default_privileges_footgun` применена на прод Supabase (проект `sejpmzrmtgcvevukggkx`, `wave3_revoke_default_privileges_footgun` в `list_migrations`).
+
+✅ **Wave 3 полностью на проде (10.07.2026).** Миграция `0021` применена, edge-функции `payment-webhook` **v24** и `renew-subscription` **v10** задеплоены (`verify_jwt=false`, файлы включают `_shared/pricing.ts`, `_shared/yookassa-verify.ts`, `_shared/renewal-idempotency.ts`). Подтверждено через `list_edge_functions`. Деплой выполнен из `wave-3-docs-and-deploy` (PR #66) сессионным путём через supabase-коннектор.
+
+| Находка | Статус | Где живёт фикс | Применение на прод |
+|---|---|---|---|
+| **N6** (default privileges footgun) | ✅ На проде | миграция `0021_revoke_default_privileges_footgun.sql` + pgTAP `01_grants_test.sql` (future-table probe) | ✅ 2026-07-10 — миграция `0021` применена (`wave3_revoke_default_privileges_footgun`) |
+| **N9** (сверка суммы платежа с прайсом) | ✅ На проде | `_shared/pricing.ts` (`TIER_PRICING`/`verifyPaymentAmount`/`isRecurringTier`), импортится в `payment-webhook` + `renew-subscription` | ✅ 2026-07-10 — `payment-webhook` v24 + `renew-subscription` v10 |
+| **N8** (dual-verify assessment gap) | ✅ На проде | `_shared/yookassa-verify.ts::assessVerifiedPayment` (сверка `event` уведомления со `status` из dual-verify) | ✅ 2026-07-10 — `payment-webhook` v24 |
+| **N10** (renewal idempotency-guard) | ✅ На проде | `_shared/renewal-idempotency.ts::selectActiveRenewalPayment` (сверка GET /v3/payments до создания платежа); см. ADR 0003 | ✅ 2026-07-10 — `renew-subscription` v10 |
+| **F3** (Settings.tsx `card_brand` → `card_type`) | 🟡 В `develop`, требует релиза десктопа | `src/pages/Settings.tsx` (читает `card_type`, канонная колонка бренда с миграции 0016) | 🟡 фронтовый файл — уедет на прод только с отдельным релизом приложения (как F2 в Wave 1) |
+| CI-пробел (test.yml + Deno edge-job) | ✅ | `.github/workflows/test.yml` (триггеры на `develop`; job «Edge Functions (Deno)» — `deno check` + `deno test`, `change-plan/test.ts` исключён) | CI |
+
+**Что вошло:**
+- **N6** — миграция `0021` откатывает `ALTER DEFAULT PRIVILEGES` из 0010/0011; будущие таблицы больше не получают SELECT/INSERT/UPDATE автоматически. Это устраняет тот же класс footgun, что вызвал 3 прошлых GRANT-инцидента (dev.6.4.2/6.4.3/6.4.4). pgTAP `01_grants_test.sql` расширен future-table probe.
+- **N9** — `_shared/pricing.ts` как единый серверный источник истины по ценам (299/2990/4990 ₽, 1 ₽ верификация). `payment-webhook` и `renew-subscription` импортируют оттуда — устранено дублирование money-critical чисел (см. раздел 3, п.12). `isRecurringTier` — типобезопасная проверка авто-продлеваемости.
+- **N8** — `assessVerifiedPayment` строго сверяет `event` уведомления с реальным `status` платежа из dual-verify (`GET /v3/payments/{id}`). Подделанное `payment.succeeded` по pending/canceled платежу больше не активирует подписку.
+- **N10** — до создания нового платежа автопродления `renew-subscription` сверяется с ЮKassa (`GET /v3/payments`) и, если активный платёж (pending/waiting_for_capture/succeeded) уже есть, второй не создаёт — итог доводит webhook. Страховочный слой поверх детерминированного Idempotence-Key. См. ADR 0003.
+- **F3** — фронт-регрессия с миграции 0016: `Settings.tsx` читал никогда не заполнявшуюся `card_brand`. Теперь читает `card_type` — ту колонку, что реально пишет `payment-webhook`.
+- **CI-пробел** — `test.yml` теперь триггерится и на PR/push в `develop` (не только `main`); добавлен job «Edge Functions (Deno)» (`deno check` + `deno test` по всем edge-функциям кроме `change-plan/test.ts`, который бьёт в реальный `api.yookassa.ru`).
+
+**Деплой edge-функций (выполнено 2026-07-10):**
+- `payment-webhook` v23 → **v24**, `verify_jwt=false`, файлы: `index.ts` + `../_shared/pricing.ts` + `../_shared/yookassa-verify.ts`. Подтверждено через `list_edge_functions` (id `73f8fc4c-de58-401e-b588-62d98c79ea34`, status ACTIVE).
+- `renew-subscription` v9 → **v10**, `verify_jwt=false`, файлы: `index.ts` + `../_shared/pricing.ts` + `../_shared/renewal-idempotency.ts`. Подтверждено через `list_edge_functions` (id `27d6ffbb-616d-4d76-bece-2ab6efb4aa90`, status ACTIVE).
+
+**Замечание по остаточным default ACL (не находка Wave 3):** после `0021` в `pg_default_acl` для `postgres.public.TABLES` остаются `Dxtm` (DELETE/REFERENCES/TRIGGER/MAINTAIN) для anon/authenticated/service_role — это платформенные дефолты Supabase, НЕ добавлялись нашими миграциями. Наши 0010/0011 добавляли `a/r/w` (INSERT/SELECT/UPDATE) — они отозваны. Если понадобится — вынести в отдельную находку.
+
+### Wave 4 — итог (мелкий харденинг + rate limiting, 11.07.2026)
+
+Разбит на два пакета (лёгкий + тяжёлый), оба на проде (проект `sejpmzrmtgcvevukggkx`). Применены миграции `0022`, `0023`, `0024` (полный набор на проде — `0001`–`0024`).
+
+**PR-A `wave-4a-hardening` → PR [#67](https://github.com/danny-swan/taskflow-app/pull/67) (merge `082a3ac`) — «лёгкий» пакет:**
+
+| Находка | Статус | Где живёт фикс | Применение на прод |
+|---|---|---|---|
+| **N18** (search_path у public-функций) | ✅ На проде | миграция `0022_wave4_fix_function_search_paths.sql` | ✅ 2026-07-11 |
+| **N17** (pg_net в схеме public) | 🟡 Частично | миграция `0023_wave4_move_pg_net.sql` (идемпотентный `ALTER EXTENSION ... SET SCHEMA extensions` в EXCEPTION-обёртке) | 🟡 2026-07-11 — на проде pg_net **остался в `public`** (перенос не состоялся, non-relocatable). Реального риска нет (API в схеме `net`), но отклонение от идеала фиксируем как known-limitation |
+| **N14** (verify_jwt в конфиге) | ✅ На проде | `supabase/config.toml` (явный `verify_jwt` для всех функций) | ✅ 2026-07-11. 🟡 Known-limitation: `delete_account` на проде `verify_jwt=false` (исторический артефакт), код валидирует JWT сам; intent `true` вступит в силу при следующем деплое функции |
+| **N11** (CORS `*` на state-changing функциях) | ✅ На проде | `_shared/cors.ts` + передеплой затронутых функций (`Allow-Origin` → домен приложения) | ✅ 2026-07-11 |
+| **N16** (leaked password protection) | 🟡 Pending — ручное действие | код/конфиг + ops-гайд `docs/ops/supabase-auth-hardening.md` | 🟡 Тумблер включается ВРУЧНУЮ в Supabase Dashboard (Auth → Providers → Email → Leaked password protection). На 2026-07-11 ещё не включён — ждёт действия пользователя |
+
+**PR-B `wave-4b-rate-limit` → PR [#68](https://github.com/danny-swan/taskflow-app/pull/68) (merge `ace0c07`) — «тяжёлый» пакет:**
+
+| Находка | Статус | Где живёт фикс | Применение на прод |
+|---|---|---|---|
+| **N13** (rate limiting) | ✅ На проде **полностью** | миграция `0024_wave4_rate_limits.sql` (таблица `rate_limits` + RPC `check_rate_limit` + cron `rate-limits-cleanup`) + модуль `_shared/rate-limit.ts`; см. ADR 0004 | ✅ 2026-07-11 — edge `create-payment` **v18**, `start-trial` **v10**, `payment-webhook` **v26** (все ACTIVE) |
+
+**Детали N13 (rate limiting):**
+- **Реализация:** table-based limiter в Postgres (`public.rate_limits` + RPC `public.check_rate_limit`), **fail-open by design** — при сбое БД запрос пропускается (потерять платёж хуже, чем на время потерять throttle; симметрично ADR 0003). Выбор table-based вместо in-memory (stateless многоинстансные edge-функции) и вместо Redis (нет своей инфры) — см. ADR 0004.
+- **Миграция `0024`:** таблица `rate_limits`, индекс по `expires_at`, RLS deny-by-default + REVOKE anon/authenticated, RPC SECURITY DEFINER с атомарным `INSERT ... ON CONFLICT` (fixed window), EXECUTE только `service_role`. **Применена на прод в ДВЕ части** — `CREATE EXTENSION IF NOT EXISTS pg_cron` падал (pg_cron уже установлен → dependent privileges exist): сначала core (таблица/RPC/RLS), затем cron-job без `CREATE EXTENSION`.
+- **Cron `rate-limits-cleanup`** (`*/5 * * * *`) — чистит истёкшие строки.
+- **Лимиты (после auth, оба user+IP где есть user):**
+  - `create-payment` v18: per-user 10/60s + per-IP 30/60s
+  - `start-trial` v10: per-user 3/3600s + per-IP 5/3600s
+  - `payment-webhook` v26: per-IP 60/60s (после валидации payload, до dual-verify)
+- **`getClientIp`:** `x-forwarded-for` (первый hop) → `x-real-ip` → `cf-connecting-ip` → `null`. При `null` per-IP лимит **пропускается** (per-user остаётся). Заменил прежний `'unknown'`, который схлопывал всех в один бакет и превращал per-IP в глобальный лимит.
+
+**Наблюдение (не меняли код, только фиксируем):** `delete_account` на проде имеет `verify_jwt=false` при `config.toml` intent=`true`. Это осознанно задокументированный исторический артефакт (см. N14 выше и комментарий в `supabase/config.toml`), а не расхождение по безопасности — функция сама валидирует JWT. Значение флага синхронизируется при следующем деплое `delete_account`.
+
+---
+
+## 6. Исторические волны улучшений (`develop`, Wave 1–4)
+
+> Контекст-блок. Период 09.07–11.07.2026, ветка `develop` до мерджа в `main`. Замкнувшаяся серия из 4 волн безопасности/хардненинга, выведшая проект к v1.0.0. Детали каждой волны (какие N# закрыты, миграции, PR-ы) уже отражены в соответствующих пунктах раздела 5 (F1–F5, N1–N18) и Приложения А. Новые "wave 5/6/..." не заводим — работа после v1.0.0 ведётся в виде направлений/этапов, см. раздел 7.
+
+- **Wave 1** (`develop`, 09–10.07): F1 — `payment_method_id` внутренний uuid vs токен ЮKassa. PR #61.
+- **Wave 2** (`develop`, 10.07): N4, N5, N12, N15 — безопасность view и admin-гейт. PR #63, миграция `0020_wave2_security_hardening` (ADR 0002).
+- **Wave 3** (`develop`, 10.07): N6 — откат `ALTER DEFAULT PRIVILEGES` (footgun для будущих таблиц). PR #65, миграция `0021`, pgTAP future-table probe.
+- **Wave 4** (`develop`, 11.07): N17 (pg_net, known-limitation), N18 (function search_path), N13 (rate-limits). PR #67 (PR-A) + #68 (PR-B, rate-limits), миграции `0022`–`0024`, ADR 0004.
+- **PR #66**: сопроводительная документация волн.
+
+**Итог волн 1–4:** к v1.0.0 закрыты F1/F4/F5 и N4/N5/N6/N8–N15/N18. Открыты на момент релиза: F2/F3 (закрылись выпуском десктопа v1.0.0), N16 (осознанно не включаем — платный тариф Supabase), N17 (known-limitation), N1/N2/N3 (низкая критичность, N1 — см. раздел 7).
+
+---
+
+## 7. Пост-v1.0.0 направления
+
+Живой блок. Сюда добавляются текущие и будущие этапы улучшений после v1.0.0. Не разбиваем на "wave 5/6/..." — по направлениям. Закрытые пункты переезжают в раздел 10 (архив) с датой закрытия.
+
+### 7.1. Фискализация — чеки ФНС для самозанятого (НПД)
+
+**Проблема (обнаружена 11.07.2026):** реальные тестовые платежи прошли, но чек в «Мой налог» не пришёл, и вкладки «Чеки» для самозанятых в ЛК ЮKassa нет.
+
+**Корневая причина — НЕ в коде.** Проверено: `create-payment` и `renew-subscription` корректно передают объект `receipt` (`tax_system_code: 6` — НПД, `vat_code: 1` — без НДС, `customer.email`, `items[]`). Проблема на стороне ЮKassa: [по официальной истории изменений API](https://yookassa.ru/developers/payment-acceptance/receipts/self-employed/basics) **ЮKassa с 23 декабря 2025 прекратила поддержку сервисов для самозанятых** — чеки при платежах и возвратах, а также выплаты самозанятым. Переданный `receipt` теперь просто игнорируется, чек в «Мой налог» не регистрируется.
+
+**Юридический контекст:** самозанятый (НПД, 422-ФЗ ст. 14) обязан сформировать чек на каждый полученный доход. Срок для оплат картой/электронными средствами — в момент расчёта; штраф за пропуск — 20% суммы (100% при повторном нарушении в течение 6 мес). Возвращённые платежи (тестовые 299 ₽ + 1 ₽-проверки) дохода не образуют — по ним чек не нужен.
+
+**Варианты решения (выбрать перед первым реальным клиентским потоком):**
+
+1. **Ручное формирование чеков в «Мой налог»** — бесплатно, но вручную на каждую продажу. Приемлемо на старте, пока платежей мало. За уже прошедшие июльские платежи можно пробить задним числом.
+2. **Сервис-посредник с автоматическими чеками НПД** (например [Robokassa](https://robokassa.ru/) или [Prodamus](https://prodamus.ru/)) — интеграция с «Мой налог» через партнёрство ФНС, чек пробивается автоматически. Потребует замены/добавления платёжного провайдера рядом с ЮKassa (переработка `create-payment` / `payment-webhook`).
+3. **Прямая автоматизация против API «Мой налог»** через уполномоченного оператора ФНС — вызывать из `renew-subscription` после успешного списания. Больше всего работы, но полностью автоматически на ЮKassa.
+4. **Возможная чистка кода:** объект `receipt` с `tax_system_code: 6` теперь ЮKassa не использует. Отправка безвредна, но при желании логику можно упростить/убрать после выбора решения выше.
+
+**Приоритет:** разобраться и выбрать подход ДО того, как появится реальный поток сторонних клиентов. На старте (0 пользователей) допустим вариант 1 вручную. Решение задокументировать здесь после выбора.
+
+### 7.2. Отключение legacy anon-ключа (N1)
+
+- CI уже переведён на publishable-ключ `sb_publishable_EDGdl5gun3Ud60AQMymq9A_VWUFpS-a` (в v1.0.0). Legacy JWT anon-ключ ещё активен, но в новых билдах не используется.
+- **Действие:** дождаться, пока все пользователи обновятся до v1.0.0+ → Dashboard → Project Settings → API → «Disable legacy anon key». Не блокер, но до публичного анонса желательно закрыть.
+
+### 7.3. Отложенные направления
+
+- **SupportBlock (CloudTips/крипта)** — вне scope v1.0.0. Статические донат-ссылки не активируют Pro — осознанное решение.
+- **Telegram-бот (бывший dev.7)** — перенесён в v1.1+. Код не начат.
+- **SberPay recurring** — внешняя зависимость от ЮKassa, ждём активации.
+- **F2 (`renewal_attempts_count` во фронте)** — вышел в десктопе v1.0.0. ADR по окончательному решению "удалять ли старую колонку `renewal_attempts`" — тбд.
+
+### 7.4. Релиз v1.0.2 (✅ ВЫПУЩЕН 12.07.2026)
+
+**[Тег v1.0.2](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.2)** — выпущен 12.07.2026 ~14:49 MSK. Build run [29191151289](https://github.com/danny-swan/taskflow-app/actions/runs/29191151289), все 5 jobs зелёные (type-check + unit → E2E Playwright → build-macos → build (Windows) → release).
+
+**Содержание v1.0.2:**
+- B1 — фикс «Вернуть в работу» (PR #70, squash `3310aa4`).
+- B2 — фикс race первого клика по «Администрирование» (PR #71, squash `91d7aa1`).
+- F6 (фронт) — столбец «Холд» + клиент-миграция v10 (PR #72, squash `2602371`).
+
+**Шаги выпуска (все выполнены):**
+1. ✅ Bump `package.json` version → `1.0.2` (коммит `1f0921d`, локальный прогон: 264/264 vitest зелёные, `tsc + vite build` ✓).
+2. ✅ Сборка десктоп-артефактов через тег `v1.0.2` → CI `build.yml` (Tauri NSIS + MSI RU/EN + portable + universal dmg). CI автоматически синхронизирует версии в `src-tauri/tauri.conf.json` и `src-tauri/Cargo.toml` из тега (Sync version from tag step) — в git-истории эти файлы остаются со старыми dev-версиями, для Tauri-билдов это OK.
+2a. ✅ Миграция `0025_task_hold_periods.sql` применена на прод 12.07.2026 (до выпуска тега), версия `20260712112352`.
+3. ✅ [Release v1.0.2](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.2) опубликован с билингвальными release notes, 6 артефактов (NSIS + 2 MSI + portable + dmg + `latest.json`), подпись для Windows-updater проверена.
+
+**Автообновление:** `latest.json` указывает на `1.0.2` → все текущие десктоп-юзеры (v1.0.0/v1.0.1) получат предложение обновиться при следующем запуске приложения (через endpoint `https://github.com/danny-swan/taskflow-app/releases/latest/download/latest.json`).
+
+### 7.5. Пространства (Workspaces) — Wave A (✅ завершена 2026-07-13)
+
+Первый этап многопространственной модели. Ведётся в интеграционной ветке `feat/workspaces` (мержится в `main` единым PR после стабилизации, целевой десктоп-релиз v1.1.0). Техплан — `docs/architecture/workspaces-plan.md`.
+
+- **PR-1..PR-4 — влиты** в `feat/workspaces`: схема/RLS/бэкфилл (`0027`), sync под `workspace_id`, стор + переключатель + ws-scoped UI, per-workspace настройки и CRUD пространств.
+- **PR-5 (тарифные лимиты) — влит**: серверный триггер `enforce_workspace_limit` + `get_workspace_limit` (`0029`), Free = 2 / Pro = 7, UX-гейт в модалке + fallback на sync-ошибку. pgTAP `11_workspace_limits_test.sql`.
+- **PR-6 (hardening/доки) — влит**: regression-pgTAP `12_workspaces_regression_test.sql` (`plan(45)`: 18 RLS-изоляция двух юзеров / 12 удаление ws / 15 integrity) в CI; локально 11 файлов / 310 тестов PASS на PG15-совместимых ассершенах. Продуктовых изменений нет.
+- **Известные ограничения для Wave B** (зафиксированы тестами PR-6, осознанный дизайн PR-1): `workspace_id` — `text` без FK (целостность только через RLS, следствие offline-first sync) → в Wave B рассмотреть FK/orphan-cleanup; нет `ON DELETE CASCADE` (продукт на soft-delete, hard DELETE осиротит дочерние строки) → в Wave B каскадить явно. ~~Пред-существующий TODO: тест `10_workspace_management_test.sql` не в CI и красный (soft-delete shared vs guard) — отдельным тикетом.~~ ✅ **ЗАКРЫТО (Wave C, PR-c-06, 2026-07-13):** тест был устаревшим (не багом бэкенда) — не учитывал auto-профиль `on_auth_user_created` + guard неизменяемости (0026), новую сигнатуру `find_user_by_public_id` (`setof record`), снятый в 0030 guard `block_shared_workspaces` и утечку `request.jwt.claim.sub` между секциями. Переработан под текущую модель (`plan(25)→plan(23)`), включён в `db-tests.yml` (между 09 и 11), зелёный. Детали — `wave-c-plan.md` §6.
+- **Shared-пространства (Wave B)** — ещё НЕ открыты: `kind='shared'` заблокирован check-constraint'ом `block_shared_workspaces` + триггером; лимитная логика уже форвард-совместима.
+
+**Итог:** Wave A завершена 2026-07-13, все 6 PR смерджены в `feat/workspaces` (последний PR #80). `main` не тронут, ждёт финального merge-PR после Wave B (или Wave C, если такая будет планироваться).
+
+**Known constraints for Wave B (унаследованы из Wave A):** два инварианта — `workspace_id` хранится как `text` без FK на `sync_workspaces(id)` и отсутствие `ON DELETE CASCADE` — решаются в **PR-b-01** через миграцию FK + `ON DELETE CASCADE` (`workspace_id`: text → uuid). Обоснование и trade-off'ы — [ADR 0005](../adr/0005-shared-workspaces.md).
+
+### 7.6. Пространства (Workspaces) — Wave B: shared workspaces (✅ завершена 2026-07-13, локально в `feat/workspaces`)
+
+Второй этап: открытие общих пространств (роли, инвайты по TF-ID, RLS для editor/viewer). Ведётся в `feat/workspaces` (не в `main`). Техплан — `docs/architecture/wave-b-plan.md`; ключевое инженерное решение (FK+CASCADE) — [ADR 0005](../adr/0005-shared-workspaces.md); living-анализ — `docs/architecture/tf_workspaces_architecture.md`.
+
+Строгая последовательность из 6 подветок (каждая ответвляется от предыдущей после мержа):
+
+1. **`feat/ws-b-01-integrity`** ✅ **реализовано (локально, не влито)** — миграция `0030_workspace_id_fk_cascade.sql`: FK + `ON DELETE CASCADE` для всех 8 таблиц с `workspace_id` (6 sync + members + settings), data-audit orphan-scan перед навешиванием; снятие guard `block_shared_workspaces` (в 0027 — триггер+функция); outbox retry для FK-violation `23503` (транзиентная, не permanent); новый pgTAP `13_workspace_id_integrity_test.sql` `plan(31)` + обновлены 09/11/12. **Расхождение с планом:** `workspace_id` остаётся `text`, НЕ переводится в `uuid` (id формата `ws_<hex>` не кастуется в uuid; FK на text→text валиден — см. ADR 0005 уточнение и `wave-b-plan.md` §3-факт). Полный локальный прогон: 12 pgTAP-файлов / 341 тест, 352 vitest, `tsc --noEmit`, `npm run build` — зелёные.
+2. **`feat/ws-b-02-rls-roles`** ✅ **реализовано (локально, не влито)** — миграция `0031_workspace_rls_roles.sql`: ролевые RLS 8 таблиц приведены к единой схеме имён `<table>_<op>_ws_role` + `COMMENT ON POLICY`; модель доступа editor пишет задачи/статусы/теги, viewer — SELECT-only, owner — всё (включая настройки/участников). Новый pgTAP `14_workspace_rls_roles_test.sql` `plan(103)`. **Расхождение с планом:** почти весь ролевой контур уже был в Wave A (0027 — доступ через `has_workspace_role`; 0028 — self-leave + триггер `assert_at_least_one_owner` для защиты последнего owner'a), поэтому 0031 — в основном кодификация; единственное поведенческое изменение — `sync_statuses` writes owner→editor (см. `wave-b-plan.md` §4.2-факт). Полный локальный прогон: 13 pgTAP-файлов / 444 теста, 352 vitest, `tsc --noEmit`, `npm run build` — зелёные.
+3. **`feat/ws-b-03-invites`** ✅ **реализовано (локально, не влито)** — миграция `0032_workspace_invites.sql`: серверная таблица `sync_workspace_invites` (`pending/accepted/rejected/expired/cancelled`); helper `lookup_user_by_public_id(text)` (обратный лукап TF-ID → `auth.uid()`, `EXECUTE` закрыт всем — вызов только из invite); 4 клиентских RPC `invite_to_workspace`/`accept_invite`/`reject_invite`/`cancel_invite` + сервисный `expire_invites()` (все `SECURITY DEFINER`, `SET search_path=public`); RLS `invites_select_ws_role` (target ИЛИ owner) + `insert/update/delete_deny` (мутация только через RPC); free получает 403 (двойная защита: pre-check на invite + re-check тарифного лимита shared на accept). Только API, без UI. Новый pgTAP `15_workspace_invites_test.sql` `plan(48)`, добавлен в CI `db-tests.yml`. **Расхождения с планом:** (а) добавлен незаявленный helper `lookup_user_by_public_id` (обратного лукапа не было в 0026, без него приглашение по TF-ID невозможно); (б) статус `cancelled` (owner отзывает pending) сверх плановых четырёх; (в) FK `inviter_user_id`→CASCADE, `target_user_id`→SET NULL — 9-й `workspace_id` FK исключён из счётчика инварианта 0030 в тесте 13 (см. `wave-b-plan.md` §4.3-факт). Полный локальный прогон: 14 pgTAP-файлов / 492 теста, 352 vitest, `tsc -b`, `npm run build` — зелёные.
+4. **`feat/ws-b-04-ui-invites`** ✅ **реализовано (локально, не влито)** — клиентский UI приглашений поверх RPC из 0032 (0 DDL, backend не тронут): сервисный слой `src/lib/invites.ts` (4 RPC-обёртки + 2 SELECT-списка + маппинг PostgREST-ошибок в типизированный `InviteRpcError`); отдельный zustand-стор `useInvitesStore.ts` (инвайты только серверные, вне SQLite-зеркала; `accept` → `syncNow()` + перечитывание workspaces/members); `MembersTab.tsx` (замена Wave-A `WorkspaceMembers`) — вкладка «Участники» с ролевым гейтом (owner: пригласить/promote/demote/remove + секция pending-инвайтов с отзывом; editor/viewer: список + «Покинуть»); `InviteMemberModal.tsx` (ввод TF-ID + роль, перевод всех кодов ошибок); `MyInvitesSection.tsx` — секция «Мои приглашения» в сайдбаре с бейджем + accept/reject + лимит-гард. **Расхождения с планом:** (а) promote/demote — иконки-действия вместо `select`; (б) экран «Мои приглашения» реализован как секция сайдбара, а не отдельный роут; (в) имя пространства приглашённому недоступно (не член ws) → нейтральный заголовок «Приглашение в общее пространство» (approach 5.b, без backend-правок); (г) e2e happy-path помечен `test.fixme` — локальный харнесс (`?e2e=1`, sql.js, без бэкенда, один free-юзер) не может проиграть приглашение, хак не пишем; в песочнице даже baseline-спеки не поднимают app-shell. Клиентские тесты: `invites.test.ts` (22) + `InviteMemberModal`/`MembersTab`/`MyInvitesSection` (14+9+6). Локальный прогон: vitest, `tsc --noEmit`, `npm run build` — зелёные; pgTAP не тронут (492).
+5. **`feat/ws-b-05-navigation`** ✅ **реализовано (локально, не влито)** — UX-раздел «Личные / Общие» в переключателе пространств (0 DDL, backend не тронут): приватный `WorkspaceSwitcher` вынесен из `Sidebar.tsx` в `src/components/WorkspaceSwitcher.tsx` (тестируемость); сплит списка по `kind` на «Личные»/«Общие» (обе секции рендерятся всегда — под пустое состояние); role-badge у shared-пространств (editor → «Редактор», viewer → «Наблюдатель»; shared-owner и personal — без бейджа), роль на ws считает новый хук `useWorkspaceRoles()` в `workspaceScope.ts`; сортировка внутри секции (активный первым, остальные по алфавиту — поля `last_used_at` нет, только `sort_order`); пустое состояние «Общие» с hint и собственным TF-ID (`useProfile`). **Решение по индикатору pending-инвайтов:** выбран безопасный вариант — НЕ добавлять новый счётчик рядом с «Общие», `MyInvitesSection` (PR-b-04) остаётся единственным местом отображения (избегаем дублирования одного состояния в двух местах сайдбара). i18n: `ws_switcher_section_personal/shared`, `ws_switcher_role_editor/viewer`, `ws_switcher_shared_empty_hint` (ru+en). **Расхождений с планом нет.** Клиентские тесты: `WorkspaceSwitcher.test.tsx` (6). Локальный прогон: vitest 404, `tsc --noEmit`, `npm run build` — зелёные; pgTAP не тронут (492).
+6. **`feat/ws-b-06-hardening`** ✅ **реализовано (локально, не влито)** — финальный regression-hardening + фикс живого бага (UI не тронут). **Фикс quirk'а `sync_overdue_events` (миграция `0033`):** ошибочно навешенный 0005 триггер `trg_set_updated_at` (обращается к `NEW.updated_at`) ронял любой `UPDATE` append-only таблицы, у которой нет колонки `updated_at`; это была ЖИВАЯ прод-проблема (повторный push/soft-delete через `.upsert(onConflict:'id')` → `UPDATE-on-conflict` → падение), а не тестовый артефакт. Выбран Вариант B (снять триггер), т.к. таблица append-only и по дизайну (0002), и на клиенте (`mappers.ts`/`pull.ts`, LWW по монотонному `id`) — добавление колонки рассинхронизировало бы схему. pgTAP `14` `plan(103)→106`: снято исключение `sync_overdue_events`, добавлены 3 UPDATE-теста по ролям (матрица теперь без пропусков). Новый pgTAP `16_workspace_regression_test.sql` `plan(19)`: hard-delete shared-ws каскадит весь граф + isolation (8); self-leave ≠ invite-cascade + RLS следует за членством (4); `target_user_id` SET NULL не ломает инвайт (3); free-регрессия invite/accept side-by-side (2); shared занимает слот в общем пуле лимита (2). Добавлен в CI `db-tests.yml`. **Расхождений с планом нет** (дедуп: editor/viewer invite-denial уже в 15/B9-B10, invite-path free-denial уже в 15/B4 — не дублировались). Полный локальный прогон: **15 pgTAP-файлов / 514 тестов**, vitest, `tsc -b`, `npm run build` — зелёные.
+
+**Статус:** ✅ **Wave B завершена** (все 6 под-PR реализованы локально в `feat/workspaces`; `main` не тронут). Финальный прогон: 15 pgTAP-файлов / 514 тестов + vitest + `tsc -b`/`build` — зелёные. Дальше — единый merge-PR `feat/workspaces → main` (после решения релизить эпик, целевой десктоп-релиз v1.1.0).
+
+### 7.7. Пространства (Workspaces) — Wave C: полировка совместной работы (✅ завершена 2026-07-14, локально в `feat/workspaces`)
+
+Третий этап: полировка совместной работы поверх открытых в Wave B shared-пространств (presence, журнал изменений, read-only UX для viewer, техдолг). Ведётся в `feat/workspaces` (не в `main`). Техплан и хроника — `docs/architecture/wave-c-plan.md`; living-анализ — `docs/architecture/tf_workspaces_architecture.md` §9 (Wave C).
+
+Строгая последовательность из 6 под-PR (каждый ответвляется от предыдущего после мержа), все **смёржены в `feat/workspaces`**:
+
+1. **PR [#88](https://github.com/danny-swan/taskflow-app/pull/88) — c-01 presence** (squash `37f8010`) — живой индикатор «кто сейчас онлайн» в shared-пространствах через Realtime Presence API (`channel.track()`), без per-task курсоров. **0 backend/DDL** — presence эфемерен (client-to-client), вне SQLite/outbox/sync-цикла: эфемерный стор `usePresenceStore`, `src/lib/presence.ts` (канал `presence-ws-<id>`, только shared), `PresenceIndicator.tsx` в шапке. В meta уходит только публичный минимум (`nickname`/`avatar_variant`/`public_user_id`) — email никогда.
+2. **PR [#89](https://github.com/danny-swan/taskflow-app/pull/89) — c-02 invite-pin** (squash `22a6be1`) — внутриприложенческий unread-pin непринятых приглашений (точка при 1, число при ≥2, «99+»). **0 backend/DDL** — данные из `useInvitesStore.myPending` (PR-b-04). Осознанный отказ пользователя от email/push. `InvitePinBadge.tsx` в заголовке `MyInvitesSection`.
+3. **PR [#90](https://github.com/danny-swan/taskflow-app/pull/90) — c-03 audit log** (squash `8f7d836`) — неподделываемый серверный журнал изменений задачи. **Единственная миграция волны — `0034`:** таблица `sync_task_activity_log` (immutable append-only, RLS SELECT членам + deny insert/update/delete, FK на `workspace_id` CASCADE only, без FK на task_id), серверный `SECURITY DEFINER`-триггер `log_task_activity()` на `sync_tasks`, гейт только `kind='shared'`. Первая **pull-only** sync-сущность (клиент только читает). UI — сворачиваемая секция «История изменений» в `TaskModal`. pgTAP `17_task_activity_log_test.sql`.
+4. **PR [#91](https://github.com/danny-swan/taskflow-app/pull/91) — c-04 workspace history tab** (squash `d1e0013`) — вкладка «История» в `WorkspaceSettings` (общий лог всего пространства поверх данных 0034). **0 backend/DDL** — только клиент. Read-only для всех ролей, видна только в shared. Фильтры (тип/участник/задача), клиентская пагинация; render-логика вынесена в общий `ActivityEntry.tsx`.
+5. **PR [#92](https://github.com/danny-swan/taskflow-app/pull/92) — c-05 viewer polish** (squash `3b5f36e`) — сплошная read-only-полировка UX для роли viewer (RLS уже запрещала запись на сервере). **0 backend/DDL** — чистый UX-слой: хелперы `useCanEdit()`/`useIsViewer()` (`src/store/workspaceScope.ts`) + паттерн «disabled + tooltip» (`ws_viewer_readonly_tooltip`), точечно скрытые действия-иконки. Сервер остаётся источником истины.
+6. **PR [#93](https://github.com/danny-swan/taskflow-app/pull/93) — c-06 pgTAP 10 fix** (squash `33463a7`) — техдолг: возврат устаревшего `10_workspace_management_test.sql` в CI. **0 backend/DDL** — правится только тест и `db-tests.yml`. 4 расхождения теста со схемой после Wave A/B (auto-профиль + guard неизменяемости, сигнатура RPC `setof record`, снятый в 0030 guard `block_shared_workspaces`, утечка `request.jwt.claim.sub`) устранены; `plan(25)→plan(23)`, тест зелёный, возвращён между 09 и 11.
+
+**Статус:** ✅ **Wave C завершена 2026-07-14** (все 6 под-PR смёржены в `feat/workspaces`; `main` не тронут). Финальный pgTAP-набор — **17 файлов / 578 ассертов**; vitest + `tsc -b`/`build` — зелёные. Единственная миграция волны — `0034` (audit log); остальные 5 PR — 0 DDL.
+
+**Техдолг pgTAP 10** (тянулся с Wave A, см. §7.5) — ✅ **закрыт** в PR-c-06.
+
+**Перенесено на будущие волны:** per-field merge / индикатор «редактируется участником N» (LWW остаётся моделью MVP); экспорт лога (CSV/JSON); diff-детализация payload «было → стало» в UI; кросс-workspace поиск и «все мои задачи»; кастомные роли и pipeline статусов между пространствами. Дальше по эпику — единый merge-PR `feat/workspaces → main` (целевой десктоп-релиз v1.1.0).
+
+---
+
+### 7.8. Пространства (Workspaces) — hotfix bootstrap-RLS для upsert (✅ применён на прод 15.07.2026, в `feat/workspaces`)
+
+После Wave C при ручном тесте облачной синхронизации вскрылся блокер (см. §5 — **F7**): создание нового пространства падало с 403/42501 на первом пуше. Отдельная hotfix-волна одним PR.
+
+**PR [#103](https://github.com/danny-swan/taskflow-app/pull/103) — fix(rls): bootstrap-окно для RETURNING + сброс застрявшего outbox** (OPEN → `feat/workspaces`, HEAD `06dd8db`; CI зелёный: pgTAP / type-check / Edge). Состав:
+
+1. **Миграция `0037_owner_bootstrap_rls_upsert.sql`** — единственная DDL волны. Корень 403: PostgREST-upsert (`INSERT ... ON CONFLICT DO UPDATE ... RETURNING *`) применяет к возвращаемой строке SELECT-политику; у нового ws членства ещё нет → SELECT=false → 42501. **Фикс — узкое bootstrap-окно (НЕ «всем по owner_id навсегда»):** новые функции `is_workspace_bootstrap(ws text, uid uuid)` (владелец И в ws ещё нет активного членства) и `workspace_has_active_members(ws text)` — обе STABLE SECURITY DEFINER, `search_path=public,pg_catalog`, REVOKE anon/public + GRANT authenticated. Политики: `sync_workspaces` SELECT/UPDATE += инлайн `owner_id = auth.uid() AND deleted_at IS NULL AND NOT workspace_has_active_members(id)` (именно инлайн, а НЕ через `is_workspace_bootstrap(id, uid)` — потому что SECURITY DEFINER-функция не видит in-flight строку самого RETURNING; проверено локально); дочерние + settings + activity_log(SELECT) += `OR is_workspace_bootstrap(workspace_id, auth.uid())`; `sync_workspace_members` SELECT += bootstrap ИЛИ own-row. Семантика ролей (0031/0035) НЕ меняется; activity_log остаётся insert/update/delete deny. Идемпотентна (CREATE OR REPLACE + DROP POLICY IF EXISTS). **Защита от утечки:** bootstrap гаснет при первом же членстве, поэтому ушедший владелец (stale `owner_id` после self-leave) доступа НЕ получает.
+2. **Клиент — миграция v14** (`src/lib/migrations.ts`, `description: 'Reset outbox rows stuck on RLS/403 after server fix 0037'`). Вторичная причина: `isPermanentError` (`src/lib/sync/push.ts`) классифицировал 403/«row-level security»/42501 как ПОСТОЯННУЮ ошибку → `markFailure` выставлял `attempt_count=MAX_ATTEMPTS` + `last_error='[permanent] ...'`, такие строки `isReadyForRetry` пропускал. v14 разово сбрасывает `attempt_count=0`, `last_attempt_at=NULL` только для строк с маркерами RLS/403/42501/permission denied (прочие permanent-ошибки — 23502/23514/42703 — не трогает). Покрыто `src/lib/migrations.v14.test.ts`.
+3. **CI/тесты:** новый pgTAP `18_upsert_returning_bootstrap_test.sql` (написан RED-первым, воспроизвёл 42501 до фикса, зелёный после); выравнены `10_*` (plan 24, под 0036) и `14_*` (роли 0031/0035). `.github/workflows/db-tests.yml` включает 18-й файл. **Локально 18/18 pgTAP зелёные.**
+
+**Применение на прод:** `0037` применена через execute_sql 15.07.2026 (идемпотентный overwrite — в истории миграций `0037` уже была от ранней ошибочной версии). Верифицировано прод-SQL-пробами под ролью владельца: bootstrap-upsert нового ws проходит, после появления членства — доступ только по членству.
+
+**Открытое после hotfix — ✅ ЗАКРЫТО 21.07.2026 (см. §7.9 и §5 F8):** отдельный P0-баг — **принятие приглашения не показывало приглашённому чужое shared-пространство**. Гипотеза (pull фильтрует по `user_id`, чужие ws-строки не тянутся) **подтвердилась** код-анализом и прод-пробой; исправлено двухфазным pull (коммит `bc50b2d`, только клиент, без миграций). **Ретроспектива отладки** (почему корень 403 нашли поздно и как надо было: сначала захватить реальный запрос/ответ, воспроизводить тем же клиентским путём с RETURNING, сразу поднять локальный pgTAP и писать RED-тест) — вынесена в `taskflow_plan_next_session.md` и ограничена областью workspaces/RLS/sync. На P0 протокол реально сработал: диагноз — сначала код-анализ + дифференциальная прод-проба, потом фикс.
+
+---
+
+### 7.9. Пространства (Workspaces) — P0-фикс pull приглашённого (✅ в `feat/workspaces`, 21.07.2026)
+
+После hotfix §7.8 (403 при создании ws) оставался P0-блокер совместной работы: приглашённый принимал приглашение, но чужое пространство не появлялось (см. §5 — **F8**). Отдельный клиентский фикс в тот же PR [#103](https://github.com/danny-swan/taskflow-app/pull/103) (OPEN → `feat/workspaces`, HEAD `bc50b2d`).
+
+**Корень (подтверждён, не гипотеза):** баг чисто клиентский. Pull скоупил `sync_workspaces` и все data-таблицы по `.eq('user_id', me)` → строки чужого ws (принадлежат владельцу) отсекались на клиенте, хотя серверный RLS их отдаёт по членству. Плюс chicken-and-egg: `listWorkspaceIds` брал набор из локальной `workspaces`, куда чужой ws не мог попасть. **Диагностика по протоколу:** сначала код-анализ (точные координаты фильтров по таблицам), затем дифференциальная прод-проба под ролью приглашённого (реальная пара: admin владеет ws «123», +test1 — editor): сервер по RLS отдал 1 ws + 3 задачи, клиентский `user_id=me` → 0 и 0, пришла только строка членства. RLS корректен — миграция БД НЕ нужна.
+
+**Состав фикса (коммит `bc50b2d`, 0 DDL):**
+1. **`src/lib/sync/mappers.ts`** — в `TableSpec.pullScope` добавлено значение `'id'`. Скоупы: `TASKS/STATUSES/TAGS/TEMPLATES/OVERDUE_EVENTS/HOLD_PERIODS_SPEC` → `'workspace_id'`; `WORKSPACES_SPEC` → `'id'` (у `sync_workspaces` сам `id` == ws-id, колонки `workspace_id` нет); `WORKSPACE_MEMBERS_SPEC` → `'user_id'` (явно, это вход в набор).
+2. **`src/lib/sync/workspace.ts`** — новая `listMembershipWorkspaceIds(userId)`: набор ws-id из ЧЛЕНСТВА (`workspace_members WHERE user_id=me AND deleted_at IS NULL`) + всегда personal `computeWorkspaceId` (первым). Разрывает chicken-and-egg.
+3. **`src/lib/sync/pull.ts`** — `pullAll` переписан в двухфазный. Фаза 1: `sync_workspace_members` по `user_id`. Затем пересчёт набора из свежеподтянутого членства. Фаза 2: каждый ws тянется ОТДЕЛЬНО (свой per-ws курсор) по всем остальным таблицам. Ветка скоупа `'id'` → `.in('id', workspaceIds)`. Пагинация вынесена в `pullSpecPaged`.
+4. **`src/lib/sync/pull.twophase.test.ts`** — новый TDD-тест (мок PostgREST с RLS-семантикой): приглашённый editor в чужом ws → после `pullAll` локально появляются строка `workspaces` и его задачи. До фикса красный (`expected undefined to be 'Команда'`), после зелёный; второй кейс — personal-ws не ломается.
+
+**Подводный камень — курсоры:** общий курсор по «ведущему» ws отсёк бы свежедобавленный shared-ws со «старыми» `updated_at` (они старше lastPulled personal-ws), поэтому фаза 2 тянет каждый ws с собственным per-ws курсором (новый ws → курсора нет → тянется целиком). Personal-ws всегда в наборе (`computeWorkspaceId` первым). `listWorkspaceIds`/realtime/сайдбар не тронуты — после фазы 2 строка чужого ws уже в локальной `workspaces`, и они подхватывают её штатно.
+
+**Верификация:** vitest 556/556 зелёный (63 файла), `tsc -b` + `vite build` успешно, eslint по изменённым файлам чисто. Миграций/pgTAP не трогали (баг клиентский, RLS корректен). Прод очищен от probe-артефактов фикса 403 («Probe 0037») 21.07.2026.
+
+---
+
+### 7.10. Пространства (Workspaces) — P1 сид системного ws (Tauri) + P2 pending sync у free (✅ в `feat/workspaces`, 21.07.2026, PR #104)
+
+После закрытия 403 (§7.8) и P0-приглашений (§7.9) — два клиентских бага одним PR [#104](https://github.com/danny-swan/taskflow-app/pull/104) (→ `feat/workspaces`, коммит `9832ca9`). Оба без миграций (см. §5 — **F9**, **F10**). Ветка `fix/first-workspace-seed-and-pending-sync`, ответвлена от `feat/workspaces` и перевалидирована поверх актуального HEAD (после PR #102).
+
+**P1 — системное personal-пространство без сида (Tauri-only).** Корень: на нативном пути (1) `tauriSeed()` не проставлял `workspace_id` засеянным строкам, (2) гидрация native→webDb в `initDb()` теряла колонку `workspace_id`. Сид-строки получали `workspace_id=NULL` и выпадали из ws-scoped выборок UI (`filterByWorkspace`); `reconcilePersonalWorkspace` их не переносил (двигает только `workspace_id='ws_local'`). Web-`seed()` был корректен — отсюда асимметрия симптома (второе ручное ws — ок). Фикс: `tauriSeed()` читает `personal_workspace_id` (fallback `ws_local`) и штампует `workspace_id`; гидрация сохраняет `workspace_id` в INSERT OR REPLACE для `statuses/tags/tasks/task_templates/overdue_events/task_hold_periods`. DDL не нужно (колонки с v11). Тест `src/lib/db.firstWorkspaceSeed.test.ts` (RED→GREEN, реальный Tauri-путь через sql.js-адаптер): (1) после чистой установки 7 статусов привязаны к `personal_workspace_id`, NULL-строк нет, welcome привязана; (2) после `reconcilePersonalWorkspace` сид в `ws_<uid>`, сирот нет.
+
+**P2 — «pending sync: N» у free/paywalled.** Корень: `PendingSyncChip` (`Sidebar.tsx`) скрывался только по `!isDev && count===0 && !isBusy && !isError` — при `count>0` чип показывался даже когда синк недоступен (оркестратор выставляет `paywalled` для free/истёкшего trial). Фикс: чистый предикат `shouldHidePendingChip(status,count,isDev)` в `src/lib/pendingSync.ts` — при `paywalled`/`skipped` чип скрыт всегда (вкл. dev); Pro/trial/lifetime — прежнее. `Sidebar.tsx` вызывает предикат вместо инлайн-условия. Второе место (`Settings.tsx`) счётчика не содержит. Тест `src/lib/pendingSync.chip.test.ts` (RED→GREEN, 5 кейсов).
+
+**Верификация (на актуальном HEAD `feat/workspaces` после PR #102):** `vitest run` — **556/556 зелёный** (63 файла, вкл. 2+5 новых), `tsc -b` exit 0, `vite build` exit 0. CI PR #104: type-check+unit, Edge Functions, E2E — все зелёные.
+
+**Открытые вопросы (продуктовое решение, не в скоупе этого PR):** должен ли free-план вообще накапливать outbox? Сейчас free копит `sync_outbox`, который никогда не пушится (RLS защищает сервер). В этом PR только скрыт счётчик, outbox НЕ чистился. Варианты на будущее: (а) не писать в outbox при paywalled, (б) периодически подрезать, (в) оставить (при апгрейде до Pro накопленное уедет). Решать отдельным PR.
+
+---
+
+### 7.11. Пространства (Workspaces) — P3 лимит создания (только свои) + приём инвайтов по плану (✅ в `feat/workspaces`, 21.07.2026, PR #105)
+
+После P1/P2 (§7.10) — третий баг эпика одним PR [#105](https://github.com/danny-swan/taskflow-app/pull/105) (ветка `fix/workspace-limits-owned-and-accept`, коммит `12f9f31`, merge в `feat/workspaces` = `a212fbe`). Клиент + одна миграция (`0038`). См. §5 — **F11**.
+
+**Первопричина (одна на два симптома):** «своё» (владеемые ws) и «чужое» (членство в shared по приглашению) смешивались в одном счётчике лимита. Продуктовая модель (пользователь, 21.07.2026): у пользователя есть СВОЙ лимит на создание (Free=2 / Pro=7 владеемых); приглашения в чужие shared его НЕ ограничивают — сколько пригласят, столько доп. пространств (где он не owner). Free вообще не принимает (shared = только платные).
+
+**P3-клиент (лимит создания — только владеемые).** `CreateWorkspaceModal.tsx:32` считал `workspaces.length` — все пространства, вкл. чужие shared. Фикс: новый `countOwnedWorkspaces` (`src/lib/workspaceLimits.ts`) + хук `useWorkspaceRoles` (`src/store/workspaceScope.ts:133-150`) возвращает `Record<wsId,'owner'|'editor'|'viewer'|null>`; модалка гейтит по числу ws с ролью `owner`. Бейдж «чужое» (editor/viewer) уже был в `WorkspaceSwitcher.tsx`. Серверный create-лимит (`enforce_workspace_limit`, 0029) считает по `owner_id` — был корректен, миграция не нужна; баг create — чисто клиентский.
+
+**P3-сервер (приём инвайта — гейт по плану, миграция 0038).** Исходная `accept_invite` (0032) считала `count(ВСЕ членства пользователя) >= get_workspace_limit(uid,'shared')`. Но у каждого СВОЕГО ws есть строка членства `role='owner'` (0027) → свои пространства расходовали бюджет на ПРИЁМ чужих, и платный с 7 своими ws не мог принять ни одного приглашения. Фикс (`0038_accept_invite_limit_by_plan.sql`, `CREATE OR REPLACE`): гейт только по ПЛАНУ — `v_limit := get_workspace_limit(uid,'shared'); if v_limit <= 0 then raise '22023 shared workspaces require a paid plan'`. Зависимость от числа членств убрана. Остальное поведение (target-only/pending/не истёк, атомарные invite→accepted + INSERT членства, SECURITY DEFINER, GRANT/REVOKE из 0032) сохранено. **Миграция ✅ ПРИМЕНЕНА НА ПРОД 21.07.2026** через apply_migration (после merge в `feat/workspaces`).
+
+**Верификация:** новые vitest `workspaceLimits.test.ts` и `CreateWorkspaceModal.test.tsx` (RED→GREEN); pgTAP `15` (C11 free-block, C12–14 multi-accept — платный принимает более 7 инвайтов, C5 переписан на успех) и `16` (D2 текст ошибки). Полный набор на HEAD `feat/workspaces`: pgTAP 18 файлов 597/597, vitest 65 файлов 567/567, `tsc -b` exit 0, `vite build` exit 0. CI PR #105: E2E, Edge Functions, Type-check+unit, pgTAP — все зелёные. **Прод-проба после apply (ROLLBACK, реальный вызов `accept_invite`):** pro с искусственно раздутыми 12 членствами (>7) успешно принял чужой инвайт; free заблокирован `22023`; транзакция откачена, прод не изменён.
+
+---
+
+### 7.12. Админка — полный список пользователей (P4, ✅ в `feat/workspaces`, 22.07.2026)
+
+Баг P4 (см. §5 — **F12**): администратор в `src/pages/AdminPage.tsx` не видел недавно зарегистрированных free-пользователей и их email.
+
+**Корень.** `loadUsers()` строил список ОТ таблицы `user_entitlements` (`from('user_entitlements')...limit(200)` → `userIds = ents.map(user_id)` → `rpc('get_users_emails', {user_ids})`). Триггер `handle_new_user` при регистрации создаёт строку только в `public.profiles` (с `email` и `public_user_id`); строку в `user_entitlements` НЕ создаёт (free-план = отсутствие строки). Поэтому free-юзеры без entitlement вообще не попадали в `userIds` → были невидимы, и их email не показывался. Подтверждено на проде 2026-07-22: 6 юзеров в `auth.users`/`profiles`, только 3 в `user_entitlements` → 3 невидимых free-юзера.
+
+**Продуктовое решение (Вариант Б, согласовано).** Источник списка — `profiles` (полный набор всех пользователей + email), ПЛЮС отображение публичного ID `TF-XXXXXX` (`profiles.public_user_id`).
+
+**Архитектурное решение (ADR 0006).** Прямое чтение view `admin_users_summary` с клиента невозможно и не должно (`security_invoker=on` из 0020 + нет GRANT; данные производны от `auth.users` — admin-only). Поэтому — по паттерну ADR 0002 (`get_users_emails`) — вводим **SECURITY DEFINER RPC с admin-гейтом**, а не GRANT на view.
+
+**Сервер (миграция `0039_admin_users_summary_rpc.sql`).** (1) `CREATE OR REPLACE VIEW admin_users_summary` += колонка `public_user_id` (добавлена В КОНЕЦ списка колонок — `CREATE OR REPLACE VIEW` не умеет вставлять колонку в середину, ошибка 42P16); `security_invoker=on` и `REVOKE ALL FROM anon, authenticated` закреплены заново (view остаётся для service_role/дашборда). (2) Новая `public.get_admin_users_summary()` → `RETURNS TABLE(...)`, `LANGUAGE plpgsql`, `SECURITY DEFINER`, `SET search_path TO 'public','auth','pg_temp'`; гейт в теле: `auth.uid() IS NULL` → `Not authenticated`, `NOT is_admin_user()` → `Forbidden: admin only`; база `profiles p LEFT JOIN auth.users u LEFT JOIN user_entitlements e`, `ORDER BY p.created_at DESC LIMIT 500`; `REVOKE ALL FROM PUBLIC, anon` + `GRANT EXECUTE TO authenticated`. Rollback-комментарий откатывает функцию и view к defу из 0001 через DROP (убрать колонку из view через CREATE OR REPLACE нельзя — 42P16; зависимых объектов от view нет, проверено на проде).
+
+**Клиент (`src/pages/AdminPage.tsx`).** `loadUsers()` переписан на один вызов `supabase.rpc('get_admin_users_summary')` вместо двух запросов; типы `UserRow`/`AdminUserSummaryRow` + чистый экспортируемый маппинг `mapAdminUserRow` (entitlement=null для free); рендер строки показывает TF-ID; поиск расширен на `public_user_id`; план-бейдж free для юзеров без entitlement; модалки set-plan/extend/cancel сохранены (работают и для free-юзера). i18n (двойные строки) не тронут.
+
+**Верификация:** pgTAP `19_admin_users_summary_test.sql` (`plan(12)`: EXECUTE authenticated / нет у anon; обычный юзер → `Forbidden`; admin видит free-юзера без entitlement — прямая регрессия P4; view += `public_user_id`, `security_invoker=on` сохранён, authenticated без SELECT — регрессия N4); vitest `AdminPage.mapUsers.test.ts` (маппинг nullable entitlement, TF-ID). Файл `19` добавлен в `.github/workflows/db-tests.yml`. Полный набор: vitest 66 файлов 570/570, `tsc -b` exit 0, `vite build` exit 0. **Прод-проба (ROLLBACK, `execute_sql`):** содержимое 0039 применено в транзакции; под ролью admin `get_admin_users_summary()` вернул всех пользователей включая free без entitlement; под обычным юзером → `Forbidden: admin only`; ROLLBACK — прод-схема не изменена. Применение на прод (`apply_migration`) — ✅ ВЫПОЛНЕНО 2026-07-22. Пост-проверка на живом проде: RPC существует, EXECUTE у authenticated (нет у anon), view закрыт для authenticated (security_invoker=on, +public_user_id); под JWT админа get_admin_users_summary() вернул 6 пользователей (3 free без entitlement, TF-ID у всех).
+
+---
+
+### 7.13. Пространства — краш открытия задачи в shared + дубль personal + залипшая ошибка sync (F13, ✅ в `feat/workspaces`, 22.07.2026)
+
+Баг (см. §5 — **F13**): аккаунт `lebedevdo.one+test1@gmail.com`, свежий билд. При открытии задачи в общем пространстве «P0 invite test» — окно ошибки (AppErrorBoundary); после «Перезагрузить» — пропали общие пространства, появился задублированный пустой «Мои задачи», часть личных задач не отображалась, красная `sync_workspaces_client_id_fkey`.
+
+**Методология диагностики (по протоколу).** Сначала чтение доков (`ADR 0005`, `wave-c-plan.md` §PR-c-03 про activity log, `workspaces-plan.md`), затем код-анализ, затем ДЕТЕРМИНИРОВАННЫЙ vitest-репро (монтаж реального `TaskModal` в shared-контексте — упал с `Maximum update depth exceeded` в `TaskActivityLog`), и только потом фикс; для C — дифференциальная прод-проба под ROLLBACK (FK воспроизведён, прод-схема не изменена).
+
+**Корень — один краш (A) и два его следствия (B, C).** Приоритет (по словам пользователя): «главное избавиться от бага, где не открывается задача, тогда и не будет второго бага».
+
+- **A (корень, краш).** `TaskActivityLog` рендерится ТОЛЬКО в shared-ws (`TaskModal.tsx`, IIFE `isShared`). Хук `useTaskActivity` (`src/store/useTaskActivityStore.ts`) в селекторе пустого журнала возвращал ИНЛАЙН-литерал `s.byTask[taskUuid] ?? []`. Для zustand на `useSyncExternalStore` новая ссылка `[]` каждый снапшот = «состояние изменилось» → форс ре-рендера → снова новый `[]` → бесконечный цикл → React `Maximum update depth exceeded` → AppErrorBoundary. Соседний `useWorkspaceActivity` в том же файле уже использовал стабильную `EMPTY_RECORDS` — в task-хуке её забыли. Замысел по `wave-c-plan.md` §PR-c-03: «taskUuid=null → пустой результат, запросов нет» (тихий пустой лог) — т.е. краш это регрессия реализации.
+- **B (следствие, дубль personal).** Прод-проверка: у test1 РОВНО одна non-deleted personal-ws с детерминированным `ws_<uid>`. Дубль пустого «Мои задачи» — ЛОКАЛЬНЫЙ артефакт: осиротевшая personal-строка от ПРОШЛОГО аккаунта (`ws_<olduid>`), оставшаяся в SQLite после смены аккаунтов и аварийного reload (краш A прерывал reconcile на середине). Пользователь подтвердил, что менял аккаунты.
+- **C (следствие, FK sync).** FK `sync_workspaces.client_id → sync_devices(id)`. Мапперы push слали `client_id: row.client_id ?? clientId`; протухший `row.client_id` стороннего устройства (осел через pull после смены аккаунтов / с другого устройства), которого нет в `sync_devices`, → `23503`. `push.ts isForeignKeyViolation` трактует ЛЮБОЙ 23503 как «ждём родительский workspace» → бесконечный ретрай → залипшая «ошибка sync». Прод-проба под ROLLBACK воспроизвела FK; у аккаунта накопилось 21 device (новый `client_id` на каждую установку/переустановку — он в SQLite `settings`, генерится на свежей БД).
+
+**Фиксы (три точечных клиентских, один PR, без DDL; ADR 0007).**
+
+1. **A** — `src/store/useTaskActivityStore.ts`: `useTaskActivity` возвращает `s.byTask[taskUuid] ?? EMPTY_RECORDS` (и null-ветка тоже `EMPTY_RECORDS`) — та же стабильная константа, что в `useWorkspaceActivity`. Общее правило: **zustand-селектор «пустого» результата обязан возвращать стабильную ссылку**.
+2. **C** — `src/lib/sync/mappers.ts` (все 9 `*ToCloudPayload`): `client_id: clientId` вместо `row.client_id ?? clientId`. При push строка физически уходит с ТЕКУЩЕГО устройства, гарантированно зарегистрированного в `sync_devices` (`ensureDeviceRegistered` перед push) → протухший `row.client_id` не утекает обратно. `push.ts` НЕ меняли: раз `client_id` всегда валиден, единственный оставшийся FK-сценарий — `workspace_id` (родитель ещё не долетел), и трактовка «ждём родителя» остаётся корректной.
+3. **B** — `src/lib/sync/workspace.ts`: `reconcilePersonalWorkspace` += `dedupePersonalWorkspaces(userId, target)`: soft-delete локальных `kind='personal'` строк, кроме канонической `target`, у которых у текущего пользователя НЕТ живого членства (чужой мусор). Гасим ТОЛЬКО локально (зеркало), **БЕЗ `enqueueOutbox`** (чужой `user_id` — нельзя пушить как удаление); shared не трогаем; строго идемпотентно (`WHERE deleted_at IS NULL`).
+
+Схема БД не менялась → миграций/ERD нет.
+
+**Верификация:** vitest `src/store/useTaskActivity.selector.test.tsx` (стабильность ссылки пустого журнала между рендерами, 2 кейса — RED до фикса); `src/lib/sync/workspaces-sync.test.ts` += Bug B (гасит осиротевшую personal, не трогает shared, не пишет в outbox, идемпотентно) и Bug C (маппер игнорирует протухший `row.client_id`, ставит текущий). Целевой прогон 44/44 зелёный (`useTaskActivity.selector` + `useTaskActivityStore` + `workspaces-sync` + `push`); полный `tsc -b` + `vitest` + `vite build` — см. чек-лист PR. **Прод-проба (ROLLBACK):** FK `sync_workspaces_client_id_fkey` воспроизведён до фикса; прод-схема не изменена (фикс клиентский).
+
+### 7.14. Пространства — участники shared не видны + leave без эффекта + ws исчезают при рестарте (F14, ✅ в `feat/workspaces`, 22.07.2026)
+
+Баг (см. §5 — **F14**): три симптома одного узла — двухфазного pull членства и обработчика выхода из пространства.
+
+**Методология диагностики (по протоколу).** Код-анализ двухфазного pull (`src/lib/sync/pull.ts`), RLS-политик членства и обработчика `removeWorkspaceMember`; прод-пробы под ROLLBACK на `sejpmzrmtgcvevukggkx` подтвердили, что серверный RLS отдаёт строки со-участников по `workspace_id` (VISIBLE=2 под JWT editor'а «P0 invite test»); детерминированные vitest-ре��ро (RED до фикса).
+
+**Корень — три симптома, все клиентские.**
+
+- **Симптом 1 (участники shared не видны — owner/editor видит только себя).** `WORKSPACE_MEMBERS_SPEC.pullScope='user_id'` → Phase 1 pull тянул `.eq('user_id', me)`, т.е. ТОЛЬКО свою строку членства. Строки со-участников того же ws не доходили → `MembersTab` показывал одного «вас». Прод-проба подтвердила: RLS SELECT-политика `sync_workspace_members_select_ws_role` (`has_workspace_role(ws, uid, 'viewer') OR user_id=uid OR is_workspace_bootstrap(...)`) отдаёт ВСЕ строки членства ws под JWT учас��ника — значит до-тяг по `workspace_id IN (мои ws)` безопасен.
+- **Симптом 3 (рестарт → ws исчезают и не возвращаются).** Phase 1 pull членства был ИНКРЕМЕНТАЛЬНЫМ по курсору `sync_last_pulled_<ws>_sync_workspace_members`. После первого pull курсор = max(updated_at); при рестарте серверные членства не менялись → Phase 1 отдавал 0 строк → локально погашенные ранее membership-строки НИКОГДА не восстанавливались, а `prunePhantomWorkspaces` (строит allow-list из локального членства `user_id=me`) физически удалял shared-ws. Возврат — только смена аккаунта (сброс курсоров).
+- **Симптом 2 (приглашённый не может выйти — кнопка leave без эффекта).** `removeWorkspaceMember` soft-delete'ил членство + `enqueueOutbox('workspace_members', delete)`, но вызывал ТОЛЬКО `loadWorkspaceMembers()`, НЕ `loadWorkspaces()`. Сайдбар (`readWorkspacesFromDb`, EXISTS-фильтр по членству) не перечитывался → покинутое ws висело в меню до `createWorkspace`. Серверный leave работал (RLS `sync_workspace_members_self_leave_*` разрешает не-owner удалить свою строку).
+
+**Фиксы (два точечных клиентских, один PR, без DDL; ADR 0008).**
+
+1. **A (симптомы 1 и 3)** — `src/lib/sync/pull.ts::pullAll`: членство пуллится ПОЛНО (от epoch, игнорируя сохранённый курсор и не продвигая его) в двух скоупах. Проход A — по `user_id=me` (восстанавливает свои погашенные строки на каждом старте → симптом 3). Проход B — по `workspace_id IN (мои ws)` (строки со-участников → симптом 1). Реализация: `pullTable`/`pullSpecPaged` получили опцию полного pull с in-memory пагинацией (курсор в settings не трогается); проход B — клон spec с `pullScope='workspace_id'`. Data-таблицы (tasks/statuses/…) остаются ИНКРЕМЕНТАЛЬНЫМИ по per-ws курсору — их не трогаем. Восстановление надёжно: shared-членство гасит только `prunePhantomWorkspaces` физическим DELETE → `applyCloudRowMembers` видит local=null → чистый INSERT (LWW не мешает).
+2. **B (симптом 2)** — `src/store/useStore.ts::removeWorkspaceMember`: после soft-delete + `enqueueOutbox` добавлен `loadWorkspaces()` (покинутое ws уходит по EXISTS-фильтру), и если покинули своим членством ТЕКУЩЕЕ пространство — переключение `currentWorkspaceId` на дефолт (`pickDefaultWorkspaceId`), по паттерну `deleteWorkspace`.
+
+Схема БД не менялась → миграций/ERD нет.
+
+**Верификация:** vitest `src/lib/sync/pull.twophase.test.ts` += симптом 1 (сервер отдаёт owner+editor членства ws, editor=`me` → обе строки локально после прохода B) и симптом 3 (локальная membership-строка отсутствует, курсор «в будущем», сервер отдаёт живую строку → полный pull восстанавливает, prune не убивает ws); `src/store/workspaces.actions.test.ts` += leave текущего ws (сайдбар без покинутого + `currentWorkspaceId` переключён на personal). Полный `tsc -b` + `vitest` + `vite build` — см. чек-лист PR. **Прод-проба (ROLLBACK):** RLS отдаёт со-участников по `workspace_id` (VISIBLE=2); прод-схема не изменена (фикс клиентский).
+
+### 7.15. Пространства — accept_invite падал 23505 после leave (F15, ✅ в `feat/workspaces`, 22.07.2026)
+
+Баг (см. §5 — **F15**): после успешного leave (F14/ADR 0008) повторный invite в тот же ws от owner нельзя было принять — приложение показывало «Не удалось выполнить действие. Попробуйте позже.», в консоли — HTTP 409 Conflict от PostgREST на `POST /rpc/accept_invite`, в логах Postgres — `duplicate key … sync_workspace_members_workspace_id_user_id_key` (sqlstate 23505).
+
+**Методология диагностики (по протоколу).** Скриншот консоли F12 (409 Conflict в `POST /rpc/accept_invite`) → `get_logs postgres` за 24 ч → ~14 сообщений `23505` в час → просмотр тела `public.accept_invite` (0032/0038) → прод-проба под ROLLBACK на `sejpmzrmtgcvevukggkx` под JWT `fc592c97…` с `inv_6b84eb6b…` → воспроизведён 23505 → по��троен fix-функционал, повторная прод-проба под ROLLBACK показала успешную реактивацию `wsm_13afdb1b…` (`deleted_at=null`, `role=editor`, `version=2→3`).
+
+**Корень.** `accept_invite` делает голый `INSERT INTO sync_workspace_members (…)`. Уникальный индекс `sync_workspace_members_workspace_id_user_id_key` покрывает `(workspace_id, user_id)` **без** предиката `WHERE deleted_at IS NULL` — конфликт срабатывает независимо от soft-delete. После leave (ADR 0008) в таблице остаётся строка `(ws=X, user=U, deleted_at=<t>)`, и повторный INSERT падает с 23505.
+
+**Когда появилось.** С самого 0032 (Wave B, PR-b-03). Не проявлялось до F14, потому что клиентский leave не работал → повторных приёмов не было. F14 не создал этот дефект — он его открыл, вернув leave в рабочее состояние.
+
+**Фикс (миграция `0040_accept_invite_upsert_membership.sql`; ADR 0009).** `CREATE OR REPLACE FUNCTION public.accept_invite`: заменили голый INSERT на `INSERT ... ON CONFLICT (workspace_id, user_id) DO UPDATE`. При UPDATE-пути: `deleted_at=null`, `role=EXCLUDED.role` (новая роль из инвайта), `invited_by=EXCLUDED.invited_by`, `joined_at=now()`, `updated_at=now()`, `version=coalesce(version,0)+1`. `id` (uuid membership-строки) НЕ переписываем — сохраняем существующий, чтобы клиентский pull-matcher (`applyCloudRowMembers`) распознал строку как ту же самую. Все прочие проверки функции (target-only, pending, не истёк, тарифный гейт по плану — 0038) сохранены; SECURITY DEFINER, search_path, GRANT/REVOKE не меняются.
+
+Схема таблиц не менялась → ERD не трогаем.
+
+**Верификация:** pgTAP `supabase/tests/20_accept_invite_reactivation_test.sql` (план 6): F15-1 первый accept (INSERT-путь: `role=editor`, `deleted_at IS NULL`), F15-2 leave → повторный invite → второй accept `inv20b` (UPDATE-путь: `role=viewer`, `deleted_at IS NULL`, uuid membership-строки НЕ изменился); CI-раннер `.github/workflows/db-tests.yml` дополнен ссылкой на 20. **Прод-проба (ROLLBACK):** функция подменена в транзакции, вызов под JWT `fc592c97…` для `inv_6b84eb6b…` вернул `wsm_13afdb1b…` (существующая строка), `deleted_at=null`, `role=editor`, `version=2→3`. Миграция 0040 ✅ применена на прод 22.07.2026 через `apply_migration`.
+
+---
+
+### 7.16. Пространства — авто-восстановление битой локальной SQLite (F16, ✅ в `feat/workspaces`, 22.07.2026)
+
+Баг (см. §5 — **F16**): shared workspaces пропадали из сайдбара после рестарта приложения (веб-режим). В консоли F12 — `database disk image is malformed` (SQLite code 11) при чтении локальной базы, и `UNIQUE constraint failed: workspaces.uuid` / `workspace_members.uuid` / `task_activity_log.uuid` (code 2067) при попытке синка.
+
+**Корень.** Локальная SQLite (веб: sql.js-инстанс, сериализованный в LocalStorage под `taskflow.sqlite.v1`) физически повреждалась — повреждение затрагивало преимущественно **индексы**, а не сами строки данных. `applyCloudRow*` (`src/lib/sync/pull.ts`) при обработке входящей строки из pull делает `SELECT ... WHERE uuid=?`; на битом индексе этот запрос не находит существующую строку → applier решает, что строки нет, и уходит в ветку `INSERT`; но физический уникальный индекс на `uuid` всё равно видит старую строку → `INSERT` падает с `UNIQUE constraint failed` (code 2067). Ошибка каждой строки тонула в `firstError`, а pull к Supabase формально завершался `200 OK` (сеть/RLS не при чём) — просто ничего не персистилось локально. На **следующем** старте `prunePhantomWorkspaces` (pull.ts) видел локальную (битую, без свежих строк) таблицу `workspace_members`, не находил live-membership для shared-ws и удалял сам workspace как «фантомный» — сайдбар пустел уже окончательно.
+
+Предвиден в [ADR 0009](../adr/0009-accept-invite-upsert-membership.md) (раздел «Что осталось (не в этом PR)») как следующий шаг после F15.
+
+**Фикс (клиентский, без миграций; ADR 0010).**
+
+1. `detectAndRecoverCorruption()` (новая экспортируемая функция, `src/lib/db.ts`) вызывается в самом начале `initDb()`, до `ensureSchema`/`migrate`/`hydrate`. Веб: десериализует LocalStorage через `new SQL.Database(bytes)` + `PRAGMA integrity_check`; Tauri: `getTauriDb()` + `d.select('PRAGMA integrity_check')`. Порча = конструктор/getTauriDb бросает, integrity_check ≠ `'ok'`, либо exec бросает с сигнатурой `SQLITE_CORRUPT`/`code 11`/`database disk image is malformed`. При обнаружении: `console.error('[db][corruption] detected, will reset:', reason)`, веб — `localStorage.removeItem` для `taskflow.sqlite.v1`/`taskflow.sqlite.v1.ts`, Tauri — `DROP TABLE IF EXISTS` по известным таблицам (если и это не удаётся — флаг `window.__taskflow_corruption_unrecoverable`). В обоих случаях — флаг `window.__taskflow_corruption_recovered` для тоста в `App.tsx`.
+2. `src/lib/sync/pull.ts`: новый экспортируемый класс `SqliteCorruptError` (по образцу существующего `DeferRowError`). Каждый `applyCloudRow*` в карте `APPLIERS` обёрнут `withCorruptionGuard(tableName, fn)` — при сигнатуре порчи в сообщении исключения поднимает флаг порчи и перебрасывает `SqliteCorruptError`. `pullTable` ловит его отдельно от обычных ошибок строк и помечает `result.corruption = true`, не двигая курсор. `pullSpecPaged` и `pullAll` пропагируют `corruption` и **не вызывают** `prunePhantomWorkspaces` в цикле, где обнаружена порча. `prunePhantomWorkspaces` дополнительно получила собственный guard в начале тела: если флаг порчи выставлен в текущем цикле — функция сразу возвращается без действий.
+3. `src/lib/sync/index.ts` (`syncNow`): после каждого из двух вызовов `pullAll` проверяется `result.corruption` — если `true`, показывается тост («Локальная база была повреждена, восстановление...») и вызывается `window.location.reload()` (веб); push в этом цикле **не выполняется**.
+4. `src/App.tsx`: `useEffect` при монте проверяет `window.__taskflow_corruption_recovered` (на случай, если флаг выставлен ещё в `initDb()` до отрисовки), показывает пользователю мягкий тост о восстановлении и удаляет флаг.
+
+Схема таблиц не менялась → ERD не трогаем, миграций нет.
+
+**Верификация:** vitest `src/lib/db.corruption.test.ts` (новый, 3 сценария): (a) чистое LocalStorage → `{recovered:false}`, хранилище не тронуто; (b) мусорные байты вместо валидной SQLite → `{recovered:true}`, хранилище очищено; (c) валидная пустая база (реальный экспорт через `initDb()`) → `{recovered:false}`. Покрывает веб-ветку (vitest+jsdom, `IS_TAURI` всегда `false` в этом окружении); Tauri-ветка проверяется вручную/в e2e. `./node_modules/.bin/vitest run src/lib/db.corruption.test.ts --pool=forks --poolOptions.forks.maxForks=2` — 3/3 зелёные. `./node_modules/.bin/tsc --noEmit` — 0 ошибок. См. [ADR 0010](../adr/0010-sqlite-corruption-auto-recovery.md).
+
+**Дополнение 22.07.2026 (F16 escalation, по живой диагностике на клиенте).** В логах пользователя `2067` (`UNIQUE constraint failed: workspace_members.workspace_id, workspace_members.user_id`) возникает первым (счётчик 5), затем каскадом `11 malformed` (счётчик 7). Серверных дубликатов по `(workspace_id, user_id)` нет (проверено `execute_sql` на прод-базе) — значит этот 2067 при `INSERT`-пути аппликатора — признак битого локального uuid-индекса, а не бизнес-коллизия. `isSqliteCorruptionMessage()` (`src/lib/sync/pull.ts`) расширен четырьмя сигнатурами (`workspace_members.workspace_id, workspace_members.user_id`, `workspaces.uuid`, `workspace_members.uuid`, `task_activity_log.uuid`) — гуард теперь срабатывает на самом раннем шаге — до того, как sql.js окончательно пометит базу corrupt. Дополнительно в `detectAndRecoverCorruption()` (`src/lib/db.ts`, веб-ветка) добавлен UNIQUE-probe: после успешного `integrity_check` дополнительно вставляется/удаляется строка во временную таблицу с UNIQUE-индексом (`__corruption_probe`) — любое исключение на такой тривиальной операции трактуется как corruption (реализовано только для веб-ветки, Tauri — открыто). Добавлен 4-й тест (d) в `db.corruption.test.ts`: побитовое повреждение валидного blob'а (XOR по пробным позициям в диапазоне 100-200) → `{recovered:true}`. `vitest run src/lib/db.corruption.test.ts --pool=forks --poolOptions.forks.maxForks=2` — 4/4 зелёные, `tsc --noEmit` — 0 ошибок. Схема таблиц не изменялась, миграций нет. См. [ADR 0010](../adr/0010-sqlite-corruption-auto-recovery.md).
+
+> **Пересмотрено в F17 (§7.17, ADR 0011):** эскалация 2067→corruption оказалась ошибочным диагнозом. 2067 на `workspace_members(workspace_id, user_id)` — НЕ порча индекса, а рассинхрон локального uuid с серверным при accept-invite. Четыре UNIQUE-паттерна убраны из `isSqliteCorruptionMessage`, проблема перенесена в fallback-матчинг `applyCloudRowMembers`. `__corruption_probe` в db.ts сохранён — он ловит настоящую порчу на изолированной temp-таблице, независимо от бизнес-данных.
+
+### 7.17. Пространства — реконсиль uuid членства при рассинхроне local↔server (F17, ✅ в `feat/workspaces`, 22.07.2026)
+
+Баг (см. §5 — **F17**): те же симптомы, что у F16 (shared-ws пропадают после рестарта, консоль показывает `UNIQUE constraint failed: workspace_members.workspace_id, workspace_members.user_id`, code 2067), но **другой корень**. F16 ошибочно списал этот 2067 на порчу локальной SQLite и на всякий 2067 сбрасывал всю базу. Живая диагностика под ролью приглашённого (прод-SQL) показала: база НЕ битая, `integrity_check` = `ok`, строки на месте.
+
+**Корень (доказан прод-SQL).** При accept-invite клиент создаёт локальную строку членства со СВОИМ случайным `uuidv7` (например `wsm_77cf...`), а сервер в `accept_invite` (F15/ADR 0009, миграция 0040) хранит СВОЙ канонический uuid для той же пары `(workspace_id, user_id)` (например `wsm_server_canonical`). `applyCloudRowMembers` (`src/lib/sync/pull.ts`) матчил локальную строку ТОЛЬКО по uuid: `SELECT ... WHERE uuid=row.id`. Серверный uuid не совпадал с локальным случайным → matcher промахивался → applier уходил в `INSERT` → локальный уникальный индекс `idx_workspace_members_ws_user` на `(workspace_id, user_id)` (он **НЕ partial**, срабатывает даже на soft-deleted строках) уже занят → `INSERT` падал с 2067. Ошибка тонула в `firstError`, pull формально завершался, а на следующем старте `prunePhantomWorkspaces` вычищал shared-ws без «живого» членства — сайдбар пустел. То есть механизм разрушения тот же, что в F16, но причина — не порча, а рассинхрон идентичности.
+
+**Фикс (клиентский, без миграций; ADR 0011).**
+
+1. `applyCloudRowMembers` (`src/lib/sync/pull.ts`) — двухступенчатый матчинг:
+   - (1) lookup по uuid (`byUuid`) — если найдена, ведёт себя как раньше (LWW по `updated_at`, UPDATE по uuid);
+   - (2) при промахе по uuid — fallback по натуральному ключу `(workspace_id, user_id)` (`byPair`). Если найдена — это тот же membership с локальным uuid ≠ серверный. НЕ вставляем (иначе 2067), а **ВСЕГДА переклеиваем `uuid = row.id`** (серверный uuid — каноническая идентичность членства); остальные поля по LWW: облако свежее → обновляем всё + uuid, иначе только uuid;
+   - edge-case: перед переклейкой проверяем, не занят ли серверный uuid ДРУГОЙ локальной строкой (`WHERE uuid=row.id AND id<>byPair.id`); если да — удаляем дубликат-byPair (`DELETE`), `logger.warn`, и применяем LWW к строке-владельцу uuid;
+   - (3) только при полном промахе (ни uuid, ни пара) — `INSERT`, как раньше.
+   `applyCloudRowWorkspaces` проверен: на локальной `workspaces` только partial-индекс `idx_workspaces_uuid`, натурального UNIQUE нет → fallback не нужен (симметричной коллизии не возникает).
+2. Откат F16-эскалации: из `isSqliteCorruptionMessage` (`pull.ts`) убраны четыре UNIQUE-паттерна (workspace_members(ws,user), workspaces.uuid, workspace_members.uuid, task_activity_log.uuid). Оставлены только настоящие признаки порчи: `database disk image is malformed`, `code: 11`, `SQLITE_CORRUPT`. Теперь штатный 2067 → `isSqliteCorruptionMessage=false` → `withCorruptionGuard` перебрасывает обычную ошибку строки (в `firstError`), локальное хранилище НЕ сбрасывается. Но после фикса матчинга этот 2067 для пары `(ws, user)` вообще не должен возникать.
+3. `__corruption_probe` в `detectAndRecoverCorruption()` (`src/lib/db.ts`) сохранён — он работает на СВОЕЙ изолированной temp-таблице и ловит реальную порчу движка/страниц, не связанную с бизнес-коллизией 2067 на workspace_members (добавлен поясняющий комментарий).
+
+Схема таблиц не менялась → ERD не трогаем, миграций нет.
+
+> **⚠️ Постскриптум (31.07.2026, F18/ADR 0012):** F17 НЕ устранил баг на реальном Tauri.
+> Логика matcher’а верна, но она читает webDb-зеркало, которое при рестарте стартовало
+> **пустым по `workspace_members`** (эта таблица не гидрировалась из нативной data.db) →
+> matcher находил 0 строк → INSERT → 2067 в нативной БД. Истинный корень закрыт в **§7.18**.
+
+**Верификация:** vitest `src/lib/sync/pull.twophase.test.ts` += 3 F17-кейса: (1) локальный случайный uuid ≠ серверный → одна строка, uuid стал серверным, без 2067; (2) LWW-ветка (локальная строка свежее → uuid переклеен, поля не перезаписаны); (3) регрессия uuid-match (совпадение по uuid → UPDATE по LWW, как раньше). `./node_modules/.bin/vitest run src/lib/sync/pull.twophase.test.ts --pool=forks --poolOptions.forks.maxForks=2` — 7/7 зелёные; `db.corruption.test.ts` (4/4) + `pull.test.ts` (13/13) зелёные; `./node_modules/.bin/tsc --noEmit` — 0 ошибок. См. [ADR 0011](../adr/0011-membership-uuid-mismatch-reconcile.md).
+
+---
+
+### 7.18. Пространства — гидрация `workspaces`/`workspace_members` в зеркало при старте (F18, ✅ в `feat/workspaces`, 31.07.2026) — ИСТИННЫЙ КОРЕНЬ
+
+Баг (см. §5 — **F18**): тот же симптом, что у F14–F17 — shared-пространства пропадают из сайдбара после каждого перезапуска (консоль: `2067 UNIQUE constraint failed: workspace_members.workspace_id, workspace_members.user_id` + `TypeError: Cannot create property '_id' on number '<N>'`). Четыре предыдущие «фикса» (F14–F17) чинили СИМПТОМ. После установки F17-сборки на реальном десктопе баг сохранился.
+
+**Корень (доказан кодом `src/lib/db.ts`).** В Tauri-режиме две БД: нативная `data.db` (`@tauri-apps/plugin-sql`) и зеркало в памяти (`webDb`, sql.js). `db.run()` пишет синхронно в зеркало и fire-and-forget в нативную БД; все чтения (`db.get`/`db.all`) — ТОЛЬКО из зеркала. При старте `initDb()` создаёт пустое зеркало и hydrate-ит в него из нативной БД только `statuses, tags, tasks, settings, task_templates, overdue_events, task_hold_periods`. **`workspaces` и `workspace_members` в hydrate НЕ входили** (grep пуст). Следствие: после рестарта зеркало пустое по членству, а в нативной `data.db` строки есть → `applyCloudRowMembers` (и F17-matcher тоже) читает пустое зеркало → `byUuid`/`byPair` промах → `INSERT` → fire-and-forget-копия уходит в нативную БД, где строка уже есть → **2067 в нативном SQLite** → `prunePhantomWorkspaces` не видит живого членства в зеркале → сносит shared-ws → пустой сайдбар.
+
+Это объясняет, почему баг был **только на десктопе (Tauri)** и никогда в web (там одна БД sql.js, рассинхрона нет), и почему vitest-тесты F17 были зелёными (один движок), а на устройстве фикс не работал. Правило §11.3 арх-дока (введённое ещё в PR #104) прямо предупреждало: любая ws-scoped таблица ОБЯЗАНА гидрироваться — `workspaces`/`workspace_members` это нарушали.
+
+**Фикс (клиентский, без миграций; ADR 0012).** В Tauri-ветку `initDb()` (`src/lib/db.ts`) добавлена гидрация обеих таблиц: `SELECT * FROM workspaces` / `SELECT * FROM workspace_members` (в `try/catch` — таблицы с v11) + заливка в зеркало через `INSERT OR REPLACE` по PK `id` с переносом всех колонок (`uuid`, `workspace_id`, `user_id`, `role`, `deleted_at`, `version`, `client_id`). Теперь при рестарте зеркало = нативная БД по членству → F17-matcher видит строку → UPDATE/переклейка вместо INSERT → 2067 не возникает → shared-ws остаются. Схема не менялась → ERD/миграции не трогаем.
+
+`TypeError: Cannot create property '_id' on number '<N>'` — вторичный шум (минифицированное имя, предположительно Sentry/PostgREST-обёртка); кодом не адресуется, follow-up наблюдение.
+
+**Верификация:** новый `src/lib/db.workspaceHydrate.test.ts` гоняет РЕАЛЬНЫЙ Tauri-путь `db.ts` с персистентным sql.js-адаптером, переживающим «рестарт»: shared-ws + membership пишутся в нативную БД, после повторного `initDb()` проверяется, что зеркало содержит эти строки и lookup по `(ws, user)` находит серверный uuid. Тест КРАСНЫЙ без hydrate, ЗЕЛЁНЫЙ с ним (red-check выполнен). Регресс: `db.firstWorkspaceSeed`, `pull.twophase`, `pull.test`, `workspaces-sync`, `db.corruption` — 45/45 зелёные; `tsc --noEmit` — 0 ошибок. См. [ADR 0012](../adr/0012-tauri-hydrate-workspaces-members.md).
+
+---
+
+### 7.19. Пространства — дубли сид-статусов + добивка гидрации зеркала (F19, ✅ в `feat/workspaces`, 31.07.2026)
+
+Баг: в дефолтном пространстве «Мои задачи» на десктопе появляются ПО ДВА сид-статуса («Важно», «В работе», «Выполнено» …) — 7 имён превращаются в 14 строк. Проявляется не сразу после установки, а «в какой-то момент» после перезапуска; чистая установка симптом не лечит навсегда.
+
+**Гипотеза брифа опровергнута.** Предполагалось, что сид перезапускается при ещё не гидрированном зеркале (гонка hydrate↔re-seed). Контрольный тест на РЕАЛЬНОМ Tauri-пути с персистентным адаптером даёт ровно 7 статусов после трёх последовательных рестартов — локальные guard'ы (`tauriIsEmpty()`, `COUNT(*)==0`, `if (!stored)`) отрабатывают корректно.
+
+**Корень (доказан кодом + тестом): идентичность сид-каталога недетерминирована.** `seed()`, `tauriSeed()`, `ensureSeededIfEmpty()` и `store.seedDefaultStatuses()` генерируют **новый `uuidv7()`** для каждой строки `SEED_STATUSES` на каждом прогоне, а `applyCloudRowStatuses` дедуплицирует облачную строку **только по `uuid`**; все локальные предохранители — `COUNT(*)==0` по локальной БД, то есть слепы к содержимому облака. Как только у аккаунта возникает **второе поколение сида** (переустановка, второй десктоп, `clearUserData()` + бутстрап free-плана через `ensureSeededIfEmpty()`, `resetDatabase()`), оба поколения оказываются в облаке рядом, и ближайший `pullAll()` вставляет чужое поколение локально → 14 статусов. Ровно тот же класс, что F17/ADR 0011 («одна логическая сущность — два uuid»), только для `statuses`, где fallback-матчинга не было вовсе. «Не всегда и после рестарта» — потому что второе поколение приезжает асинхронным pull'ом за entitlement-гейтом, а не в `initDb()`.
+
+**Вторичный дефект (тоже доказан тестом):** `initDb()` не была реентерабельной в Tauri-ветке (в web есть `if (webDb) return`) — два параллельных вызова на чистой базе успевали пройти `tauriIsEmpty()` до того, как соседний дописал сид (`Promise.all([initDb(), initDb()])` падал с `table statuses has no column named uuid`).
+
+**Фикс (клиентский, без миграций; ADR 0013):**
+
+- `dedupeSeedStatuses()` в `src/lib/db.ts` — детерминированное схлопывание группы `(workspace_id, name)` среди живых `is_seed=1`: выживает **наименьший `uuid`** (uuidv7 монотонен по времени ⇒ старейшее поколение ⇒ все устройства сходятся без координации), `tasks.status_id`/`task_templates.status_id` переезжают на выжившего, проигравшие гасятся **локальным** soft-delete **без `enqueueOutbox`** (прецедент `dedupePersonalWorkspaces`, ADR 0007) с бампом `updated_at`, чтобы LWW следующего pull'а не воскресил тень. Идемпотентна, на здоровой базе — no-op. Вызывается из `initDb()` (обе ветки) и из оркестратора перед каждым `refreshStoreAfterPull(...)`, чтобы дубль схлопывался в том же цикле, в котором приехал.
+- Tombstone-фолбэк в `resolveStatusIdByUuid()` (`src/lib/sync/mappers.ts`): если uuid резолвится только в погашенный сид-tombstone — задача едет на выжившего близнеца. Без этого облачные задачи проигравшего поколения зависли бы в вечном `DeferRowError`.
+- `initDbInFlight` — конкурентные вызовы `initDb()` разделяют один промис.
+
+**Добивка гидрации (тот же класс, что F18).** Проверка списка hydrate-таблиц показала, что через зеркало читаются, но НЕ гидрируются ещё две таблицы: `task_activity_log` (v13 — журнал вкладки «История» исчезал после рестарта до следующего pull) и `workspace_settings` (v11 — хуже: `applyCloudRowSettings` матчит по `(workspace_id, key)` через пустое зеркало → `INSERT` → 2067 на `idx_workspace_settings_ws_key` в нативной БД, ошибка проглочена fire-and-forget'ом → `overdue_mode` пространства молча откатывался к глобальному). Обе добавлены в hydrate-цикл `initDb()`.
+
+**DDL не потребовался, миграция 0041 не создавалась.** `UNIQUE (workspace_id, name)` на `statuses` отвергнут: потребовал бы парной серверной миграции, сломал бы легитимное переименование статусов и превратил pull в жёсткий отказ 2067 вместо мержа (антипаттерн, разобранный в F18).
+
+**Известные ограничения:** у `tags` нет колонки `is_seed`, поэтому дедуп намеренно ограничен статусами (дубли сид-тегов возможны тем же механизмом; лечится DDL — backlog). Проигравшее поколение остаётся в облаке — каждое устройство гасит его у себя локально и идемпотентно; серверная чистка — отдельная задача. **Правило §11.5 арх-дока усилено до §11.6:** hydrate-цикл — список ВСЕХ таблиц, читаемых через зеркало, а не только ws-scoped; пропуск случился уже трижды ⇒ backlog: генерировать список из `KNOWN_TABLES`.
+
+**Верификация:** `src/lib/db.seedStatusDedupe.test.ts` (4 теста) и `src/lib/db.activityHydrate.test.ts` (2 теста) — новые, реальный Tauri-путь с персистентным адаптером и «рестартом», red→green (без фикса 3+2 красных). Тест tombstone-фолбэка добавлен в `src/lib/sync/pull.test.ts`. См. [ADR 0013](../adr/0013-seed-identity-nondeterminism-and-mirror-hydration-gap.md), арх-док §11.6.
+
+### 7.20. UX и эксплуатация: загрузочный оверлей, обновление истории, отключение Sentry, keep-alive (✅ в `feat/workspaces`, 31.07.2026)
+
+Четыре независимых изменения одной волны (без DDL).
+
+**Загрузочный оверлей старта** (`src/components/BootOverlay.tsx`, новый). До этого между `initDb()` и первым pull'ом пространств UI успевал отрисоваться на полупустом состоянии: пустой сайдбар, доска без колонок, «мигание» списка ws — а клик в этот момент попадал в ещё не готовое приложение. Теперь `fixed inset-0` оверлей со спиннером и текстом «Загрузка пространств…» гасит клики и снимается, когда БД готова, авторизация разрешилась И первый sync-цикл дошёл до терминального статуса (`synced`/`error`/`skipped`/`paywalled`). **Никогда не висит вечно** — три предохранителя: grace-таймаут 2.5 с (sync-цикл вообще не стартовал — dev-сборка, нет сети/сессии), hard-таймаут 8 с (что бы ни случилось) и снятие при любой ошибке импорта/подписки на sync. Оверлей одноразовый: сняв его, обратно не показываем, иначе каждый фоновый sync перекрывал бы приложение. Монтируется в `App.tsx` двумя фазами (до раннего return, пока `!ready || auth.loading`, и внутри дерева на время первого pull); в e2e-режиме фаза 2 отключена. Ключи i18n `boot_loading_workspaces` / `boot_loading_hint` в обеих локалях.
+
+**Кнопка обновления истории изменений.** В `TaskActivityLog` и `WorkspaceHistoryTab` добавлена **иконочная** кнопка (`RefreshCw` из уже используемого `lucide-react`, новых зависимостей нет) — без текстовой подписи, с `aria-label`/`title` «Обновить»/«Refresh» для доступности. Дёргает существующий загрузчик стора (`reload()` из `useTaskActivity` / `useWorkspaceActivity`), на время запроса `disabled` + `animate-spin` на иконке — защита от двойного клика.
+
+**Sentry временно выключен** (`src/lib/sentry.ts`, `.env.example`). У проекта закончился бесплатный период, а транспорт Sentry блокировался CSP (в `connect-src` из `src-tauri/tauri.conf.json` доменов Sentry нет) — отсюда CSP-ошибки в консоли и `Uncaught TypeError: Cannot create property '_id' on number 'N'`. Введён kill-switch `VITE_SENTRY_ENABLED` (по умолчанию OFF, принимает только `true`/`1`) и ранний `return` первой строкой `initSentry()`: `Sentry.init` не вызывается вовсе ⇒ SDK не инструментирует `fetch`/XHR/console ⇒ нет ни попыток отправки в заблокированный домен, ни попыток пометить примитив своим `_id`. **Код SDK не удалён** — возврат: `VITE_SENTRY_ENABLED=true` + непустой DSN + домены Sentry в `connect-src` + активная подписка. CSP не менялась.
+
+**Keep-alive `supabase-ping.yml`.** Воркфлоу падал с «Supabase вернул 404»: он пинговал `/rest/v1/tasks`, а таблицы `public.tasks` в облаке нет (задачи живут в локальной SQLite, в Supabase синхронизируются другие сущности) — PostgREST честно отвечал 404. Пинг переведён на корень REST `${SUPABASE_URL%/}/rest/v1/` (отдаёт OpenAPI-схему, не завязан ни на таблицу, ни на RLS), успехом считается **любой 2xx**, добавлены `set -euo pipefail`, обработка сбоя самого `curl` и обрезка тела в лог. Ключи по-прежнему из GitHub Secrets, ничего не захардкожено; другие воркфлоу не тронуты.
+
+---
+
+### 7.21. Авторизация: внятный текст ошибки вместо `{}` + кнопка истории тянет pull с сервера (F20, ✅ в `feat/workspaces`, 02.08.2026)
+
+Два независимых UX-фикса одной волны (без DDL).
+
+**Ошибка регистрации показывалась как `{}`** (`src/components/AuthScreen.tsx`). Корень — серверный: при включённом подтверждении email Supabase пытается отправить письмо через Resend; когда домен SMTP не верифицирован (Resend 550 `domain is not verified`), `POST /signup` возвращает 500 `unexpected_failure` с пустым/объектным `.message`. Старый код `setError(err?.message ?? 'Ошибка авторизации')` рендерил пустой объект как `{}`. Добавлен `normalizeAuthError(err)`: достаёт сообщение из разных форм (`message`/`error_description`/`error`/`msg`), распознаёт частые случаи (неверный логин/пароль, email не подтверждён, уже зарегистрирован, rate-limit/429, серверный 500/сбой отправки письма, сетевые ошибки fetch) → понятный текст в RU/EN, иначе фолбэк-сообщение (никогда не `{}`). Применён в catch signup/signin и Google-логина. **Корневая причина signup-500 — настройка Resend/Supabase (не код):** домен `yourtaskflow.app` потерял верификацию в Resend между 14.07 и 02.08 (статус `Failed` при плановой перепроверке DNS) → отправка встала; до 14.07 письма уходили (test1/test2 подтверждены). Фикс на стороне владельца: либо ре-верифицировать домен в Resend, либо временно выключить Confirm email в Supabase Auth.
+
+**Кнопка обновления истории теперь тянет данные с сервера** (`TaskActivityLog.tsx`, `WorkspaceHistoryTab.tsx`). В §7.20 кнопка дёргала только `reload()` — перечитка **локального зеркала** `task_activity_log`. Журнал пулл-only (пишет серверный триггер, клиент только читает), а зеркало наполняется асинхронным realtime-pull — поэтому, если свежие записи ещё не приехали, `reload()` показывал те же данные («нажимаю — ничего, приходится жать несколько раз»). Теперь `refresh()` сначала дёргает `syncNow()` (полный pull с сервера, наполняет зеркало), потом `reload()`. `syncNow` защищён мьютексом (параллельный sync — тот же promise), спиннер держится весь сетевой цикл (а не только мгновенный reload), ошибка сети не ломает обновление — локальный `reload()` выполняется в `finally`. Тесты `TaskActivityLog.test.tsx`/`WorkspaceHistoryTab.test.tsx` обновлены (мок `syncNow`).
+
+---
+
+### 7.22. Free-аккаунты теряли данные при смене аккаунта — локальное per-account хранилище (F21, ✅ в `feat/workspaces`, 02.08.2026)
+
+Баг (воспроизведён пользователем): аккаунт `test3` (free) → создал задачи → переключился на основной аккаунт → вернулся на `test3` → **пусто**. Данные free-аккаунта исчезали безвозвратно с точки зрения UX.
+
+**Корень (подтверждён кодом).** Два факта пересекаются. (1) Free-план не имеет облачной синхронизации: гейт в `src/lib/sync/index.ts` (~296-315) при `!isProOrTrial(ent)` завершает цикл статусом `paywalled` — ни `pullAll`, ни `pushAll`. (2) Локальная SQLite — одна на **устройство**, а не на аккаунт. Поэтому free-ветка `AccountSwitchGate.tsx` (введена в dev.6.10.3, строки 172-207) при смене аккаунта делает `createSnapshot` → `clearUserData()` → `setBoundUserId(new)` → `reconcilePersonalWorkspace` → сев пустой базы. Данные уходящего аккаунта попадают **только** в общий снимок (`snapshots.ts`), который ротируется (`MAX_SNAPSHOTS = 5`) и восстанавливается исключительно вручную (Настройки → Синхронизация). Автоматического обратного пути нет — при возврате пользователь видит чистую доску с welcome-задачей. Для Pro/Trial/Lifetime проблемы нет: у них смена аккаунта идёт через модалку cloud/local/merge, а источник истины — облако.
+
+**Фикс — «локальное псевдо-облако» per-account, только для free (клиентский, без DDL; ADR 0014):**
+
+- `src/lib/localAccountStore.ts` (новый) — постоянный слот-слепок БД на каждый `user_id`: `saveLocalAccountData` (`db.buildBackup` → JSON), `loadLocalAccountData` (`db.applyBackup(payload,'replace')`), `hasLocalAccountData`. Носитель — `localStorage['taskflow.localstore.v1.<userId>']` **в обоих режимах**: `@tauri-apps/plugin-fs` в проекте не подключён (нет ни в `package.json`, ни в `Cargo.toml`), а новая Rust-команда ради одного JSON несоразмерна — снимки уходят в Rust только потому, что копируют бинарный файл БД и требуют рестарта. Слот — **не снимок**: вне ротации, ровно один на аккаунт, в UI снимков не виден.
+- Free-ветка `AccountSwitchGate.tsx` — новый порядок: `saveLocalAccountData(старый boundUserId)` → `createSnapshot` (страховка оставлена) → `clearUserData` → `setBoundUserId(new)` → `reconcilePersonalWorkspace(new)` → `loadLocalAccountData(new)`; если восстановили — **не сеем**, тост «Восстановлены локальные данные этого аккаунта», иначе прежний сев + прежний тост. Два порядковых требования: слот уходящего пишется под **старым** `boundUserId` и **до** `clearUserData`; восстановление идёт **после** реконсиля, потому что `applyBackup` штампует строки текущим `current_workspace_id` (`db.ts` ~1640-1646), который выставляет как раз реконсиль — иначе восстановленные строки выпали бы из ws-scoped выборок UI (тот же класс, что регрессия Wave A PR-3).
+- `src/lib/useLocalAccountAutosave.ts` (новый хук, монтируется в `App.tsx` после `ready`) — активная free-сессия сама сбрасывает состояние в слот: подписка на `useStore` без ререндера App, дебаунс 30 с по `tasks`/`tags`/`statuses`, немедленная запись на `beforeunload`/`visibilitychange→hidden`. Нужен, потому что уйти с аккаунта можно и мимо гейта (краш, убитый процесс).
+
+**Инварианты (проверены тестами):** pro/trial/lifetime-ветка не изменена ни на строку; слот **никогда** не читается для Pro (источник истины — облако, мёртвый слот после апгрейда free→Pro безопасен); изоляция строго по `user_id`; пустой дамп (состояние сразу после `clearUserData`) не затирает живой слот. **Серверных миграций нет, `erd.md` не менялся.**
+
+**Известные ограничения:** `applyBackup` ставит восстановленные строки в `sync_outbox` — у free очередь просто копится локально (чип скрыт для статуса `paywalled`, P2 из §7.10) и уедет в облако первым `syncNow()` после апгрейда до Pro; слоты не удаляются автоматически (в т.ч. при «Стереть все данные») — компромисс в пользу сохранности; в Tauri событие закрытия окна (`onCloseRequested`) не перехватывается, поэтому при жёстком закрытии теряются изменения последних ≤30 с.
+
+**Верификация:** `src/lib/localAccountStore.test.ts` (новый, 9 тестов: roundtrip, изоляция по `userId`, replace-семантика, отсутствующий/битый/пустой слот) и `src/components/AccountSwitchGate.test.tsx` (+4 теста блока F21: порядок save→clear по `invocationCallOrder`, восстановление без сева, сев без слота, pro-ветка не трогает слот). Полный прогон — 74 файла / 630 тестов зелёные, `tsc --noEmit` чист. См. [ADR 0014](../adr/0014-free-tier-local-account-store.md).
+
+---
+
+### 7.23. Слот free-аккаунта не сохранял пространства — второе личное пространство пропадало и задачи смешивались (F28, ✅ в `feat/workspaces`, 03.08.2026)
+
+Баг (воспроизведён пользователем): free-аккаунт создаёт **второе личное пространство** вручную (кнопка «Новое личное пространство», `createWorkspace('personal')`), переключается на другой аккаунт и возвращается. Второе пространство пропадает из сайдбара, задачи из разных пространств оказываются смешаны в одном.
+
+**Промежуточный этап (F22–F27, ОТКАЧЕН).** Шесть последовательных патчей пытались чинить это в слое `reconcile`/`dedupe`/порядка вызовов вокруг `AccountSwitchGate` — подстройка `dedupePersonalWorkspaces`, доп. проверки при восстановлении, транзакционность restore и т.п. Все шесть решали не тот слой: пока сам слот (§7.22, F21) не несёт данных о пространствах, любая правка вокруг него лечит симптом и ломается на следующем сценарии. Пользователь зафиксировал потерю доверия после 6 неудачных патчей подряд и потребовал «убирать сломанный слой, не строить костыль поверх». Все патчи F22–F27 отменены, код возвращён к состоянию F21 (`8a94bdb`); номера ADR 0015–0020, которые они бы заняли, зарезервированы и не публикуются.
+
+**Корень (доказан по коду, тот же слой, что F21).** Два факта в `src/lib/db.ts`, оба существовали с момента введения слота (§7.22): (1) `buildBackup(include)` не читает `workspaces`/`workspace_members` — слот `localAccountStore.saveLocalAccountData()` вызывал `db.buildBackup({tasks, tags, statuses})` без пространств, поэтому слепок **никогда** не содержал строк пространств/членства; (2) `applyBackup(payload, 'replace')` штампует ВСЕ восстановленные строки одним `importWsId` (текущий `current_workspace_id` на момент восстановления) — корректно для легаси-бэкапов без понятия `workspace_id`, но схлопывает разные пространства в одно при восстановлении из workspace-осведомлённого слота. Итог цепочки: второе пространство никогда не попадает в дамп → при восстановлении новой строки `workspaces` просто нет → `dedupePersonalWorkspaces` (ADR 0007, §7.13) не имеет отношения к причине — он корректно работает с тем неполным состоянием, которое ему подаёт слот, и не может отличить «второе пространство, которое ещё не восстановлено» от настоящего осиротевшего мусора. Правка в нём не делалась.
+
+**Фикс — сделать слот workspace-aware (тот же минимальный слой, ADR 0021):**
+
+- `src/lib/db.ts`: `BackupPayload` получил опциональные поля `workspaces?`/`workspace_members?` — их присутствие в payload (а не отдельный флаг) сигнализирует `applyBackup`, что бэкап workspace-aware; отсутствие = легаси-формат без изменений в поведении. `buildBackup(include)` принял `include.workspaces` (по умолчанию `false`, снимки/экспорт не затронуты). `applyBackup` восстанавливает `workspaces`/`workspace_members` до задач/статусов/тегов, и для каждой строки берёт `workspace_id` из неё самой (`resolveWsId`) вместо повсеместной штамповки `importWsId`; `importWsId`-фолбэк остаётся только для легаси-бэкапов и строк без собственного `workspace_id`.
+- `src/lib/localAccountStore.ts`: `saveLocalAccountData` теперь вызывает `db.buildBackup({..., workspaces: true})`. `loadLocalAccountData` не изменена — `applyBackup` сама распознаёт workspace-aware payload.
+- `dedupePersonalWorkspaces` (`src/lib/sync/workspace.ts`) **не изменена** — после workspace-aware restore второе пространство приходит вместе со своей строкой членства, дедуп его не трогает, как и задумано в ADR 0007.
+
+**Верификация:** `src/lib/db.workspaceAwareBackup.test.ts` (новый, 4 теста: workspace-aware roundtrip с сохранением `task.workspace_id`; легаси-бэкап без `workspaces` не меняет поведение; два личных пространства переживают `save→load` слота без смешивания задач; `dedupePersonalWorkspaces` не гасит второе пространство после restore) + обновлённый `src/lib/localAccountStore.test.ts` (новый кейс: `saveLocalAccountData` вызывает `buildBackup` с `workspaces: true`; 9 существующих тестов не изменены). См. [ADR 0021](../adr/0021-free-slot-workspace-aware.md).
+
+---
+
+### 7.24. F28 обнажил старый рассинхрон legacy `workspace_id='ws_local'` — первое личное пространство показывало пустой список задач (F29, ✅ в `feat/workspaces`, 03.08.2026)
+
+Баг (воспроизведён пользователем): после смены free-аккаунта и обратно первое личное пространство «Мои задачи» показывает **пустой список**, хотя счётчик в сайдбаре = 3 и статистика видит задачи. Второе личное пространство («новая») цело.
+
+**Корень (доказан по коду, тот же слой, где и F28, но другая граница).** Пересечение двух фактов, оба существовали до F28/F29: (1) `reconcileLocalPlaceholder` (`src/lib/sync/workspace.ts:301`) переклеивает `ws_local → ws_<uid>` (`computeWorkspaceId`) только в живой БД на момент вызова — задачи, уже сохранённые в слоте (§7.22, F21) со старым `workspace_id='ws_local'`, лежат в JSON-дампе, а не в живой базе — переклейка их не видит. (2) `filterByWorkspace` (`src/store/workspaceScope.ts:70`, единственный путь чтения в UI) фильтрует строго по равенству `workspace_id===currentWorkspaceId`. После reconcile активное пространство = детерминированный `ws_<uid>`, а legacy-задача несёт `ws_local` — не совпадает, выпадает из UI-выборки. Счётчики/статистика не ws-scoped — видят те же строки. До F28 старый `applyBackup` штамповал все восстановленные строки единым `importWsId` — legacy-задачи случайно совпадали с активным ws и были видны (ценой смешивания с другими пространствами — именно это чинил F28). F28 убрал смешивание и тем самым обнажил рассинхрон, раньше скрытый тем же багом. `reconcileLocalPlaceholder`/`filterByWorkspace`/`dedupePersonalWorkspaces` не тронуты и не являются причиной — каждый корректно выполняет свою узкую задачу.
+
+**Фикс (узкий, в том же слое, где и F28; ADR 0022):** в `applyBackup` (`src/lib/db.ts`), только в workspace-aware режиме, `resolveWsId` дополнена проверкой: если исходный `workspace_id` строки входит в множество `uuid` восстановленных `payload.workspaces` — оставляет как есть (F28-поведение); если нет (legacy/сирота, напр. `ws_local`) — переназначает на канонический personal: `settings.current_workspace_id` если он в восстановленном наборе, иначе personal-строка с наименьшим `sort_order` (первое созданное личное, «Мои задачи», `sort_order=0`). Второе личное (`sort_order>=1`) никогда не выбирается как canonical, его собственные (валидные) задачи никогда не переназначаются (валидные `workspace_id` не трогаются вовсе). `db.ts` не получает зависимости от `sync/workspace.ts` (никакого `computeWorkspaceId` в `db.ts`) — достаточно settings-указателя, который уже использовался как `importWsId`-фолбэк. Легаси-бэкапы без `payload.workspaces` не затронуты вовсе (`isWorkspaceAware === false` — поведение не изменилось ни на строку).
+
+**Верификация:** новый `src/lib/db.f29LegacyWsNormalize.test.ts` (4 теста: legacy roundtrip — `ws_local`-задача склеивается с canonical personal (`sort_order=0`), второе пространство не тронуто; не-legacy задачи не переназначаются; два личных без legacy-строк не смешиваются, normalize no-op; легаси-бэкап без `payload.workspaces` не нормализуется) + прогнан `src/lib/db.workspaceAwareBackup.test.ts` (F28) — остался зелёным без изменений. `tsc --noEmit` чист. Build НЕ запускался (OOM-ограничение среды). См. [ADR 0022](../adr/0022-restore-legacy-ws-normalize.md).
+
+---
+
+### 7.25. Free-авто-restore при пустом localStorage-слоте терял данные вместо восстановления из надёжного файлового снимка (F30, ✅ в `feat/workspaces`, 03.08.2026)
+
+Баг (диагностирован до воспроизведения пользователем по коду, `f30_root_cause.md`): при входе в free-аккаунт (`AccountSwitchGate.tsx:197-201` на HEAD `24b64c4`) единственный авто-источник восстановления — localStorage-слот (`loadLocalAccountData`, введён в §7.22/F21); если он пуст — сеется welcome-задача, без попытки взять данные из файлового снимка `before_account_switch`, который создаётся на каждой смене аккаунта (та же строка §7.22) и восстанавливается только вручную через Настройки → Синхронизация. localStorage на практике менее надёжен, чем файл на диске: `saveLocalAccountData` может тихо провалиться (переполнение, приватный режим, WebView-профиль) — раньше это никак не логировалось.
+
+**Корень.** Не баг в классическом смысле, а архитектурный пробел из [ADR 0014](../adr/0014-free-tier-local-account-store.md) (F21): альтернатива C (авто-restore из файлового снимка) была тогда explicit-отклонена из-за обязательного перезапуска в Tauri (замена открытого `data.db` на лету невозможна). Слот был выбран единственным авто-источником, а файловый снимок остался чисто ручным fallback'ом. Пользователь явно принял компромисс один перезапуск на смене аккаунта ради сохранности данных и потребовал пересмотреть это решение именно в эту сторону.
+
+**Фикс (пересматривает альтернативу C из ADR 0014; новый ADR 0023):** в `AccountSwitchGate.tsx`, free-ветвь, после `setBoundUserId(sessionUserId)` + `reconcilePersonalWorkspace(sessionUserId)`: (1) как и раньше, сначала пробуется localStorage-слот (`loadLocalAccountData`) — быстрый и приоритетный путь, без изменений контракта; (2) если слот пуст — новая функция `findLatestAccountSnapshot(sessionUserId)` ищет в `readRegistry()` последний непустой снимок `label==='before_account_switch'` с `boundUserId===sessionUserId` (непустота оценивается по `taskCount>0`, легаси-фолбэк по `size>4096`); если найден — вызывается уже существующий `restoreSnapshot(id)` (`snapshots.ts`, не изменён); (3) если от `restoreSnapshot` пришёл `needsRestart:true` (Tauri) — welcome НЕ сеется, выставляется флаг `restartAfterAutoRestore` и показывается `ConfirmDialog` с кнопкой перезапуска (тот же паттерн, что `Settings.tsx` → `handleRestoreSnapshot`/`restartAfterRestore`/`invoke('restart_app')`); (4) если ни слот, ни снимок не найдены — сеется welcome, как и раньше. В web `restoreSnapshot` возвращает `needsRestart:false` (применяет JSON через `applyBackup` синхронно, без рестарта). Pro/Trial не затронуты — весь код внутри `!isProOrTrial(ent)`-ветви. Ни `snapshots.ts`, ни `localAccountStore.ts` не изменены — правка целиком в `AccountSwitchGate.tsx`, без нового слоя поверх существующего слота (требование простоты/надёжности). Побочная правка: результат `saveLocalAccountData(check.boundUserId)` (слот уходящего аккаунта) теперь проверяется — при `false` пишется `logger.warn` (раньше результат отбрасывался).
+
+**Верификация:** новый `src/components/accountSwitchRestore.test.tsx` (6 тестов: 4 обязательных сценария из брифа F30 — слот восстанавливает, снимок восстанавливает когда слот пуст, сев когда ни слота ни снимка нет, пустой снимок не восстанавливается — + 2 доп. edge-кейса: снимок уходящего аккаунта игнорируется, выбирается самый свежий из нескольких кандидатов) + обновлён `src/components/AccountSwitchGate.test.tsx` (добавлены моки `readRegistry`/`restoreSnapshot`, 9 существующих тестов остались зелёными). Полный прогон: `AccountSwitchGate.test.tsx` (9/9) + `accountSwitchRestore.test.tsx` (6/6) + `localAccountStore.test.ts` (10/10) + `snapshots.test.ts` (16/16) — все зелёные. `tsc --noEmit` чист. Build НЕ запускался (OOM-ограничение среды). См. [ADR 0023](../adr/0023-free-restore-from-file-snapshot.md).
+
+### 7.26. Смена аккаунта оставляла in-memory `currentWorkspaceId` залипшим от предыдущего free-аккаунта — задачи не показывались при верном счётчике (F31, ⚠️ реализовано, тесты зелёные, ждёт ручную проверку, в `feat/workspaces`, 03.08.2026)
+
+Симптом (стабильно воспроизводился у пользователя): free-пользователь переключает аккаунт → задачи не показываются в списке, хотя счётчик в сайдбаре и статистика показывают верное число. Pro не затронут (облачная синхронизация).
+
+**Корень (подтверждён по реальным данным пользователя `data.db`+`taskflow-4.log` от 03.08.2026 и коду):** все страницы фильтруют задачи по in-memory `currentWorkspaceId` через ws-scoped хуки (`useCurrentWorkspace*` в `workspaceScope.ts`, см. комментарий в `useStore.ts:130-133`). Холодный старт (`init()`) работает: перечитывает `current_workspace_id` из settings, валидирует его против набора `workspaces`, иначе падает на `pickDefaultWorkspaceId`, и персистит обратно при расхождении. Но путь смены аккаунта (`AccountSwitchGate.tsx` → `reloadAccountBinding()` + `refresh()`) так не делал: `refresh()` заливает все задачи/статусы/теги, но не трогает `currentWorkspaceId`; `reloadAccountBinding()` вызывает `loadWorkspaces()`, а тот подтягивает `current_workspace_id` только если он валиден в новом наборе и отличается от in-memory, а затем `setWorkspaces()` может сбросить его на `pickDefaultWorkspaceId`, если старый in-memory id от предыдущего аккаунта ещё присутствует в новом списке — порядок/синхронность ненадёжны, `currentWorkspaceId` в памяти остаётся залипшим от старого аккаунта или уезжает на неверный дефолт. Итог: ws-scoped фильтр прятет верные задачи, хотя статистика/счётчик (считают иначе) показывает верное число. Слот free-аккаунта (F21) восстанавливается правильно (подтверждено логом) — это НЕ тот же баг, что чинили F28–F30, и та ветка этим фиксом не тронута.
+
+**Фикс (ADR 0024, минимальный, без новых слоёв):** логика выбора текущего workspace из `init()` вынесена в переиспользуемый чистый helper `hydrateCurrentWorkspaceId(workspaces)` (`src/store/useStore.ts:414-445`) — читает `current_workspace_id` из settings, валидирует его против переданного набора `workspaces`, иначе `pickDefaultWorkspaceId`, персистит обратно при расхождении. `init()` теперь вызывает его (поведение не изменилось — чистый рефактор). `reloadAccountBinding()` (`src/store/useStore.ts:781-794`) теперь вызывает тот же helper ПОСЛЕ `loadWorkspaces()` и синхронно выставляет `currentWorkspaceId` + `overdueMode` через `set()`. Путь смены аккаунта становится идентичен холодному старту. `AccountSwitchGate.tsx` (restore-логика слота/F30-снимка), `localAccountStore.ts` и `snapshots.ts` не тронуты.
+
+**Верификация:** новый тест в `src/store/useStore.test.ts` (группа `reloadAccountBinding гидрирует currentWorkspaceId (F31)`) воспроизводит баг: заливший `currentWorkspaceId='ws_STALE_from_prev_account'` после `reloadAccountBinding()` гидрируется в `ws_A` (из settings), и ws-scoped `filterByWorkspace` теперь возвращает обе задачи аккаунта. Полный прогон (`vitest run src/store/useStore.test.ts src/store/useStore.integration.test.ts src/components/AccountSwitchGate.test.tsx src/components/accountSwitchRestore.test.tsx`): **36/36 зелёных** (включая новый тест; useStore.test.ts теперь 11 вместо 10). `tsc --noEmit` чист. Build НЕ запускался (OOM-ограничение среды). См. [ADR 0024](../adr/0024-hydrate-current-workspace-on-account-switch.md).
+
+**⚠️ Статус:** реализовано, тесты зелёные — ждёт ручную проверку на реальных данных пользователя перед подтверждением, что баг устранён.
+
+---
+
+### 7.27. `applyBackup` перепривязывал task.status_id к статусу из ЧУЖОГО workspace на restore — доска пустая при верном счётчике (F32, ⚠️ реализовано, тесты зелёные, ждёт ручную проверку, в `feat/workspaces`, 03.08.2026)
+
+Симптом (5-я+ попытка починить тот же класс жалобы, что F28–F31): free-пользователь переключает аккаунт → доска/список задач пуст, хотя счётчик в сайдбаре и статистика показывают верное число. Данные при этом целы в БД.
+
+**Корень (доказан на реальной `data.db` пользователя от 03.08.2026 и коду, HEAD `9c6cdc2`):** активное `current_workspace_id = ws_ca1290fe...` («Мои задачи») содержит 2 задачи с `status_id=4` и `status_id=8`, но эти статусы принадлежат ДРУГОМУ пространству `ws_019fc541...` (new test3). Доска рендерит колонки по статусам ТЕКУЩЕГО ws → задачи с чужим status_id не находят колонку → невидимы; счётчик считает по `workspace_id` задачи (не статуса) → показывает верное число. В `src/lib/db.ts` `applyBackup()` статусы восстанавливаются workspace-aware (через `resolveWsId`, верно, F28), но перепривязка `task.status_id` использовала `Map statusByName` с ключом ТОЛЬКО `name.toLowerCase()`, без workspace. Оба пространства несут одноимённые seed-статусы («Сегодня», «Взять в работу») — последняя запись в карте перетирала предыдущую, задача из ws A получала status_id статуса из ws B → MISMATCH (подтверждено SQL-проверкой на data.db пользователя).
+
+**Фикс (ADR 0025, точечный, без новых слоёв):** ключ мапы перепривязки стал workspace-aware — `statusByWsName`/`tagByWsName` с ключом `${workspace_id}|${name.toLowerCase()}`, где workspace_id берётся из payload и прогоняется через ТУ ЖЕ `resolveWsId`, что и при вставке statuses/tags. Старая по-имени мапа оставлена как fallback для легаси-бэкапов без `workspace_id` у статусов/тегов. Дополнительно добавлена идемпотентная `repairTaskStatusWorkspaceMismatch()` (`src/lib/db.ts`) — один `UPDATE`, чинит УЖЕ испорченные на диске связки (перепривязывает на одноимённый статус СВОЕГО ws задачи), никогда не удаляет задачи, вызывается в `src/store/useStore.ts` `init()` после `db.initDb()` и до `refresh()`. Слот (`localAccountStore.ts`), `AccountSwitchGate.tsx`, F30 file-snapshot fallback, F31 `currentWorkspaceId`-гидрация, схема/миграции — не тронуты.
+
+**Верификация:** новые тесты в `src/lib/db.applyBackup.test.ts` (2 теста: 2 ws с одноимёнными статусами разных id → задача каждого ws получает status_id СВОЕГО ws; легаси-бэкап без workspace_id работает как раньше) и новый файл `src/lib/db.repairTaskStatusWorkspaceMismatch.test.ts` (3 теста: ремонт MISMATCH, идемпотентность, отсутствие одноимённого статуса → задача не удаляется). Полный прогон `src/lib/`, `src/store/`, `src/components/` (73 файла / 611 тестов) — **все зелёные**. `tsc --noEmit` чист. Build НЕ запускался (OOM-ограничение среды). См. [ADR 0025](../adr/0025-restore-status-remap-workspace-aware.md).
+
+**⚠️ Статус:** реализовано, тесты зелёные — ждёт ручную проверку на реальных данных пользователя перед подтверждением, что баг устранён.
+
+---
+
+## 8. Что этот аудит покрыл, а что нет
+
+Границы первого аудита 09.07.2026 (обновляется при последующих аудитах, если их будет несколько).
+
+**Покрыто:**
+- Полная карта архитектуры и точек интеграции сервисов (раздел 2), с точными код-локейшнами.
+- Регрессионная проверка **конкретно** для 4 известных багов синхронизации из dev.6.10.0 (раздел 4) — не сломались.
+- Целевой аудит безопасности и платежей: секреты, RLS/GRANT, вебхуки, идемпотентность, авторизация (раздел 5).
+- Каталог скрытых межмодульных связей (раздел 3) — целенаправленный поиск "мест, где легко забыть про вторую половину изменения", по аналогии со случаем statuses/tags.
+- Точечная проверка по коду (не по документации) трёх решений из дизайн-дока dev.6.5: письма при recurring (частично не хватает одной ветки), reactivate-toggle (работает, но блокируется F1), update-card за 1₽ (работает целиком).
+
+**НЕ покрыто — это отдельная большая задача, если нужна:**
+Полный построчный аудит **каждой** фичи (канбан, календарь, шаблоны, импорт/экспорт, онбординг, кастомные темы и т.д.) на соответствие тому поведению, которое изначально задумывалось — а не только "фича существует и код на месте". Сделанные аудиты целенаправленно проверяли известные проблемные зоны (sync, платежи, безопасность) и искали скрытые связи, а не сверяли весь функционал построчно со спецификацией. Если нужен такой полный функциональный аудит — это отдельный объёмный проход (по сути, сквозной QA каждого экрана/флоу против исходного замысла), который стоит делать отдельным заходом, а не как часть текущего.
+
+---
+
+## Приложение А. Полная таблица миграций Supabase
+
+> Файлы `0001`–`0026` (платежи/профиль) применены на проде на 12.07.2026. Файлы `0027`–`0038` — эпик «Пространства» (Wave A/B/C + hotfix + P3), живут в `feat/workspaces`; статус применения на прод указан в строке каждой миграции. Историю строк не переписываем — новые миграции дописываются в конец таблицы (см. `roadmap-guidelines.md`).
+
+| # | Файл | Суть |
+|---|------|------|
+| 0001 | init | `profiles` + `usage_events`, триггеры, own-row RLS |
+| 0002 | sync_schema | Все `sync_*` таблицы, UUIDv7 PK, soft-delete/version, realtime |
+| 0003 | harden_functions | `search_path` для SECURITY DEFINER, revoke EXECUTE |
+| 0004 | optimize_rls_and_indexes | `auth.uid()` → `(select auth.uid())`, индексы |
+| 0005 | server_updated_at_triggers | Серверные BEFORE-UPDATE триггеры (LWW) |
+| 0006 | realtime_overdue | `sync_overdue_events` в realtime |
+| 0007 | entitlements | `user_entitlements`, `activation_requests`, `payment_events` — **триггер GRANT-инцидентов** |
+| 0008 | activation_notified_at | Идемпотентность `activation-notify` |
+| 0009 | admin_seed | Grandfathered-admin lifetime |
+| **0010** | grant_service_role_on_payment_tables | **Фикс инцидента №1** |
+| **0011** | grant_authenticated_select_on_entitlements | **Фикс инцидента №2** |
+| **0012** | grant_authenticated_on_sync_and_profiles | **Фикс инцидента №3** |
+| 0013 | revoke_execute_on_trigger_functions | Revoke EXECUTE на 4 триггер-функции |
+| 0014 | payment_methods_and_recurring | `payment_methods` + `renewal_attempts_log`, автопродление — **источник F1/F2/F3 (старые имена колонок)** |
+| 0015 | pg_cron_recurring | Часовой pg_cron |
+| 0016 | schema_code_alignment | Досыпка колонок под код функций — **не все места чтения переведены, см. F2/F3** |
+| 0017 | admin_rpc | SECURITY DEFINER RPC для admin-панели |
+| 0018 | pg_cron_renew | pg_cron/pg_net через Vault |
+| 0019 | cron_new_apikey_auth | Cron на apikey + x-cron-secret |
+| **0020** | wave2_security_hardening | **Wave 2 (✅ ПРИМЕНЕНО НА ПРОД 2026-07-10):** N4/N5 — `security_invoker=on` + REVOKE на view `admin_users_summary`/`sync_status_summary`; N12 — `WITH CHECK` для `profiles_update_own`; N15 — admin-гейт `is_admin_user()` в `get_users_emails` (см. ADR 0002) |
+| **0021** | revoke_default_privileges_footgun | **Wave 3 (✅ ПРИМЕНЕНО НА ПРОД 2026-07-10):** N6 — откат `ALTER DEFAULT PRIVILEGES` из 0010/0011; будущие таблицы больше не получают a/r/w автоматически. pgTAP `01_grants_test.sql` расширен future-table probe |
+| **0022** | wave4_fix_function_search_paths | **Wave 4 PR-A (✅ ПРИМЕНЕНО НА ПРОД 2026-07-11):** N18 — фиксация `SET search_path` у public-функций без явного search_path (advisor `function_search_path_mutable`) |
+| **0023** | wave4_move_pg_net | **Wave 4 PR-A (🟡 ПРИМЕНЕНО НА ПРОД 2026-07-11, частично):** N17 — идемпотентная попытка `ALTER EXTENSION pg_net SET SCHEMA extensions` (в EXCEPTION-обёртке). На проде pg_net **остался в `public`** (non-relocatable) — known-limitation, риска нет (API в схеме `net`) |
+| **0024** | wave4_rate_limits | **Wave 4 PR-B (✅ ПРИМЕНЕНО НА ПРОД 2026-07-11):** N13 — таблица `rate_limits` + RPC `check_rate_limit` (SECURITY DEFINER, атомарный INSERT..ON CONFLICT, EXECUTE только service_role) + cron `rate-limits-cleanup` (`*/5`). RLS deny-by-default. Применена в 2 части (pg_cron уже установлен). См. ADR 0004 |
+| **0026** | profile_customization | **Post-v1.0.2 (✅ ПРИМЕНЕНО НА ПРОД 2026-07-12):** Кастомизация профиля — новые колонки `profiles`: `public_user_id` (text UNIQUE NOT NULL, `TF-XXXXXX`), `nickname` (≤32), `avatar_variant` (smallint 1..8 DEFAULT 1), `bio` (≤160) + CHECK-ограничения. Функции `gen_public_user_id()` (алфавит без I/L/O/0/1) + `assign_public_user_id()` (retry ≤10). Обновлён `handle_new_user` (проставляет public ID новым). Backfill всем + `SET NOT NULL`. Guard-триггер `profiles_guard_immutable` (запрещает менять `id`/`public_user_id`). REVOKE EXECUTE на новые функции. Добавлен DEFAULT `public_user_id = assign_public_user_id()` — прямые INSERT (в т.ч. тестовые, без триггера) получают ID автоматически. `profiles` НЕ в sync — upsert/conflict не затронут. Проверено: 4/4 backfill, guard блокирует перезапись. **PR [#73](https://github.com/danny-swan/taskflow-app/pull/73) — ✅ СМЁРЖЕН (squash `7db27a6`) 12.07.2026.** pgTAP `08_profile_test.sql` `plan(24)`, весь набор зелёный |
+| **0027** | workspaces_foundation | **Пространства Wave A (`feat/workspaces`):** база многопространственной модели — `sync_workspaces` + `sync_workspace_members`, `workspace_id` на всех sync-таблицах, бэкфилл, доступ через `has_workspace_role(...)`/`owns_workspace(...)` (STABLE SECURITY DEFINER), check-гард `block_shared_workspaces`. См. §7.5 |
+| **0028** | workspace_management | **Пространства Wave A:** CRUD пространств, self-leave + триггер `assert_at_least_one_owner` (защита последнего owner'a), гард `block_personal_workspace_delete` (изначально — любое personal неудаляемо; переопределён в 0036) |
+| **0029** | workspace_limits | **Пространства Wave A (PR-5):** тарифные лимиты — триггер `enforce_workspace_limit` + `get_workspace_limit` (Free=2 / Pro=7). pgTAP `11_workspace_limits_test.sql`. См. §7.5 |
+| **0030** | workspace_id_fk_cascade | **Пространства Wave B (b-01):** FK + `ON DELETE CASCADE` для всех таблиц с `workspace_id`; снят guard `block_shared_workspaces`; orphan-scan. `workspace_id` остаётся `text` (id `ws_<hex>` не кастуется в uuid — см. ADR 0005). pgTAP `13`. См. §7.6 |
+| **0031** | workspace_rls_roles | **Пространства Wave B (b-02):** ролевые RLS 8 таблиц к единой схеме имён `<table>_<op>_ws_role` + `COMMENT ON POLICY`. editor пишет задачи, viewer SELECT-only, owner — всё. pgTAP `14`. См. §7.6 |
+| **0032** | workspace_invites | **Пространства Wave B (b-03):** таблица `sync_workspace_invites` (статусы pending/accepted/rejected/expired/cancelled); helper `lookup_user_by_public_id(text)` (TF-ID → uid); RPC `invite_to_workspace`/`accept_invite`/`reject_invite`/`cancel_invite` + `expire_invites()` (все SECURITY DEFINER); мутация только через RPC (insert/update/delete_deny). pgTAP `15`. См. §7.6 |
+| **0033** | fix_overdue_events_updated_at | **Пространства Wave B (b-06, живой баг):** снят ошибочно навешанный 0005 триггер `trg_set_updated_at` с append-only `sync_overdue_events` (у таблицы нет `updated_at` → любой UPDATE-on-conflict падал). pgTAP `14` `plan(103)→106`, новый `16`. См. §7.6 |
+| **0034** | task_activity_log | **Пространства Wave C (c-03):** immutable append-only `sync_task_activity_log` (RLS SELECT членам, insert/update/delete deny), серверный SECURITY DEFINER-триггер `log_task_activity()` на `sync_tasks`, гейт `kind='shared'`. Первая pull-only sync-сущность. pgTAP `17`. См. §7.7 |
+| **0035** | editor_readonly_reference_data | **Пространства Wave B (Bug #5):** write-политики (INSERT/UPDATE/DELETE) на `sync_statuses`/`sync_tags`/`sync_task_templates` с `editor` → `owner` (справочники меняет только owner; editor правит только сами задачи). SELECT остаётся `viewer`. `sync_tasks`/`sync_task_hold_periods` не тронуты |
+| **0036** | deletable_extra_personal_workspaces | **Пространства Wave B (Bug #3):** `block_personal_workspace_delete()` переопределён — неудаляемо только ПЕРВОЕ (системное) personal-пространство с детерминированным ID `ws_<hex(owner_id)>`; дополнительные personal (лимит 2) удаляемы с каскадом. pgTAP `10` `plan(24)` |
+| **0037** | owner_bootstrap_rls_upsert | **Пространства hotfix (✅ ПРИМЕНЕНО НА ПРОД 15.07.2026 через execute_sql; PR [#103](https://github.com/danny-swan/taskflow-app/pull/103), OPEN → feat/workspaces):** фикс 403 при первом upsert нового пространства. Корень: PostgREST-upsert (`INSERT...ON CONFLICT...RETURNING *`) применяет SELECT-политику к возвращаемой строке; у нового ws членства ещё нет → SELECT=false → 42501/403. Фикс: узкое bootstrap-окно — новые функции `is_workspace_bootstrap(text,uuid)` (владелец + ещё нет членства) и `workspace_has_active_members(text)` (SECURITY DEFINER, против утечки stale-owner). SELECT/UPDATE на `sync_workspaces` += инлайн `owner_id=auth.uid() AND NOT workspace_has_active_members(id)`; дочерние/settings/activity_log(SELECT) += `is_workspace_bootstrap(workspace_id,uid)`. Роли (0031/0035) не меняются. pgTAP `18` + выравнены `14`/`10`. Клиент: миграция v14 (сброс застрявших по RLS/403 outbox-строк). См. §5 (F7) и §7.8 |
+| **0025** | task_hold_periods | **Post-v1.0.1 (✅ ПРИМЕНЕНО НА ПРОД 2026-07-12, version `20260712112352`):** F6 — таблица `public.sync_task_hold_periods` (локальное имя в SQLite — `task_hold_periods`), колонки: id/task_id/user_id/started_at/ended_at/created_at/updated_at/deleted_at/version/client_id + RLS own-row + GRANT authenticated (SELECT/INSERT/UPDATE) + BEFORE-UPDATE trigger `updated_at` + realtime + индексы (`task_id`, `user_id`, частичный `WHERE ended_at IS NULL`) + идемпотентный бэкфилл для тасков в текущем статусе «Приостановлено» (INSERT одной открытой строки с `started_at = tasks.updated_at`). Клиент (PR #72) — единственный автор интервалов (серверного триггера нет). Покрыто pgTAP `07_task_hold_periods_test.sql`. Клиент (PR #72) уехал на прод-юзеров с [выпуском v1.0.2](https://github.com/danny-swan/taskflow-app/releases/tag/v1.0.2) 12.07.2026 (см. раздел 7.4). Схема на проде готова, клиент пушит интервалы со своей стороны |
+| **0038** | accept_invite_limit_by_plan | **Пространства P3 (✅ ПРИМЕНЕНА НА ПРОД 21.07.2026 через apply_migration; PR [#105](https://github.com/danny-swan/taskflow-app/pull/105) → feat/workspaces, merge `a212fbe`):** `CREATE OR REPLACE public.accept_invite` — лимит на ПРИЁМ чужого инвайта теперь только по ПЛАНУ (`get_workspace_limit(uid,'shared') <= 0` → `22023 'shared workspaces require a paid plan'`), а НЕ по числу членств. Корень: в 0032 счётчик `count(все членства)` включал членство-owner каждого СВОЕГО ws (0027) → платный с ≥7 своими ws не мог принять приглашения. Платные принимают любое число инвайтов; free блокируется. Сохранены: target-only/pending/не истёк, атомарные invite→accepted + INSERT членства, SECURITY DEFINER, GRANT/REVOKE. Клиент-часть P3 (create-гейт — только владеемые) — без DDL. pgTAP `15`/`16` расширены (C11–C14, D2). См. §5 (F11) и §7.11 |
+| **0040** | accept_invite_upsert_membership | **F15 (✅ ПРИМЕНЕНО НА ПРОД 2026-07-22 через apply_migration; ветка `feat/workspaces`, ADR 0009):** `CREATE OR REPLACE public.accept_invite` — вместо голого INSERT `INSERT ... ON CONFLICT (workspace_id, user_id) DO UPDATE`: реактивация soft-deleted строки членства (`deleted_at=null`, `role=EXCLUDED.role`, `invited_by=EXCLUDED.invited_by`, `joined_at=now()`, `updated_at=now()`, `version=coalesce(version,0)+1`). `id` (uuid membership-строки) НЕ переписывается — сохранение uuid критично для клиентского pull-matcher (`applyCloudRowMembers`). Корень: 0032/0038 делали голый INSERT; unique-индекс `sync_workspace_members_workspace_id_user_id_key` покрывает `(workspace_id, user_id)` без `WHERE deleted_at IS NULL` → повторный accept после leave падал 23505 (HTTP 409). Прочие проверки (target-only/pending/не истёк/тарифный гейт по плану) сохранены; SECURITY DEFINER, search_path, GRANT/REVOKE не меняются. pgTAP `20_accept_invite_reactivation_test.sql` (план 6). Прод-проба под ROLLBACK подтвердила реактивацию. См. §5 (F15) и §7.15 |
+| **0039** | admin_users_summary_rpc | **P4/F12 (✅ ПРИМЕНЕНО НА ПРОД 2026-07-22 через apply_migration; ветка `feat/workspaces`, ADR 0006):** `CREATE OR REPLACE VIEW admin_users_summary` += колонка `public_user_id` в конец списка (ограничение 42P16; `security_invoker=on` и `REVOKE ALL FROM anon, authenticated` сохранены) + новая SECURITY DEFINER RPC `public.get_admin_users_summary()` с admin-гейтом `is_admin_user()` (`Forbidden: admin only` для не-admin) — полный список пользователей из `profiles` (LEFT JOIN `auth.users`, LEFT JOIN `user_entitlements`) с email/public_user_id/телеметрией/nullable entitlement. Корень: список строился от `user_entitlements`, free-юзеры без строки были невидимы. `REVOKE ALL FROM PUBLIC, anon` + `GRANT EXECUTE TO authenticated` (паттерн ADR 0002). pgTAP `19`. Прод-проба под ROLLBACK пройдена. См. §5 (F12) и §7.12 |
+
+### Post-v1.0.2: кастомизация профиля (12.07.2026)
+
+> Базовая кастомизация профиля: публичный ID + профильные поля. **PR [#73](https://github.com/danny-swan/taskflow-app/pull/73) — ✅ СМЁРЖЕН (squash `7db27a6`) 12.07.2026.** Серверная миграция `0026_profile_customization.sql` — ✅ ПРИМЕНЕНА НА ПРОД 12.07.2026 (вкл. DEFAULT на `public_user_id`).
+
+**Модель идентификаторов (важно):**
+- **Внутренний ID** — `profiles.id` (uuid, PK = `auth.users.id`). Для связности данных/логики (FK, RLS own-row, join'ы). Пользователю **не показывается**.
+- **Публичный ID** — `public_user_id` (text UNIQUE NOT NULL, формат `TF-XXXXXX`). Показывается юзеру, сообщается другим (будущий поиск/друзья). **Неизменяем** после присвоения.
+- **Профильные поля** — `nickname` (≤32), `avatar_variant` (smallint 1..8, DEFAULT 1), `bio` (≤160). Косметика, не замена ID.
+
+**Генерация public ID:** функция `gen_public_user_id()` (алфавит `A-Z` + `2-9` без `I L O 0 1`) + `assign_public_user_id()` (retry ≤10 при коллизии). Новым юзерам — в триггере `handle_new_user`; прямым INSERT в `profiles` — через **DEFAULT** `public_user_id = assign_public_user_id()` (покрывает тестовые и любые будущие вставки без триггера). Уникальность — UNIQUE-constraint `profiles_public_user_id_key`.
+
+**Гарантия неизменяемости:** BEFORE-UPDATE триггер `profiles_guard_immutable` молча возвращает старые значения `id` и `public_user_id` при попытке их переписать (у `authenticated` есть UPDATE ON profiles). Легальные правки nickname/bio/avatar/email не блокируются. Проверено на проде: попытка `UPDATE public_user_id='TF-HACKED'` не прошла (0 строк), nickname в том же запросе обновился.
+
+**Sync:** `profiles` НЕ в sync-цикле (outbox/push/pull/mappers работают только с `sync_*`) — добавление полей НЕ затронуло upsert/conflict flow. Профиль читается/пишется отдельным Supabase-запросом (`src/lib/profile.ts`).
+
+**Backfill:** всем существующим профилям (4 прод-аккаунта) автоматически присвоен TF-ID в миграции, затем `public_user_id SET NOT NULL`. На проде: 4/4 заполнены, все уникальны, все валидного формата.
+
+**UI:** блок `ProfileBlock` в `AccountSection` (Settings): публичный ID + «Скопировать» + подсказка, поле ника, `AvatarPicker` из 8 встроенных SVG-аватаров, «о себе» со счётчиком `N/160`. Внутренний id не отображается.
+
+**Тесты:** vitest 292/292, `tsc --noEmit` чисто, `npm run build` ✓, pgTAP `08_profile_test.sql` `plan(24)`. В CI (`db-tests.yml`) дополнительно подключён ранее пропущенный `07_task_hold_periods_test.sql`.
+
+**Документация:** `docs/architecture/profile-identity.md` (разница внутренний/публичный ID, контексты использования).
+
+**НЕ включено (сознательно):** система друзей/контактов, настройки приватности, загрузка произвольных картинок-аватаров.
+
+## Приложение Б. Источники этого документа
+- Полная git-история, теги, GitHub Releases/Secrets/Variables/Workflows — [репозиторий](https://github.com/danny-swan/taskflow-app)
+- Архитектурный аудит + sync-регрессия — кодинг-субагент, HEAD `f764e23`
+- Аудит безопасности и платежей — кодинг-субагент, HEAD `f764e23`
+- ERD/data dictionary — напрямую из живой схемы Supabase (`list_tables`, `list_migrations`, `generate_typescript_types`, `get_advisors`) 10.07.2026 — см. `taskflow_erd_data_dictionary.md`
+- Углублённый аудит: код-локейшны фич + каталог критических связей + проверка Q3/Q5/Q6 по коду — кодинг-субагент, HEAD `f764e23`
+- Мастер-план и roadmap v1.0.0 — файлы Space "Programming" (`taskflow_v0.9.35_master_plan.md`, `taskflow_v1.0.0_roadmap.md`, `taskflow_v0.9.35_dev6.5_design.md`)
+- Заметки прошлых сессий — память (Supabase setup, Resend SMTP, Sentry, домен)
+
+---
+
+## Приложение С. Architecture Decision Records (ADR) — как и где ведём
+
+**Решение:** ADR живут в самом репозитории (`docs/adr/000N-title.md`, один файл на решение, нумерация сквозная), а не в роадмапе. в этом файле — только короткий индекс-таблица со ссылками.
+
+**Почему в репозитории, а не в roadmap:**
+- ADR описывает решение про код — логично, чтобы он версионировался вместе с кодом (git blame, PR-история, теги), а не в отдельном внешнем документе в Space.
+- Когда ты (или будущий кодинг-субагент) открываете репозиторий годами спустя — `docs/adr/` будет на месте автоматически, без необходимости сначала искать внешний roadmap.
+- Roadmap остаётся тем, для чего и создавался — статус/история/связи, без разбухания полными телстами решений.
+
+**Формат одного ADR-файла:** заголовок + статус (proposed/accepted/superseded) + контекст + решение + последствия. Пример первых кандидатов, когда дойдём до Wave-фиксов: «выбрали `payment_methods.external_id` как единственный источник истины для токена ЮKassa, `payment_method_id` — только FK», «удалили/оставили `renewal_attempts` в пользу `renewal_attempts_count`».
+
+**Индекс ADR** _(заполняется по ходу работы, ссылки на файлы в репозитории)_:
+
+| # | Решение | файл |
+|---|---|---|
+| 0001 | F1: `payment_methods.external_id` — единственный источник истины для токена ЮKassa, `payment_method_id` — только FK на внутренний uuid (accepted) | `docs/adr/0001-payment-method-id-vs-external-id.md` |
+| 0002 | N15: `get_users_emails` — внутренний admin-гейт (`is_admin_user()`) вместо REVOKE от authenticated (accepted) | `docs/adr/0002-get-users-emails-internal-admin-gate.md` |
+| 0003 | N10: renewal idempotency-guard — сверка `GET /v3/payments` до создания платежа автопродления как страховочный слой поверх Idempotence-Key (accepted) | `docs/adr/0003-renewal-idempotency-guard.md` |
+| 0004 | N13: rate limiting — table-based счётчик в Postgres (`rate_limits` + RPC `check_rate_limit`) вместо in-memory/Redis, fail-open by design (accepted) | `docs/adr/0004-rate-limiting-table-based.md` |
+| 0005 | Wave B: shared workspaces — роли owner/editor/viewer, инвайты по TF-ID, `workspace_id` text→uuid + FK + ON DELETE CASCADE (accepted) | `docs/adr/0005-shared-workspaces.md` |
+| 0006 | F12 (P4): admin-список пользователей — SECURITY DEFINER RPC `get_admin_users_summary` с admin-гейтом `is_admin_user()` вместо GRANT на view; view дополнен `public_user_id` (миграция 0039) (accepted) | `docs/adr/0006-admin-users-list-security-definer-rpc.md` |
+| 0007 | F13: краш открытия задачи в shared (стабильная `EMPTY_RECORDS` в zustand-селекторе `useTaskActivity`) + FK `sync_workspaces_client_id_fkey` (push-мапперы всегда текущий `client_id`) + дедуп осиротевших personal-ws (`dedupePersonalWorkspaces`); только клиент, без миграций (accepted) | `docs/adr/0007-workspace-crash-clientid-dedup.md` |
+| 0008 | F14: полный pull членства в двух скоупах (`user_id=me` + `workspace_id IN (мои ws)`, от epoch, без инкремент-курсора) — участники shared видны и ws восстанавливаются при рестарте; refresh сайдбара + переключение current при leave; только клиент, без миграций (accepted) | `docs/adr/0008-workspace-members-full-pull-leave-refresh.md` |
+| 0009 | F15: `accept_invite` реактивирует soft-deleted membership через `INSERT ... ON CONFLICT DO UPDATE` (миграция 0040), `id` стабилен для pull-matcher (accepted) | `docs/adr/0009-accept-invite-upsert-membership.md` |
+| 0010 | F16: авто-обнаружение и восстановление битой локальной SQLite при старте (`detectAndRecoverCorruption` в `initDb`, `SqliteCorruptError`/`withCorruptionGuard` в pull.ts, prune-skip, тост + reload) — только клиент, без миграций (accepted) | `docs/adr/0010-sqlite-corruption-auto-recovery.md` |
+| 0011 | F17: реконсиль uuid членства при рассинхроне local↔server (fallback-матчинг `applyCloudRowMembers` по `(workspace_id, user_id)` + переклейка uuid; откат F16-эскалации 2067→corruption) — только клиент, без миграций (accepted) | `docs/adr/0011-membership-uuid-mismatch-reconcile.md` |
+| — | удалили/оставили `renewal_attempts` в пользу `renewal_attempts_count` (F2) — решение ещё не принято, фронт-часть не деплоилась | тбд |
+
+---
+
+## 10. Исторический архив (до v1.0.0)
+
+Собраны блоки, которые были актуальны до выхода v1.0.0 (11.07.2026), но сейчас устарели. **Не удалять** — текст важен для восстановления контекста, как принимались решения. Все пункты ниже — **✅ выполнено 11.07.2026** или перешли в пост-v1.0.0 (раздел 7).
+
+### 10.1. Снапшот «Самое важное одной строкой» (09.07.2026)
+
+> **Архивный снапшот** — был вверху roadmap в первый день аудита 09.07.2026. Многое устарело к 11.07.2026 (выход v1.0.0).
+
+Автосписание стоит на проде с багом-блокером: сейчас сохранённые способы оплаты помечаются как `inactive` в момент сохранения, а `renew-subscription` выбирает только `active`-записи — поэтому автосписание успевает сломаться тихо перед тем, как вообще попытаться списать деньги. Фикс в `create-payment` — сохранять способ оплаты как `active` в момент успешной первой оплаты, откат — `soft-delete` по `payment_method_id`.
+
+Помимо этого качественно реализованы: полный backend, `payment_methods` с versioning, cron активен, RLS без дыр, логика с idempotency (`renewal_attempts_log`, Idempotence-Key), корректная обработка `succeeded/canceled/refunded` в `payment-webhook`, RPC с `SECURITY DEFINER` и `search_path`.
+
+**Статус к 11.07.2026:** F1 исправлен в Wave 1 (PR #61). Все остальные баги F2-F5 в Wave 1. Подтверждено выходом v1.0.0.
+
+### 10.2. F1–F3 (до Wave 1): старый блок «🔴 Уже сломано»
+
+> **Архивный снапшот** — был в разделе 3 как п. 1–3. Все три — ✅ **закрыты в Wave 1** (PR #61, мердж 06.07.2026), прод обновлён.
+
+1. **F1** — `create-payment` сохранял `payment_methods.status = 'inactive'` для совершенного (`payment.succeeded`) первого платежа — автосписание не могло найти способ оплаты. Фикс: сохранять `active`, если `payment.status='succeeded'`. Код-локейшн: `supabase/functions/create-payment/index.ts`. ✅ Wave 1.
+2. **F2** — `renewal_attempts` вместо `renewal_attempts_count` в фронт-коде (`src/lib/entitlements.ts`) — счётчик попыток автосписания не отображался. ✅ Wave 1.
+3. **F3** — бренд сохранённой карты не показывался в Settings (`src/pages/Settings.tsx`) — UX-мелочь. ✅ Wave 1.
+
+### 10.3. Незакрытые пункты (снапшот из мастер-плана 06.07 и roadmap 08.07)
+
+> **Архивный снапшот** — был в разделе 6 как список 1–8. Все пункты — ✅ закрыты к v1.0.0 или перешли в пост-v1.0.0 (см. раздел 7).
+
+1. **Подтвердить полный E2E-тест реального автосписания.** В roadmap от 08.07 стоял открытый вопрос — "провели ли вы уже полный цикл реального списания, или только привязку карты". **Теперь у этого вопроса есть техническое объяснение: если тест и проводился, он не мог пройти из-за F1.** Стоит проверить `renewal_attempts_log` за последние дни на записи `payment_method_inactive`. ✅ F1 закрыт, cron активен.
+2. **Telegram-бот (dev.7)** — по git-истории работа не начата ни одним коммитом. Решить: в v1.0.0 или переносим в v1.1. ✅ вынесено в пост-v1.0.0.
+3. **SberPay recurring** — ждём активации от ЮKassa (внешняя зависимость, не блокер). ✅ вынесено в пост-v1.0.0.
+4. **Merge `develop` → `main`** + первый не-pre-release GitHub Release — ещё не сделано. ✅ v1.0.0 выпущен 11.07.2026.
+5. **Решить по тегам dev.6.5-dev.6.10** — ретегировать задним числом важные вехи или сразу готовиться к v1.0.0 без промежуточных релизов. ✅ решено: ретегирование пропущено, сразу v1.0.0.
+6. **Явно перепроверить старый чек-лист "перед первым реальным платежом"** из плана 06.07 — часть пунктов помечена закрытой (магазин live, автосписания активны), но стоит подтвердить руками (не проверяется по коду, только по продовым настройкам):
+   - `YOOKASSA_SKIP_IP_CHECK` выключен в проде (было `true` для тестов через ngrok)
+   - webhook доступен извне и обрабатывает все нужные события в кабинете ЮKassa
+   - первый реальный платёж сверен в личном кабинете ЮKassa / чек в ФНС
+   ✅ пункты C-D чек-листа 10.4 пройдены; ФНС-чеки — в пост-v1.0.0 (раздел 7.1).
+7. **Rewrite `SupportBlock` для CloudTips (крипта)** — сознательно отложено в прошлой сессии как неблокирующее; статические ссылки (`VITE_PAY_CLOUDTIPS_URL`, TON, USDT) не дают автоматического entitlement — это принятое решение, но стоит держать в уме, что оплата через них не активирует Pro автоматически. ✅ вынесено в пост-v1.0.0.
+8. **Обновление `/privacy.html` на продовом лендинге** — отдельный коммит с редиректом, отмечен как отложенный, статус по лендинг-репозиторию (`taskflow-landing`) в этом аудите не проверялся (аудит фокусировался на `taskflow-app`). ✅ вынесено в пост-v1.0.0 (раздел 7).
+
+### 10.4. Финальный чек-лист перед merge `develop` → `main` (снапшот 11.07.2026)
+
+> **Архивный снапшот** — был в разделе 8. Мердж сделан 11.07.2026, тег `v1.0.0` опубликован. Пункты A-G либо выполнены, либо вынесены в пост-v1.0.0 (раздел 7); H (ФНС-чеки) — в пост-v1.0.0 как 7.1.
+
+Обновление от 11.07.2026. **Wave 1–4 полностью на проде** (F1-F5, N4-N18). Бэкенд-часть (миграции `0001`–`0024`, edge-функции) закрыта. Ниже — всё, что ещё стояло между `develop` и первым не-pre-release релизом v1.0.0.
+
+### Известные ограничения — осознанные решения, НЕ блокеры
+
+- **N16 (Leaked Password Protection)** — **не включаем.** Требует платного тарифа Supabase, которого у пользователя сейчас нет. Код/конфиг и ops-гайд (`docs/ops/supabase-auth-hardening.md`) готовы — тумблер можно включить позже, когда/если тариф появится. **Осознанное решение, не блокер v1.0.0.**
+- **N17 (pg_net в схеме `public`)** — **оставлен как есть, риска нет.** `pg_net` нужен для функционирования pg_cron-автопродления; попытка перенести расширение (миграция `0023`) не состоялась на проде (non-relocatable), и принудительный перенос оборвёт cron-цепочку. API pg_net живёт в схеме `net`, cron-джобы зовут именно её. **Осознанное решение, не блокер.**
+- **SupportBlock (CloudTips/крипта) и Telegram-бот (dev.7)** — **вне scope v1.0.0** по решению пользователя. Статические донат-ссылки не дают автоматического entitlement — это принятое поведение (см. раздел 6, п.7).
+
+### A. Frontend release (F2/F3) — 🟡 требует релиза десктопа
+
+- **F2** (`src/lib/entitlements.ts` — правки счётчика авто-продления) и **F3** (`src/pages/Settings.tsx` — бренд карты) закоммичены в `develop`, но **НЕ на проде**: это фронтовые файлы, а не edge-функции, и уезжают на прод только с новым релизом приложения.
+- `develop` опережает `main` на **96 коммитов**.
+- **Требуется:** сборка Tauri-приложения из `develop` (после merge — из `main`) и релиз пользователям. До этого UI автопродления и бренда карты у существующих пользователей останется с багами.
+- Делать **параллельно с merge to main или сразу после** — `main` = source of truth для релиза.
+
+### B. E2E автопродления вживую — 🟡 требует участия пользователя (не автоматизируется)
+
+- Cron `taskflow-renew-subscriptions` (jobid=2, расписание `0 * * * *`) **активен**.
+- Единственная активная pro-подписка с `auto_renew` истекает **2026-08-06** (через ~25 дней) — до этого срока функция `renew-subscription` не будет пытаться списать.
+- `renewal_attempts_log` сейчас **пуст** — ни одной попытки продления ещё не было.
+- **Действие (один из двух путей):**
+  1. Дождаться реального срока (2026-08-06) и проверить лог; **или**
+  2. Принудительно выставить `valid_until` активной подписки на near-future (например, `now() + 5 минут`), дождаться срабатывания cron, проверить `renewal_attempts_log` на запись с корректным `status` (`renewed_ok`, либо `payment_method_inactive`/`no_payment_method`/`payment_failed` в зависимости от состояния сохранённого способа оплаты), затем **откатить `valid_until` обратно**.
+- Проверка **не автоматизирована**: у пользователя живая подписка с сохранённым способом оплаты (метка `payment_method_id`), которую не хочется потерять — поэтому нужен ручной контроль.
+
+### C. Ручной чек-лист перед первым реальным платежом от постороннего пользователя
+
+Продовые настройки проверяются в Supabase Dashboard → Project Settings → Edge Functions → Secrets и в личном кабинете ЮKassa (по коду не проверяется):
+
+1. **`YOOKASSA_SKIP_IP_CHECK=false`** (или переменная удалена — по умолчанию `false`). Ранее могла ставиться `true` для тестов через ngrok.
+2. **`YOOKASSA_SHOP_ID` и `YOOKASSA_SECRET_KEY`** — актуальные **production**-креды из ЛК ЮKassa (не тестовые).
+3. **В ЛК ЮKassa проверить webhook:** URL = `https://sejpmzrmtgcvevukggkx.supabase.co/functions/v1/payment-webhook`, включены события `payment.succeeded`, `payment.canceled`, `refund.succeeded`.
+4. **`APP_ALLOWED_ORIGINS`** содержит `tauri://localhost`, `https://tauri.localhost`, `https://yourtaskflow.app` (и `http://localhost:5173` для dev — уже добавлено).
+5. **Провести один реальный тестовый платёж** на минимальный тариф с реальной карты (можно свою) и убедиться:
+   - webhook принят (`200 OK` в логах `payment-webhook`);
+   - `user_entitlements.plan = 'pro'`, `valid_until` рассчитан корректно, `payment_method_id` сохранён;
+   - платёж виден в ЛК ЮKassa;
+   - **⚠️ фискальный чек в ФНС — см. раздел H.** ЮKassa с 23.12.2025 **прекратила** формирование чеков для самозанятых (НПД). Вкладки «Чеки» для самозанятых в ЛК больше нет, чек в «Мой налог» автоматически не приходит. Проверка «чек ушёл в ФНС» в этом пункте **более неактуальна** — фискализация решается отдельно (раздел H).
+
+### D. Ротация anon-ключа (N1) — 🟡 не блокер merge, но до публичного анонса v1.0.0
+
+- У проекта уже есть modern publishable key `sb_publishable_EDGdl5gun3Ud60AQMymq9A_VWUFpS-a` (создан Supabase автоматически).
+- Legacy JWT anon-ключ ещё активен и был утёкшим в старом коммите. **Он безопасен по дизайну** (только anon, ограничен RLS-политиками), но для чистоты стоит мигрировать.
+- **Действие:** в клиенте (`src/lib/supabase.ts`) переключиться на publishable key → сбилдить новый релиз приложения → дождаться, пока все пользователи обновятся → отключить legacy anon в Dashboard → Project Settings → API → «Disable legacy anon key».
+- **Не блокер для merge to main**, но должно быть сделано перед публичным анонсом v1.0.0.
+
+### E. Ретегирование dev.6.5–dev.6.10 — ✅ решено: пропускаем, НЕ блокер
+
+- В репозитории есть только git-теги `dev.6.1`–`dev.6.4.3`. Версии 6.5–6.9 упоминаются только в файлах `RELEASE_NOTES_v0.9.35-dev.6.X.md`, git-тегов для них нет.
+- **Решение:** ретегирование задним числом **пропустить.** При релизе v1.0.0 создать один аннотированный тег `v1.0.0` на HEAD `main`.
+
+### F. Внешние зависимости — не блокеры
+
+- **SberPay recurring** — ждём активации от ЮKassa (внешняя зависимость).
+
+### G. Landing (отдельный репо `taskflow-landing`)
+
+- Обновить `/privacy.html` на прод-лендинге, если он давно не сверялся с политикой обработки данных приложения. В этом аудите репозиторий лендинга **не проверялся** (аудит фокусировался на `taskflow-app`).
+
+### H. Фискальные чеки ФНС для самозанятого (НПД) — 🔴 требует решения ПОСТ-v1.0.0
+
+**Проблема (обнаружена 11.07.2026):** реальные тестовые платежи прошли, но чек в «Мой налог» не пришёл, и вкладки «Чеки» для самозанятых в ЛК ЮKassa нет.
+
+**Корневая причина — НЕ в коде.** Проверено: `create-payment` и `renew-subscription` корректно передают объект `receipt` (`tax_system_code: 6` — НПД, `vat_code: 1` — без НДС, `customer.email`, `items[]`). Проблема на стороне ЮKassa: [по официальной истории изменений API](https://yookassa.ru/developers/payment-acceptance/receipts/self-employed/basics) **ЮKassa с 23 декабря 2025 прекратила поддержку сервисов для самозанятых** — чеки при платежах и возвратах, а также выплаты самозанятым. Переданный `receipt` теперь просто игнорируется, чек в «Мой налог» не регистрируется.
+
+**Юридический контекст:** самозанятый (НПД, 422-ФЗ ст. 14) обязан сформировать чек на каждый полученный доход. Срок для оплат картой/электронными средствами — в момент расчёта; штраф за пропуск — 20% суммы (100% при повторном нарушении в течение 6 мес). Возвращённые платежи (тестовые 299 ₽ + 1 ₽-проверки) дохода не образуют — по ним чек не нужен.
+
+**Что надо разобраться / варианты решения (выбрать перед первым реальным клиентским потоком):**
+
+1. **Ручное формирование чеков в «Мой налог»** — бесплатно, но вручную на каждую продажу. Приемлемо на старте, пока платежей мало. За уже прошедшие июльские платежи можно пробить задним числом.
+2. **Сервис-посредник с автоматическими чеками НПД** (например [Robokassa](https://robokassa.ru/) или [Prodamus](https://prodamus.ru/)) — интеграция с «Мой налог» через партнёрство ФНС, чек пробивается автоматически. Потребует замены/добавления платёжного провайдера рядом с ЮKassa (переработка `create-payment` / `payment-webhook`).
+3. **Прямая автоматизация против API «Мой налог»** через уполномоченного оператора ФНС — вызывать из `renew-subscription` после успешного списания. Больше всего работы, но полностью автоматически на ЮKassa.
+4. **Возможная чистка кода:** объект `receipt` с `tax_system_code: 6` теперь ЮKassa не использует. Отправка безвредна, но при желании логику можно упростить/убрать после выбора решения выше.
+
+**Приоритет:** разобраться и выбрать подход ДО того, как появится реальный поток сторонних клиентов. На старте (0 пользователей) допустим вариант 1 вручную. Решение задокументировать здесь после выбора.
+
+---
+
+### 10.5. Порядок действий для v1.0.0 (снапшот 11.07.2026)
+
+> **Архивный снапшот** — все пункты выполнены (v1.0.0 + v1.0.1 на проде).
+
+
+1. Провести **E2E автопродления** (пункт B) — по возможности до merge.
+2. **Merge `develop` → `main`.**
+3. Сбилдить **Tauri-релиз с `main`**, опубликовать в GitHub Releases как **v1.0.0** (первый не-pre-release).
+4. Обновить клиент на **publishable key** (может быть в том же релизе — см. D).
+5. Пройти **чек-лист C** перед первым реальным платежом от постороннего пользователя.
+6. **Отключить legacy anon** в Dashboard после того, как пользователи обновятся (D).
+7. Обновить **`/privacy.html`** на лендинге (G).
