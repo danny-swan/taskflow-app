@@ -910,17 +910,19 @@ _N1/N2/N3 в текущий заход не включены по явному �
 
 1. *Почему не ловилось раньше.* `db-tests.yml` триггерится на push в `develop`/`main` и на PR в `develop`/`main`/`feat/workspaces`, по путям `supabase/**`. Оба файла были залиты **прямыми пушами в `feat/workspaces` без PR**, поэтому CI их ни разу не исполнил. Последний до этого прогон — run `29865446224` от 21.07.2026 20:22 (ветка `fix/workspace-limits-owned-and-accept`), то есть ДО появления миграции 0039 (21.07 ~21:40) и 0040 (22.07) вместе с их тестами.
 2. *Тест 19, кейс 11 (`have: TF-CK8CMG`, `want: TF-FREE00`).* Фикстура вставляет `public.profiles` с `ON CONFLICT (id) DO NOTHING`, но, в отличие от теста 20, **не отключает триггер** `on_auth_user_created` на `auth.users`. Триггер уже создал profiles-строку, а колонка `public_user_id` с миграции 0026 имеет `DEFAULT public.assign_public_user_id()` → строка приходит со сгенерированным TF-ID, фикстурный `TF-FREE00` молча не применяется.
+
+   **Уточнение после первой попытки фикса (run `30807601318`, тот же кейс всё ещё красный, `have: TF-FVNY4Y`):** перевод `DO NOTHING` → `DO UPDATE SET public_user_id = EXCLUDED.public_user_id` **не работает в принципе**. В миграции 0026 §5 есть BEFORE UPDATE триггер `profiles_guard_immutable`, который **молча** (без ошибки, по дизайну) возвращает `new.public_user_id := old.public_user_id`. То есть TF-ID нельзя перезаписать никаким UPDATE — только задать при INSERT. Первая гипотеза объясняла симптом лишь наполовину (верно про триггер и DEFAULT, неверно про способ починки); записано как есть, чтобы не переписывать историю.
 3. *Тест 20 (23505 в setup).* Фикстура вставляла **два pending-инвайта на одну пару** `(ws20, гость)`, а миграция 0032 держит partial unique index `sync_workspace_invites_pending_uq on (workspace_id, target_user_id) where status = 'pending'`. `ON CONFLICT (id) DO NOTHING` тут не спасает — конфликт по частичному индексу, а не по `id`. Исключение в `DO $$`-блоке роняло файл целиком, до `plan(6)`.
 
 **Важно:** оба падения — **баги тестовых фикстур, а не прода**. И DEFAULT на `public_user_id`, и «не более одного pending на пару» — намеренные инварианты; они как раз отработали правильно. Ни миграции, ни код приложения не менялись.
 
 **Фикс (без ADR — правки только в тестах и доке):**
 
-- `supabase/tests/19_admin_users_summary_test.sql`: `ON CONFLICT (id) DO NOTHING` → `DO UPDATE SET email = EXCLUDED.email, public_user_id = EXCLUDED.public_user_id` + комментарий про триггер и DEFAULT из 0026. Триггер не трогаем — фикстура становится детерминированной сама по себе.
+- `supabase/tests/19_admin_users_summary_test.sql`: фикстура оборачивает вставку `auth.users` в `ALTER TABLE auth.users DISABLE TRIGGER on_auth_user_created` / `ENABLE TRIGGER` — точно как в тесте 20, чтобы profiles-строку с явными TF-ID создавала сама фикстура (INSERT, а не UPDATE). Плюс два новых кейса, фиксирующие сам инвариант 0026 §5 (`UPDATE public_user_id` не бросает ошибку, но значение остаётся прежним), чтобы эта грабля больше не была невидимой. `plan(12)` → `plan(14)`. Ни триггер, ни схема не меняются.
 - `supabase/tests/20_accept_invite_reactivation_test.sql`: в setup остаётся только `inv20a`; `inv20b` заводится по сценарию **после** того, как `inv20a` принят и перестал быть `pending` (`accept_invite` ставит `status='accepted'`, миграция 0040). Плюс новый 7-й кейс `F15-2a2` (`throws_ok ... 23505`), который фиксирует сам инвариант индекса под тестом, чтобы фикстура больше не разошлась со схемой молча. `plan(6)` → `plan(7)`.
 - `docs/migrations.md`: в раздел «Проверка перед применением в prod» добавлено правило — после добавления миграции или pgTAP-теста прямым пушем вручную дёргать `gh workflow run db-tests.yml --ref <ветка>` и дожидаться зелёного.
 
-**Верификация:** повторный прогон `DB tests (pgTAP)` на `feat/workspaces` — зелёный, 20 файлов / 610 тестов (было 609, +1 новый кейс F15-2a2).
+**Верификация:** цепочка прогонов `DB tests (pgTAP)` на `feat/workspaces`: `30806943342` — FAIL (609 тестов, два файла красные) → `30807601318` — FAIL, но тест 20 уже зелёный, остался только кейс 11 (616 тестов) → финальный прогон — зелёный, 20 файлов / 618 тестов.
 
 **Статус:** ✅ ИСПРАВЛЕНО (03.08.2026, в составе merge-PR `feat/workspaces → main`).
 

@@ -9,7 +9,7 @@
 --     сохранён, authenticated НЕ имеет SELECT на view (регрессия N4).
 
 BEGIN;
-SELECT plan(12);
+SELECT plan(14);
 
 -- ─── Права EXECUTE на get_admin_users_summary ───────────────────────────────
 SELECT ok(has_function_privilege('authenticated', 'public.get_admin_users_summary()', 'EXECUTE'),
@@ -36,23 +36,23 @@ DECLARE
   norm_id  uuid := 'b0000000-0000-0000-0000-0000000000f4'::uuid;
   free_id  uuid := 'f0000000-0000-0000-0000-0000000000f4'::uuid;
 BEGIN
+  -- ВАЖНО (F34): триггер on_auth_user_created отключаем, как в тесте 20.
+  -- Иначе он создаёт profiles-строку раньше нас со СГЕНЕРИРОВАННЫМ TF-ID, а
+  -- переписать его потом невозможно: BEFORE UPDATE триггер
+  -- profiles_guard_immutable (0026, §5) МОЛЧА возвращает старое значение
+  -- public_user_id. Поэтому фикстура должна вставлять profiles сама.
+  ALTER TABLE auth.users DISABLE TRIGGER on_auth_user_created;
   INSERT INTO auth.users (id, email) VALUES
     (admin_id, 'p4-admin@test'),
     (norm_id,  'p4-norm@test'),
     (free_id,  'p4-free@test')
     ON CONFLICT (id) DO NOTHING;
-  -- ВАЖНО (F34): DO UPDATE, а НЕ DO NOTHING. Триггер on_auth_user_created на
-  -- auth.users уже создал profiles-строку, а колонка public_user_id с миграции
-  -- 0026 имеет DEFAULT public.assign_public_user_id() → строка приходит со
-  -- СГЕНЕРИРОВАННЫМ TF-ID. При DO NOTHING фикстурные TF-ADMIN0/TF-NORM00/
-  -- TF-FREE00 молча не применялись и тест 11 сравнивал ожидаемое с рандомным.
+  ALTER TABLE auth.users ENABLE TRIGGER on_auth_user_created;
   INSERT INTO public.profiles (id, email, public_user_id) VALUES
     (admin_id, 'p4-admin@test', 'TF-ADMIN0'),
     (norm_id,  'p4-norm@test',  'TF-NORM00'),
     (free_id,  'p4-free@test',  'TF-FREE00')
-    ON CONFLICT (id) DO UPDATE
-      SET email = EXCLUDED.email,
-          public_user_id = EXCLUDED.public_user_id;
+    ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email;
   -- Entitlement ТОЛЬКО для admin и обычного юзера; free-юзер — БЕЗ строки.
   INSERT INTO public.user_entitlements (user_id, plan, source) VALUES
     (admin_id, 'lifetime', 'seed'),
@@ -101,6 +101,21 @@ SELECT is(
      WHERE id = 'f0000000-0000-0000-0000-0000000000f4'::uuid),
   'TF-FREE00',
   'F12: public_user_id (TF-ID) возвращается');
+
+-- F34: инвариант 0026 §5 — public_user_id неизменяем, UPDATE молча откатывается
+-- (именно поэтому фикстура выше отключает триггер, а не правит строку UPDATE'ом).
+RESET ROLE;
+SELECT lives_ok(
+  $q$ UPDATE public.profiles SET public_user_id = 'TF-HACKED'
+        WHERE id = 'f0000000-0000-0000-0000-0000000000f4'::uuid $q$,
+  'F34: UPDATE public_user_id не бросает ошибку (guard молчаливый)');
+SELECT is(
+  (SELECT public_user_id FROM public.profiles
+     WHERE id = 'f0000000-0000-0000-0000-0000000000f4'::uuid),
+  'TF-FREE00',
+  'F34: profiles_guard_immutable вернул прежний public_user_id');
+SET LOCAL ROLE authenticated;
+SET LOCAL request.jwt.claim.sub TO 'ad000000-0000-0000-0000-0000000000f4';
 
 -- Платный юзер: entitlement собран (plan=pro).
 SELECT is(
