@@ -65,8 +65,9 @@ test.describe('канбан-view и просроченные задачи', () =
   test('переключение вида list ↔ kanban', async ({ page }) => {
     await createTask(page, 'Задача для канбана');
 
-    // Стартово — list view. Кнопка «Канбан» / «Kanban» имеет aria-selected=false.
-    const kanbanTab = page.getByRole('tab', { name: /Канбан|Kanban/ });
+    // Стартово — list view. Кнопка «Карточки» / «Cards» имеет aria-selected=false.
+    // (F43: видимый лейбл переименован из «Канбан»/«Kanban»; внутреннее значение вида осталось 'kanban'.)
+    const kanbanTab = page.getByRole('tab', { name: /Карточки|Cards/ });
     await expect(kanbanTab).toHaveAttribute('aria-selected', 'false');
 
     // Переключаемся в kanban.
