@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useStore, ThemeName } from '../store/useStore';
 import { useCurrentWorkspaceStatuses, useCurrentWorkspaceTags, useCurrentWorkspaceTasks, useCurrentWorkspaceTemplates, useCanManageWorkspace } from '../store/workspaceScope';
 import { tr } from '../lib/i18n';
@@ -20,30 +20,29 @@ import * as XLSX from 'xlsx';
 import { useEntitlement, submitActivationRequest, reactivateSubscription, detachPaymentMethod, fetchActivePaymentMethods, changePlan, type PaymentMethodRow } from '../lib/entitlements';
 import { supabase } from '../lib/supabase';
 import { ProfileBlock } from '../components/ProfileBlock';
+import { parseSettingsSection } from '../lib/settingsSections';
 
 type Sub = 'general' | 'account' | 'subscription' | 'tags' | 'statuses' | 'stats' | 'theme' | 'templates' | 'io' | 'storage' | 'sync' | 'updates';
 
 export function SettingsPage() {
   const lang = useStore(s => s.language);
-  // v0.9.35-dev.6: если в URL есть #subscription — сразу открываем этот таб.
-  // (Ссылка из Sidebar-баннера / PaywallGate.)
-  const [sub, setSub] = useState<Sub>(() => {
-    if (typeof window !== 'undefined' && window.location.hash === '#subscription') {
-      return 'subscription';
-    }
-    return 'general';
-  });
+  // F39 (ADR 0030): целевая секция приходит в хэше маршрута
+  // (`/settings#subscription`, `/settings#updates`). Источник — useLocation()
+  // из react-router: под HashRouter `window.location.hash` содержит ВЕСЬ
+  // маршрут (`#/settings#subscription`), поэтому прежняя проверка
+  // `window.location.hash === '#subscription'` не срабатывала никогда, а
+  // слушатель `hashchange` не вызывался при программной навигации (pushState).
+  // Сломанный слой убран целиком, а не обёрнут костылём.
+  const location = useLocation();
+  const [sub, setSub] = useState<Sub>(() => parseSettingsSection(location.hash) ?? 'general');
 
-  // Реагируем на hashchange — если уже на /settings и кто-то навигатит на
-  // /settings#subscription, переключаем вкладку.
+  // Навигация на /settings#<секция>, когда страница уже открыта: location.hash
+  // меняется, и мы переключаем секцию. Ручной выбор секции в сбоку хэш не
+  // трогает, поэтому эффект его не перебивает.
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const onHash = () => {
-      if (window.location.hash === '#subscription') setSub('subscription');
-    };
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
-  }, []);
+    const target = parseSettingsSection(location.hash);
+    if (target) setSub(target);
+  }, [location.hash]);
 
   // v0.9.35-dev.6.7: сбок сгруппирован визуальными разделителями.
   // 'divider' — визуальный разделитель.

@@ -29,6 +29,7 @@
  *   6. Через realtime новая карта появляется в Settings → Управление подпиской.
  */
 
+import { useNavigate } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useStore } from '../store/useStore';
@@ -103,6 +104,7 @@ const FEATURES_EN = [
 ];
 
 export function CheckoutPage() {
+  const navigate = useNavigate();
   const lang = useStore(s => s.language);
   const isRu = lang === 'ru';
   const t = (ru: string, en: string) => (isRu ? ru : en);
@@ -307,12 +309,16 @@ export function CheckoutPage() {
         </div>
 
         <div className="mt-6 text-[12px] text-muted text-center">
-          <a
-            href="/settings"
+          {/* F39 (ADR 0030): под HashRouter <a href="/settings"> уводил на
+              несуществующий реальный путь (в Tauri — пустой экран).
+              Навигируем роутером, сразу в «Подписку». */}
+          <button
+            type="button"
+            onClick={() => navigate('/settings#subscription')}
             className="text-primary hover:underline"
           >
             {t('← Вернуться в настройки', '← Back to settings')}
-          </a>
+          </button>
         </div>
       </div>
     );
@@ -406,9 +412,13 @@ export function CheckoutPage() {
         </div>
 
         <div className="mt-4 text-[12px] text-muted text-center">
-          <a href="/settings" className="text-primary hover:underline">
+          <button
+            type="button"
+            onClick={() => navigate('/settings#subscription')}
+            className="text-primary hover:underline"
+          >
             {t('← Вернуться в настройки', '← Back to settings')}
-          </a>
+          </button>
         </div>
       </div>
     );
