@@ -17,12 +17,17 @@ const createSnapshot = vi.fn(async (..._a: unknown[]) => {});
 const setBoundUserId = vi.fn();
 const getBoundUserId = vi.fn<() => string | null>(() => null);
 const isWebSnapshotLimited = vi.fn(() => false);
+// F30 (ADR 0023): файловый снимок как fallback-источник auto-restore при пустом слоте.
+const readRegistry = vi.fn<() => Array<Record<string, unknown>>>(() => []);
+const restoreSnapshot = vi.fn(async (_id: string) => ({ needsRestart: false }));
 vi.mock('../lib/snapshots', () => ({
   checkAccountBinding: (...a: unknown[]) => checkAccountBinding(...a),
   createSnapshot: (...a: unknown[]) => createSnapshot(...a),
   setBoundUserId: (...a: unknown[]) => setBoundUserId(...a),
   getBoundUserId: () => getBoundUserId(),
   isWebSnapshotLimited: () => isWebSnapshotLimited(),
+  readRegistry: () => readRegistry(),
+  restoreSnapshot: (id: string) => restoreSnapshot(id),
 }));
 
 const getClientId = vi.fn(() => 'client-test');
@@ -99,6 +104,10 @@ beforeEach(() => {
   cloudHasData.mockResolvedValue(true);
   saveLocalAccountData.mockResolvedValue(true);
   loadLocalAccountData.mockResolvedValue(false);
+  // F30: по умолчанию нет файловых снимков — сценарии этого файла не про них и не
+  // должны ломать существующие ожидания seed-пути при пустом слоте.
+  readRegistry.mockReturnValue([]);
+  restoreSnapshot.mockResolvedValue({ needsRestart: false });
 });
 
 describe('AccountSwitchGate — free-tier перепривязка (Bug F)', () => {
