@@ -72,6 +72,11 @@ END$$;
 -- ============================================================================
 -- F42-1 / F42-2 / F42-3: editor гасит СВОЮ строку членства.
 -- ============================================================================
+-- Временная таблица для F42-6 создаётся ДО переключения роли: под ролью
+-- authenticated прав на CREATE TEMP может не быть.
+CREATE TEMP TABLE f42_probe (affected int) ON COMMIT DROP;
+GRANT ALL ON f42_probe TO authenticated;
+
 SET LOCAL ROLE authenticated;
 SET LOCAL request.jwt.claim.sub TO 'a0000022-0000-0000-0000-000000000002'; -- u_edt
 
@@ -118,13 +123,19 @@ $$,
 -- ============================================================================
 -- F42-6: чужую строку членства editor погасить не может.
 -- ============================================================================
+-- CTE с data-modifying statement допустим только на верхнем уровне запроса,
+-- поэтому UPDATE выполняем отдельным оператором и складываем число затронутых
+-- строк во временную таблицу (vanilla Postgres 15, как в CI).
+WITH upd AS (
+  UPDATE public.sync_workspace_members
+     SET deleted_at = now(), updated_at = now()
+   WHERE id = 'im22x'
+  RETURNING 1
+)
+INSERT INTO f42_probe (affected) SELECT count(*)::int FROM upd;
+
 SELECT is(
-  (WITH upd AS (
-     UPDATE public.sync_workspace_members
-        SET deleted_at = now(), updated_at = now()
-      WHERE id = 'im22x'
-      RETURNING 1
-   ) SELECT count(*)::int FROM upd),
+  (SELECT affected FROM f42_probe),
   0,
   'F42-6: editor не гасит чужое членство (USING отсекает строку)');
 
