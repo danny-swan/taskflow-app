@@ -267,6 +267,9 @@ export async function createSnapshot(label: string): Promise<SnapshotMeta> {
     // актуальным (run() пишет в Tauri DB fire-and-forget, save() — в localStorage;
     // сам файл data.db пишется плагином sql, но небольшой лаг возможен).
     try { db.save(); } catch { /* web-only, в Tauri no-op по факту */ }
+    // F37 (ADR 0029): дожидаемся, пока очередь записей доедет до файла — иначе
+    // бинарная копия могла не содержать только что созданную задачу.
+    try { await db.flushNativeWrites(); } catch { /* best-effort */ }
     const info = await invoke<{ path: string; file_name: string; size: number }>(
       'snapshot_db',
       { label: `${label}_${id}` },
@@ -410,6 +413,10 @@ export async function restoreSnapshot(id: string): Promise<{ needsRestart: boole
   if (meta.platform === 'tauri') {
     if (!meta.path) throw new Error('У снимка нет пути к файлу');
     const { invoke } = await import('@tauri-apps/api/core');
+    // F37 (ADR 0029): сбрасываем очередь записей ДО подмены файла БД, иначе
+    // команды, оставшиеся в полёте, применились бы к уже заменённому файлу
+    // (или потерялись вместе с ним).
+    try { await db.flushNativeWrites(); } catch { /* best-effort */ }
     const safetyPath = await invoke<string>('restore_snapshot', { snapshotPath: meta.path });
     logger.info(`[snapshots] restored ${id} from file; safety copy at: ${safetyPath || '(none)'}`);
     return { needsRestart: true };

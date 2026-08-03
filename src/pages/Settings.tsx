@@ -2141,6 +2141,12 @@ function AccountSection() {
       const uid = auth.session?.user?.id;
       const email = auth.session?.user?.email ?? null;
       if (uid) {
+        // F37 (ADR 0029): free-план — пишем локальный слот СРАЗУ, не дожидаясь
+        // 30-секундного дебаунса автосейва. Иначе задача, созданная за секунды
+        // до выхода, терялась, если приложение успевало перезапуститься до
+        // возврата на этот аккаунт.
+        const { saveFreeSlotBeforeLogout } = await import('../lib/logoutLocalSlot');
+        await saveFreeSlotBeforeLogout(uid, email);
         const { flushOutboxBeforeLogout } = await import('../lib/sync/logoutFlush');
         const flush = await flushOutboxBeforeLogout(uid, email);
         if (flush.attempted && flush.failed) {
