@@ -32,7 +32,7 @@
  *     + on-focus). Пользователь не видит sync-логики, всё "just works".
  */
 import { supabase } from '../supabase';
-import { getClientId } from '../clientId';
+import { getClientId, regenerateClientId } from '../clientId';
 import { logger } from '../logger';
 import { pushAll, type PushResult } from './push';
 import { pullAll, type PullResult } from './pull';
@@ -207,8 +207,13 @@ export interface SyncResult {
  * Идемпотентно: используем upsert, если запись уже есть — просто обновится
  * last_seen_at. Ошибку логируем но не фейлим — устройство может быть
  * зарегистрировано в другом окне.
+ *
+ * @returns актуальный client_id этого устройства после вызова — совпадает с входным `clientId`,
+ * кроме случая самолечения от RLS-конфликта (Bug 3, см. ниже) — тогда
+ * возвращает новый, чтобы вызывающий код (push в этом же цикле) тагировал строки
+ * валидным id, а не старым (уже занятым другим аккаунтом).
  */
-async function ensureDeviceRegistered(userId: string, clientId: string): Promise<void> {
+async function ensureDeviceRegistered(userId: string, clientId: string): Promise<string> {
   try {
     // Пытаемся понять платформу для отладочных целей. Не критично если не удастся.
     let platform = 'unknown';
@@ -233,10 +238,35 @@ async function ensureDeviceRegistered(userId: string, clientId: string): Promise
     );
     if (error) {
       logger.warn('[sync/device] upsert failed:', error.message);
+      // Bug 3 (04.08.2026): этот client_id уже занят другим аккаунтом на этом
+      // устройстве (RLS USING-проверка на UPDATE сравнивает auth.uid() с
+      // user_id уже существующей строки и не пройдёт). Самолечимся один
+      // раз: выдаём устройству новый client_id и перепробуем упсерт один раз с
+      // ним. Глобальный кэш client_id изменится только в этой ветке — для
+      // одноаккаунтных устройств (норма) упсерт выше прошёл бы без ошибки, и эта
+      // ветка никогда не вызывается.
+      if (/row-level security/i.test(error.message)) {
+        try {
+          const newClientId = regenerateClientId();
+          const { error: retryError } = await supabase.from('sync_devices').upsert(
+            { id: newClientId, user_id: userId, platform, last_seen_at: now },
+            { onConflict: 'id' },
+          );
+          if (retryError) {
+            logger.warn('[sync/device] retry after regenerate failed:', retryError.message);
+          } else {
+            logger.info('[sync/device] client_id регенерирован после RLS-конфликта (аккаунт-swap на этом устройстве).');
+            return newClientId;
+          }
+        } catch (e2) {
+          logger.warn('[sync/device] regenerate client_id failed:', e2);
+        }
+      }
     }
   } catch (e) {
     logger.warn('[sync/device] unexpected error:', e);
   }
+  return clientId;
 }
 
 /**
@@ -269,7 +299,7 @@ export async function syncNow(): Promise<SyncResult> {
     }
 
     // 2. client_id обязателен.
-    const clientId = getClientId();
+    let clientId = getClientId();
     if (!clientId) {
       const err = 'client_id not initialized (migration v5 не отработала?)';
       logger.warn('[sync/orchestrator]', err);
@@ -342,7 +372,11 @@ export async function syncNow(): Promise<SyncResult> {
     }
 
     // 3. Регистрируем устройство (idempotent) — только pro/trial (сетевой шаг).
-    await ensureDeviceRegistered(userId, clientId);
+    // Bug 3: если внутри было самолечение от RLS-конфликта (аккаунт-swap на этом
+    // устройстве), ниже по push должен тагировать строки новым client_id в
+    // этом же цикле — иначе FK sync_*.client_id → sync_devices.id будет ссылаться на
+    // старый (уже чужой) id.
+    clientId = await ensureDeviceRegistered(userId, clientId);
 
     // 4. Первый pull — забираем изменения из облака.
     setState({ status: 'pulling', lastSyncedAt: currentState.lastSyncedAt, lastError: null });

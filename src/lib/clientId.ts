@@ -9,6 +9,7 @@
  * Значение кэшируется в модуле (client_id не меняется в течение сессии).
  */
 import * as db from './db';
+import { uuidv7 } from './uuid';
 
 let cachedClientId: string | null = null;
 
@@ -37,4 +38,27 @@ export function getClientId(): string | null {
  */
 export function resetClientIdCache(): void {
   cachedClientId = null;
+}
+
+/**
+ * Самолечение от конфликта в `sync_devices` (Bug 3, 04.08.2026).
+ *
+ * Ситуация: одно и то же устройство использовалось для тестирования нескольких
+ * аккаунтов подряд. `client_id` привязан к устройству, а не к аккаунту — поэтому
+ * строка `sync_devices` с этим id остаётся привязанной к старому user_id, и любой
+ * другой аккаунт на этом устройстве получает RLS-отказ на каждой попытке upsert
+ * ("new row violates row-level security policy ... sync_devices").
+ *
+ * Вызывается точечно из `ensureDeviceRegistered` ОДИН раз, только после того как
+ * upsert реально получил RLS-отказ (а не на каждом logout) — для одноаккаунтных
+ * устройств (обычный случай) client_id никогда не меняется и остаётся
+ * стабильным идентификатором устройства между сессиями.
+ *
+ * @returns новый client_id (уже сохранён в settings и в кэше).
+ */
+export function regenerateClientId(): string {
+  const next = uuidv7();
+  db.run(`INSERT OR REPLACE INTO settings (key, value) VALUES ('client_id', ?)`, [next]);
+  cachedClientId = next;
+  return next;
 }
