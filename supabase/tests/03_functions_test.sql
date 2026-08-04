@@ -18,7 +18,7 @@
 --   • случайный GRANT EXECUTE обратно anon/authenticated
 
 BEGIN;
-SELECT plan(20);
+SELECT plan(24);
 
 -- ─── set_updated_at ────────────────────────────────────────────────────────
 SELECT ok(NOT has_function_privilege('anon',          'public.set_updated_at()', 'EXECUTE'),
@@ -69,6 +69,16 @@ SELECT ok(NOT has_function_privilege('service_role',  'public.tg_payment_methods
           'service_role НЕ EXECUTE tg_payment_methods_touch_updated_at (через REVOKE FROM PUBLIC)');
 SELECT ok(has_function_privilege('postgres',          'public.tg_payment_methods_touch_updated_at()', 'EXECUTE'),
           'postgres (owner) может EXECUTE tg_payment_methods_touch_updated_at');
+
+-- ─── log_task_activity (NEW in 0041, F35) ──────────────────────────────────
+SELECT ok(NOT has_function_privilege('anon',          'public.log_task_activity()', 'EXECUTE'),
+          'anon НЕ EXECUTE log_task_activity');
+SELECT ok(NOT has_function_privilege('authenticated', 'public.log_task_activity()', 'EXECUTE'),
+          'authenticated НЕ EXECUTE log_task_activity');
+SELECT ok(NOT has_function_privilege('service_role',  'public.log_task_activity()', 'EXECUTE'),
+          'service_role НЕ EXECUTE log_task_activity (через REVOKE FROM PUBLIC)');
+SELECT ok(has_function_privilege('postgres',          'public.log_task_activity()', 'EXECUTE'),
+          'postgres (owner) может EXECUTE log_task_activity');
 
 SELECT * FROM finish();
 ROLLBACK;

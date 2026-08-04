@@ -961,7 +961,7 @@ _N1/N2/N3 в текущий заход не включены по явному �
 
 ---
 
-### 7.30. `log_task_activity()` (миграция 0034) без `REVOKE EXECUTE` — SECURITY DEFINER функция доступна `anon`/`authenticated` через PostgREST RPC (F35, 🟡 открыта)
+### 7.30. `log_task_activity()` (миграция 0034) без `REVOKE EXECUTE` — SECURITY DEFINER функция доступна `anon`/`authenticated` через PostgREST RPC (F35, ⚠️ миграция готова, PR [#115](https://github.com/danny-swan/taskflow-app/pull/115), ждёт применения на прод + ручной проверки)
 
 **Симптом:** Security Advisor прод-проекта `sejpmzrmtgcvevukggkx` (снят 03.08.2026) отдаёт два WARN на одну функцию: `anon_security_definer_function_executable` и `authenticated_security_definer_function_executable` — «`public.log_task_activity()` can be executed by the `anon`/`authenticated` role as a SECURITY DEFINER function via `/rest/v1/rpc/log_task_activity`».
 
@@ -971,7 +971,9 @@ _N1/N2/N3 в текущий заход не включены по явному �
 
 **Предлагаемый фикс (отдельным патчем, НЕ в merge-PR):** миграция `0041_revoke_execute_log_task_activity.sql` — идемпотентный `revoke execute ... from anon, authenticated, PUBLIC` (триггер продолжит работать: триггеры исполняются от владельца таблицы независимо от GRANT EXECUTE) + pgTAP-кейсы `hasnt_function_privs` в отдельном тесте по образцу теста 19. Применение на прод — вручную, с `confirm_action`, после зелёного pgTAP.
 
-**Статус:** 🟡 открыта — заведена 03.08.2026 при подготовке PR #106, блокером мержа не была (состояние прода тем PR не менялось).
+**Статус:** заведена 03.08.2026 при подготовке PR #106, блокером мержа не была (состояние прода тем PR не менялось).
+
+**Обновление 04.08.2026:** миграция `0041_revoke_execute_log_task_activity.sql` написана по образцу 0013 — `revoke execute on function public.log_task_activity() from anon, authenticated, PUBLIC`. Перед фиксом проверено на реальных данных (не по гипотезе): (1) сам файл 0034 — REVOKE действительно отсутствует; (2) весь клиентский код (`src/lib/migrations.ts`, `src/lib/sync/mappers.ts`, `src/store/useTaskActivityStore.ts`) — таблица строго pull-only, мапер бросает исключение при попытке push, нигде в кодовой базе нет `rpc('log_task_activity', ...)`. Регрессия добавлена в `supabase/tests/03_functions_test.sql` (4 новых pgTAP-кейса, `plan(20)` → `plan(24)`) по образцу существующих блоков для `set_updated_at`/`sync_bump_*`; уже имеющийся `17_task_activity_log_test.sql` (41 кейс) продолжает гонять сам триггер через `SET LOCAL ROLE authenticated` — доказывает, что триггер не перестаёт работать после REVOKE. Локально: `tsc -b` чист, `vitest run` — 90 файлов/745 тестов зелёные (SQL-only изменение, TS не тронут). PR [#115](https://github.com/danny-swan/taskflow-app/pull/115) — ветка `fix/f35-revoke-execute-log-task-activity`, ждёт зелёного CI (`db-tests.yml` pgTAP + `test.yml`). Применение на прод — вручную через Dashboard/MCP `apply_migration`, только после явного подтверждения пользователя (правило проекта: `confirm_action` перед любым apply на прод).
 
 ---
 
