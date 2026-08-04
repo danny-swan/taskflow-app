@@ -17,15 +17,14 @@ export function Topbar({ showDateTime }: { showDateTime?: boolean }) {
     const tick = () => setNow(new Date());
     // Align to next minute boundary, then tick every minute.
     const ms = 60_000 - (Date.now() % 60_000);
+    let intervalId: ReturnType<typeof setInterval> | undefined;
     const timeout = setTimeout(() => {
       tick();
-      const id = setInterval(tick, 60_000);
-      (timeout as any)._id = id;
+      intervalId = setInterval(tick, 60_000);
     }, ms);
     return () => {
       clearTimeout(timeout);
-      const id = (timeout as any)._id;
-      if (id) clearInterval(id);
+      if (intervalId) clearInterval(intervalId);
     };
   }, [showDateTime]);
 

@@ -25,9 +25,15 @@ async function write(level: Level, msg: string, meta?: any) {
       msg,
     };
     if (meta !== undefined) {
-      // На случай circular structures — best-effort
-      try { entry.meta = JSON.parse(JSON.stringify(meta)); }
-      catch { entry.meta = String(meta); }
+      // Error-объекты сериализуются в `{}` через JSON.stringify (message/stack
+      // не enumerable) — теряем реальный текст ошибки. Достаём его явно.
+      if (meta instanceof Error) {
+        entry.meta = { name: meta.name, message: meta.message, stack: meta.stack };
+      } else {
+        // На случай circular structures — best-effort
+        try { entry.meta = JSON.parse(JSON.stringify(meta)); }
+        catch { entry.meta = String(meta); }
+      }
     }
     const line = JSON.stringify(entry);
     // Используем @tauri-apps/api/core напрямую, чтобы не зависеть от внутренних

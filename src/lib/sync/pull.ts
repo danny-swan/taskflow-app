@@ -869,6 +869,24 @@ async function pullTable(
 }
 
 /**
+ * F48: лёгкая проверка "сессия ещё принадлежит userId", которой pullAll
+ * пользуется между итерациями, чтобы не продолжать сетевые запросы после
+ * signOut()/смены аккаунта (см. комментарий у вызова ниже). getSession() у
+ * supabase-js читает локально закэшированную сессию (без сетевого запроса),
+ * поэтому вызов дёшев. Если сама проверка упала (напр. supabase.auth
+ * недоступен в каком-то окружении) — не блокируем pull: считаем сессию
+ * валидной, как и раньше до этого фикса.
+ */
+async function isSessionStillFor(userId: string): Promise<boolean> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    return data?.session?.user?.id === userId;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Полный pull: пуллит все таблицы в порядке PULL_ORDER (parent'ы первыми,
  * пулл-only журнал активности в конце).
  * Если applied+skipped == PULL_BATCH_SIZE — было много изменений, идём
@@ -878,6 +896,10 @@ export async function pullAll(userId: string): Promise<PullResult> {
   const total: PullResult = { applied: 0, skipped: 0, deferred: 0, firstError: null };
 
   try {
+    if (!(await isSessionStillFor(userId))) {
+      logger.info('[sync/pull] session changed before pullAll started (logout/account switch) - skipping');
+      return total;
+    }
     // ── Фаза 1: членство (F14: ПОЛНЫЙ pull в двух скопах, без инкремент-курсора) ─
     // Проход A (вход в набор): свои строки членства (user_id=me), ПОЛНО — читаем от
     // epoch, игнорируя сохранённый курсор. Строку членства в чужом shared-ws создаёт
@@ -906,6 +928,21 @@ export async function pullAll(userId: string): Promise<PullResult> {
     // курсором ведущего ws (его lastPulled уже «в будущем» относительно тех строк).
     const phase2 = PULL_ORDER.filter(s => s.cloud !== WORKSPACE_MEMBERS_SPEC.cloud);
     for (const ws of workspaceIds) {
+      // F48: перед КАЖДЫМ пространством перепроверяем, что сессия ещё принадлежит
+      // этому userId. Без этой проверки signOut()/смена аккаунта посреди цикла
+      // (8-14 пространств x 9 таблиц, до ~11с) не прерывает уже начатый pullAll -
+      // все оставшиеся запросы летят без валидного токена и получают permission
+      // denied (42501, anon-роль без грантов) на каждую таблицу каждого оставшегося
+      // пространства. Подтверждено на реальном логе: единственный такой всплеск за
+      // 22ч (127 ошибок) начался сразу после одновременного CLOSED обоих realtime-
+      // каналов (signOut), при этом сам pullAll ни разу не проверял валидность
+      // сессии после начального getSession() в syncNow(). Проверка здесь не убирает
+      // саму гонку (сессия всё равно может исчезнуть посреди пространства), но
+      // сокращает окно шума с ~11с на все пространства до ~1 пространства.
+      if (!(await isSessionStillFor(userId))) {
+        logger.info('[sync/pull] session changed mid-pullAll (logout/account switch) - aborting remaining workspaces early');
+        return total;
+      }
       for (const spec of phase2) {
         await pullSpecPaged(userId, spec, [ws], total);
         if (total.corruption) return total;
