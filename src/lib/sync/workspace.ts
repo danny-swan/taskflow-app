@@ -241,28 +241,31 @@ function ensurePersonalWorkspaceRow(userId: string, target: string): boolean {
  */
 function pinWorkspacePointers(userId: string, target: string): boolean {
   let changed = false;
+  try {
+    const personal = readPointer('personal_workspace_id');
+    if (personal !== target) {
+      db.run(
+        `INSERT OR REPLACE INTO settings (key, value) VALUES ('personal_workspace_id', ?)`,
+        [target],
+      );
+      changed = true;
+    }
 
-  const personal = readPointer('personal_workspace_id');
-  if (personal !== target) {
-    db.run(
-      `INSERT OR REPLACE INTO settings (key, value) VALUES ('personal_workspace_id', ?)`,
-      [target],
-    );
-    changed = true;
-  }
+    const current = readPointer('current_workspace_id');
+    // Уже на personal-ws пользователя — идемпотентный no-op.
+    if (current === target) return changed;
 
-  const current = readPointer('current_workspace_id');
-  // Уже на personal-ws пользователя — идемпотентный no-op.
-  if (current === target) return changed;
-
-  const shouldReset =
-    !current || current === LOCAL_WS_ID || !hasLocalMembership(userId, current);
-  if (shouldReset) {
-    db.run(
-      `INSERT OR REPLACE INTO settings (key, value) VALUES ('current_workspace_id', ?)`,
-      [target],
-    );
-    changed = true;
+    const shouldReset =
+      !current || current === LOCAL_WS_ID || !hasLocalMembership(userId, current);
+    if (shouldReset) {
+      db.run(
+        `INSERT OR REPLACE INTO settings (key, value) VALUES ('current_workspace_id', ?)`,
+        [target],
+      );
+      changed = true;
+    }
+  } catch (e) {
+    logger.warn('[sync/workspace] pinWorkspacePointers failed:', e);
   }
   return changed;
 }
@@ -373,29 +376,41 @@ function reconcileLocalPlaceholder(userId: string, target: string): boolean {
   }
 
   // 2. Настройки пространства.
-  db.run('UPDATE workspace_settings SET workspace_id=? WHERE workspace_id=?', [target, LOCAL_WS_ID]);
+  try {
+    db.run('UPDATE workspace_settings SET workspace_id=? WHERE workspace_id=?', [target, LOCAL_WS_ID]);
+  } catch (e) {
+    logger.warn('[sync/workspace] reconcile workspace_settings failed:', e);
+  }
 
   // 3. Членство: переносим на target, проставляем user_id, чиним uuid.
-  db.run(
-    `UPDATE workspace_members
-       SET workspace_id=?, user_id=COALESCE(NULLIF(user_id,''), ?)
-     WHERE workspace_id=?`,
-    [target, userId, LOCAL_WS_ID],
-  );
-  // uuid членства делаем детерминированным (совпадает с серверным backfill'ом).
-  db.run(
-    `UPDATE workspace_members SET uuid=? WHERE workspace_id=? AND uuid=?`,
-    [memberUuid, target, 'wsm_local'],
-  );
-
-  // 4. Само пространство: переименовать placeholder или удалить, если target уже есть.
-  if (targetWsExists) {
-    db.run('DELETE FROM workspaces WHERE uuid=?', [LOCAL_WS_ID]);
-  } else if (localWs) {
+  try {
     db.run(
-      `UPDATE workspaces SET uuid=?, owner_id=COALESCE(NULLIF(owner_id,''), ?) WHERE uuid=?`,
+      `UPDATE workspace_members
+         SET workspace_id=?, user_id=COALESCE(NULLIF(user_id,''), ?)
+       WHERE workspace_id=?`,
       [target, userId, LOCAL_WS_ID],
     );
+    // uuid членства делаем детерминированным (совпадает с серверным backfill'ом).
+    db.run(
+      `UPDATE workspace_members SET uuid=? WHERE workspace_id=? AND uuid=?`,
+      [memberUuid, target, 'wsm_local'],
+    );
+  } catch (e) {
+    logger.warn('[sync/workspace] reconcile workspace_members failed:', e);
+  }
+
+  // 4. Само пространство: переименовать placeholder или удалить, если target уже есть.
+  try {
+    if (targetWsExists) {
+      db.run('DELETE FROM workspaces WHERE uuid=?', [LOCAL_WS_ID]);
+    } else if (localWs) {
+      db.run(
+        `UPDATE workspaces SET uuid=?, owner_id=COALESCE(NULLIF(owner_id,''), ?) WHERE uuid=?`,
+        [target, userId, LOCAL_WS_ID],
+      );
+    }
+  } catch (e) {
+    logger.warn('[sync/workspace] reconcile workspaces(rename) failed:', e);
   }
 
   // 5. Указатели settings переставляет pinWorkspacePointers (вызывается после).
