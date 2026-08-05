@@ -25,11 +25,14 @@ import {
   InviteRpcError,
   type InviteRole,
   type WorkspaceInvite,
+  type MyPendingInvite,
 } from '../lib/invites';
 import { workspaceHasPendingOutbox, workspaceOutboxFailedPermanently } from '../lib/outbox';
 
 interface InvitesState {
-  myPending: WorkspaceInvite[];                        // мои входящие pending
+  // F56: мои входящие pending уже обогащены именем ws и профилем пригласившего
+  // (RPC get_my_pending_invites, миграция 0044) — см. MyPendingInvite.
+  myPending: MyPendingInvite[];                        // мои входящие pending
   workspaceInvites: Record<string, WorkspaceInvite[]>; // {ws_id: pending этого ws (для owner)}
   loading: boolean;
   error: string | null;

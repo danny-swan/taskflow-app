@@ -6,9 +6,16 @@
 // Показывает входящие pending-инвайты текущего пользователя (useInvitesStore.
 // myPending) с бейджем-счётчиком. Секция рендерится только для привязанного к
 // облаку пользователя (boundUserId) — у локального аккаунта серверных инвайтов
-// нет. Имя пространства с бэкенда нам недоступно (приглашённый ещё не член ws),
-// поэтому показываем нейтральный заголовок «Приглашение в общее пространство»
-// (без backend-правок — approach 5.b брифа).
+// нет.
+//
+// F56 (ADR 0036): раньше здесь стоял нейтральный заголовок «Приглашение в общее
+// пространство» — приглашённый ещё не участник ws, поэтому ни название
+// пространства, ни профиль пригласившего клиент прочитать не мог (RLS). Теперь
+// оба поля приходят из RPC `get_my_pending_invites` (миграция 0044): в карточке
+// показываются название пространства и строка «От: <ник/TF-id>» с аватаром,
+// клик по которой открывает ту же `MemberInfoModal`, что и список участников.
+// Если поля пусты (RPC недоступна → legacy-fallback в lib/invites), карточка
+// выглядит как раньше.
 //
 // Accept защищён от тарифного лимита: RPC accept_invite бросает limit_exceeded,
 // если у пользователя уже максимум пространств — показываем тарифный тост, а не
@@ -18,8 +25,11 @@ import { Mail, Check, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useInvitesStore } from '../store/useInvitesStore';
 import { InvitePinBadge } from './InvitePinBadge';
+import { Avatar } from './Avatar';
+import { MemberInfoModal } from './MemberInfoModal';
 import { tr } from '../lib/i18n';
-import { InviteRpcError, type WorkspaceInvite } from '../lib/invites';
+import { InviteRpcError, type MyPendingInvite } from '../lib/invites';
+import { memberDisplayName, type MemberProfile } from '../lib/memberProfiles';
 
 /** Целых дней до истечения (0 → сегодня, отрицательное клипуется к 0). */
 function daysUntil(iso: string): number {
@@ -39,6 +49,8 @@ export function MyInvitesSection() {
   const reject = useInvitesStore(s => s.reject);
 
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Профиль пригласившего, открытый в карточке (null → модалка закрыта).
+  const [inviterInfo, setInviterInfo] = useState<MemberProfile | null>(null);
 
   useEffect(() => {
     if (boundUserId) void loadMyPending();
@@ -47,7 +59,7 @@ export function MyInvitesSection() {
   // Только для привязанного пользователя и только при наличии инвайтов.
   if (!boundUserId || myPending.length === 0) return null;
 
-  const onAccept = async (inv: WorkspaceInvite) => {
+  const onAccept = async (inv: MyPendingInvite) => {
     setBusyId(inv.id);
     try {
       const { workspaceId } = await accept(inv.id);
@@ -63,7 +75,7 @@ export function MyInvitesSection() {
     }
   };
 
-  const onReject = async (inv: WorkspaceInvite) => {
+  const onReject = async (inv: MyPendingInvite) => {
     setBusyId(inv.id);
     try {
       await reject(inv.id);
@@ -100,7 +112,21 @@ export function MyInvitesSection() {
           const busy = busyId === inv.id;
           return (
             <div key={inv.id} className="rounded-md border border-border-soft bg-[var(--surface-alt)]/40 px-2.5 py-2 flex flex-col gap-1.5">
-              <div className="text-[12px] font-medium leading-tight">{tr(lang, 'ws_my_invites_space')}</div>
+              <div className="text-[12px] font-medium leading-tight break-words">
+                {inv.workspace_name?.trim() || tr(lang, 'ws_my_invites_space')}
+              </div>
+              {inv.inviter && (
+                <button
+                  type="button"
+                  onClick={() => setInviterInfo(inv.inviter)}
+                  title={tr(lang, 'ws_member_info_hint')}
+                  className="flex items-center gap-1.5 text-left text-[10.5px] text-muted hover:text-text transition-colors min-w-0"
+                >
+                  <span className="text-faint shrink-0">{tr(lang, 'ws_my_invites_from')}:</span>
+                  <Avatar variant={inv.inviter.avatar_variant} color={inv.inviter.avatar_color} size={14} />
+                  <span className="truncate">{memberDisplayName(inv.inviter)}</span>
+                </button>
+              )}
               <div className="text-[10.5px] text-muted leading-tight">
                 {tr(lang, 'ws_my_invites_role_prefix')}: {roleLabel(inv.role)} · {expiresLabel(inv.expires_at)}
               </div>
@@ -129,6 +155,14 @@ export function MyInvitesSection() {
           );
         })}
       </div>
+
+      <MemberInfoModal
+        open={inviterInfo !== null}
+        lang={lang}
+        profile={inviterInfo}
+        roleLabel={tr(lang, 'ws_members_role_owner')}
+        onClose={() => setInviterInfo(null)}
+      />
     </div>
   );
 }
