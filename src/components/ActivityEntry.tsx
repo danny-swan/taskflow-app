@@ -85,7 +85,17 @@ export function ActivityAuthorRow({
   let color: string | null = null;
   const cached = lookupCachedMemberProfile(record.userId);
   if (boundUserId && record.userId === boundUserId) {
+    // F51: своя строка — подпись «вы», НО аватар всё равно свой.
+    // Раньше в этой ветке задавалось только имя, а variant/color оставались
+    // дефолтными 1/null — поэтому в истории у себя была заглушка, хотя на
+    // «Участниках» аватар рисовался верно. Presence тут не помогает по умыслу:
+    // `usePresenceStore.byId` сознательно не содержит самого себя (lib/presence.ts),
+    // так что единственный источник — кэш публичных профилей (F40, ADR 0031),
+    // куда свой профиль кладёт ProfileBlock и RPC участников (он возвращает
+    // вызывающего тоже). Нет кэша — остаётся старое поведение (вариант 1).
     name = tr(lang, 'ws_activity_you');
+    variant = cached?.avatar_variant || 1;
+    color = cached?.avatar_color ?? null;
   } else if (presence) {
     name = presence.nickname || presence.publicUserId;
     variant = presence.avatarVariant || 1;

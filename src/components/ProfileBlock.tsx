@@ -23,6 +23,7 @@ import { useEffect, useState } from 'react';
 import { Copy, Save, Loader2, Pencil } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useProfile, NICKNAME_MAX, BIO_MAX } from '../lib/profile';
+import { upsertMemberProfileCacheEntry } from '../lib/memberProfiles';
 import { Avatar } from './Avatar';
 import { AvatarEditorModal } from './AvatarEditorModal';
 
@@ -38,6 +39,22 @@ export function ProfileBlock({ userId, isRu }: { userId: string; isRu: boolean }
   const [saving, setSaving] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [avatarModal, setAvatarModal] = useState(false);
+
+  // F51: свой профиль кладём в общий кэш публичных профилей — журнал
+  // активности берёт аватары именно оттуда, а RPC участников вызывается
+  // только на экране shared-пространства. Записываем только публичный
+  // минимум: email в этот кэш не попадает никогда.
+  useEffect(() => {
+    if (!profile) return;
+    upsertMemberProfileCacheEntry({
+      user_id: userId,
+      public_user_id: profile.public_user_id,
+      nickname: profile.nickname ?? null,
+      avatar_variant: profile.avatar_variant ?? 1,
+      avatar_color: profile.avatar_color ?? null,
+      bio: profile.bio ?? null,
+    });
+  }, [profile, userId]);
 
   // Гидрация локальных полей из загруженного профиля (один раз).
   useEffect(() => {

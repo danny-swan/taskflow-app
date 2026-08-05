@@ -18,7 +18,8 @@ vi.mock('../store/workspaceScope', () => ({
   useCurrentWorkspace: () => currentWs,
   useCurrentWorkspaceRole: () => currentRole,
 }));
-vi.mock('./Settings', () => ({
+// F49 (ADR 0035): справочники живут в отдельном модуле, а не в pages/Settings.
+vi.mock('../components/WorkspaceReferenceSections', () => ({
   StatusesSection: () => <div>statuses-section</div>,
   TagsSection: () => <div>tags-section</div>,
 }));
