@@ -26,8 +26,10 @@ export const SETTINGS_SECTIONS = [
   'general',
   'account',
   'subscription',
-  'tags',
-  'statuses',
+  // F49 (ADR 0035): 'tags' / 'statuses' убраны — справочники больше не секции
+  // «Настроек», а вкладки экрана «Настройки пространства». Старые глубокие
+  // ссылки вида `/settings#statuses` теперь дают null и оставляют текущую
+  // секцию (деградация, а не ошибка) — в коде таких переходов нет.
   'stats',
   'theme',
   'templates',

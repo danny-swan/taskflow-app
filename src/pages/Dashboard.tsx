@@ -7,7 +7,7 @@ import {
 import { tr } from '../lib/i18n';
 import { formatDate, formatMonthDay } from '../lib/format';
 import { overdueEventsByDate } from '../lib/overdue';
-import { currentSnapshotTasks } from '../lib/dashboard';
+import { currentSnapshotTasks, heatmapDayKeys, localDayKey } from '../lib/dashboard';
 import { DatePicker } from '../components/DatePicker';
 import { PresenceIndicator } from '../components/PresenceIndicator';
 import { useWorkspacePresence } from '../lib/presence';
@@ -24,11 +24,6 @@ interface CustomRange { from: string; to: string }
 function parseLocalDate(s: string): Date {
   const [y, m, d] = s.split('-').map(Number);
   return new Date(y, m - 1, d, 0, 0, 0, 0);
-}
-
-/** Return a YYYY-MM-DD key using LOCAL calendar fields (avoids toISOString UTC shift). */
-function localDayKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export function DashboardPage() {
@@ -206,29 +201,32 @@ export function DashboardPage() {
     return all.filter(x => x.value > 0);
   }, [currentTasks, tags]);
 
+  // F50: сетка ОБЯЗАНА начинаться с понедельника.
+  //
+  // Раньше стартом было просто «83 дня назад» (`now - 12*7 + 1`), то есть
+  // произвольный день недели, а подписи строк в `Heatmap` — статический список
+  // Пн…Вс. Из-за этого строка «Пн» показывала данные того дня недели, на который
+  // случайно попал старт: 05.08.2026 (среда) → старт 14.05.2026 (четверг) → сдвиг
+  // на 3 строки. Дата в тултипе при этом считалась верно, расходилась именно
+  // подпись строки с содержимым ячейки. Сдвиг плавающий — меняется каждый день.
+  //
+  // Теперь старт — понедельник недели, отстоящей на 11 недель назад: последняя
+  // колонка всегда текущая неделя, строка j всегда соответствует labels[j].
+  // Дни текущей недели после сегодня попадают в сетку с count = 0 — это пустые
+  // ячейки будущего, а не потерянные данные.
   const heatmap = useMemo(() => {
-    const weeks: { date: string; count: number }[][] = [];
-    const now = new Date();
-    const start = new Date(now);
-    start.setDate(start.getDate() - 12 * 7 + 1);
-    for (let w = 0; w < 12; w++) {
-      const days: { date: string; count: number }[] = [];
-      for (let d = 0; d < 7; d++) {
-        const date = new Date(start);
-        date.setDate(start.getDate() + w * 7 + d);
-        const key = localDayKey(date);
-        const count = dashTasks.filter(t => {
-          // v0.8.11: используем start_date (с fallback на created_at) — синхронизировано с
-          // графиком Активность; updated_at оставляем как доп. сигнал «активности по задаче».
-          const startKey = t.start_date ? t.start_date.slice(0, 10) : (t.created_at ? t.created_at.slice(0, 10) : '');
-          const up = t.updated_at ? t.updated_at.slice(0, 10) : '';
-          return startKey === key || up === key;
-        }).length;
-        days.push({ date: key, count });
-      }
-      weeks.push(days);
-    }
-    return weeks;
+    // Сетка дат считается отдельной чистой функцией (см. lib/dashboard.ts, F50),
+    // здесь остаётся только подсчёт событий по каждому дню.
+    return heatmapDayKeys(new Date()).map(week => week.map(key => {
+      const count = dashTasks.filter(t => {
+        // v0.8.11: используем start_date (с fallback на created_at) — синхронизировано с
+        // графиком Активность; updated_at оставляем как доп. сигнал «активности по задаче».
+        const startKey = t.start_date ? t.start_date.slice(0, 10) : (t.created_at ? t.created_at.slice(0, 10) : '');
+        const up = t.updated_at ? t.updated_at.slice(0, 10) : '';
+        return startKey === key || up === key;
+      }).length;
+      return { date: key, count };
+    }));
   }, [dashTasks]);
 
   const recentDone = useMemo(() => {
@@ -568,6 +566,8 @@ function isLight(hex: string): boolean {
 
 function Heatmap({ weeks, lang }: { weeks: { date: string; count: number }[][]; lang: 'ru' | 'en' }) {
   const max = Math.max(1, ...weeks.flat().map(d => d.count));
+  // F50: подписи строк статичны, поэтому контракт такой: `weeks[w][j]` ОБЯЗАН
+  // быть днём недели labels[j] (Пн=0). Это гарантирует `heatmapDayKeys()`.
   const dayLabelsRu = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
   const dayLabelsEn = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const labels = lang === 'ru' ? dayLabelsRu : dayLabelsEn;

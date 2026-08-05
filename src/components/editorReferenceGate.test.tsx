@@ -69,7 +69,10 @@ vi.mock('./TaskActivityLog', () => ({ TaskActivityLog: () => null }));
 vi.mock('./MembersTab', () => ({ MembersTab: () => <div>members</div> }));
 vi.mock('./WorkspaceHistoryTab', () => ({ WorkspaceHistoryTab: () => <div>history</div> }));
 
-import { StatusesSection, TagsSection, TemplatesSection } from '../pages/Settings';
+// F49 (ADR 0035): StatusesSection/TagsSection переехали в отдельный ws-модуль;
+// TemplatesSection остаётся секцией общих настроек.
+import { StatusesSection, TagsSection } from './WorkspaceReferenceSections';
+import { TemplatesSection } from '../pages/Settings';
 import { WorkspaceSettingsPage } from '../pages/WorkspaceSettings';
 import { TaskModal } from './TaskModal';
 

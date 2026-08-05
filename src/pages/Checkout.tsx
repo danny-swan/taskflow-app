@@ -27,6 +27,21 @@
  *   4. ЮKassa: списание 1₽ с сохранением способа оплаты.
  *   5. webhook: сохранение payment_method + автоматический refund 1₽.
  *   6. Через realtime новая карта появляется в Settings → Управление подпиской.
+ *
+ * F52 (v1.1.3) — ВАЖНО ПРО ЦВЕТА. Страница была свёрстана на классах
+ * `bg-primary` / `text-primary` / `border-primary` / `ring-primary` / `*-success`,
+ * которых в проекте НЕ СУЩЕСТВУЕТ: в `tailwind.config.ts` объявлены только
+ * bg, surface, surface-alt, border, border-soft, text, muted, faint, accent,
+ * accent-hover, accent-soft. Tailwind молча не генерирует правило для
+ * неизвестного цвета, поэтому у кнопки тарифа «Ежегодно» (единственного с
+ * `highlight: true`) фон не применялся, а валидный `text-white` оставался —
+ * получался белый текст на светлой карточке. У «Ежемесячно» и «Навсегда»
+ * фон задаётся валидным `bg-surface-alt`, поэтому они выглядели нормально.
+ *
+ * Правило на будущее: использовать ТОЛЬКО токены из tailwind.config.ts, а для
+ * статусных цветов — arbitrary-значение `[var(--status-done)]`. Модификатор
+ * прозрачности (`bg-accent/40`) к var-цветам в Tailwind 3.4 НЕ применяется —
+ * правило не генерируется вовсе, поэтому здесь его нет нигде.
  */
 
 import { useNavigate } from 'react-router-dom';
@@ -242,8 +257,8 @@ export function CheckoutPage() {
     return (
       <div className="flex-1 overflow-y-auto p-6 max-w-2xl mx-auto w-full">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-primary/10 mb-4">
-            <CreditCard className="w-7 h-7 text-primary" />
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-accent-soft mb-4">
+            <CreditCard className="w-7 h-7 text-accent" />
           </div>
           <h1 className="text-[26px] font-semibold mb-2">
             {t('Обновить способ оплаты', 'Update payment method')}
@@ -262,19 +277,19 @@ export function CheckoutPage() {
           </h2>
           <ol className="space-y-3 text-[14px]">
             <li className="flex gap-3">
-              <span className="shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[12px] font-medium">1</span>
+              <span className="shrink-0 w-6 h-6 rounded-full bg-accent-soft text-accent flex items-center justify-center text-[12px] font-medium">1</span>
               <span>{t('Открывается защищённая страница ЮKassa.', 'Secure ЮKassa page opens.')}</span>
             </li>
             <li className="flex gap-3">
-              <span className="shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[12px] font-medium">2</span>
+              <span className="shrink-0 w-6 h-6 rounded-full bg-accent-soft text-accent flex items-center justify-center text-[12px] font-medium">2</span>
               <span>{t('Списывается 1 ₽ с новой карты. Карта сохраняется для будущих автосписаний.', '₽1 is charged to the new card. The card is saved for future auto-renewals.')}</span>
             </li>
             <li className="flex gap-3">
-              <span className="shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[12px] font-medium">3</span>
+              <span className="shrink-0 w-6 h-6 rounded-full bg-accent-soft text-accent flex items-center justify-center text-[12px] font-medium">3</span>
               <span>{t('Мы автоматически возвращаем 1 ₽ — деньги придут обратно в течение нескольких минут (иногда до нескольких банковских дней).', 'We refund ₽1 automatically — money returns within a few minutes (sometimes up to a few banking days).')}</span>
             </li>
             <li className="flex gap-3">
-              <span className="shrink-0 w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[12px] font-medium">4</span>
+              <span className="shrink-0 w-6 h-6 rounded-full bg-accent-soft text-accent flex items-center justify-center text-[12px] font-medium">4</span>
               <span>{t('Новая карта появляется в разделе «Управление подпиской» → следующее автосписание пройдёт с неё.', 'The new card appears under “Subscription management” → next auto-renewal will use it.')}</span>
             </li>
           </ol>
@@ -283,7 +298,7 @@ export function CheckoutPage() {
         <button
           onClick={handleUpdateCard}
           disabled={updateCardBusy || !auth.user}
-          className="w-full py-3 rounded-lg bg-primary text-white text-[14px] font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          className="w-full py-3 rounded-lg bg-accent text-white text-[14px] font-medium hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition"
         >
           {updateCardBusy ? (
             <span className="flex items-center justify-center gap-2">
@@ -299,7 +314,7 @@ export function CheckoutPage() {
         </button>
 
         <div className="mt-6 flex items-start gap-2 text-[12px] text-muted">
-          <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-success" />
+          <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-[var(--status-done)]" />
           <p>
             {t(
               'Оплата защищена ЮKassa. Данные карты обрабатываются ЮKassa по стандарту PCI DSS — TaskFlow не хранит номера карт.',
@@ -315,7 +330,7 @@ export function CheckoutPage() {
           <button
             type="button"
             onClick={() => navigate('/settings#subscription')}
-            className="text-primary hover:underline"
+            className="text-accent hover:underline"
           >
             {t('← Вернуться в настройки', '← Back to settings')}
           </button>
@@ -329,8 +344,8 @@ export function CheckoutPage() {
     return (
       <div className="flex-1 overflow-y-auto p-6 max-w-2xl mx-auto w-full">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-primary/10 mb-4">
-            <Sparkles className="w-7 h-7 text-primary" />
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-accent-soft mb-4">
+            <Sparkles className="w-7 h-7 text-accent" />
           </div>
           <h1 className="text-[26px] font-semibold mb-2">
             {t('14 дней Pro бесплатно', '14 days of Pro — free')}
@@ -353,7 +368,7 @@ export function CheckoutPage() {
               t('Приоритетная поддержка', 'Priority support'),
             ].map((feature, i) => (
               <li key={i} className="flex items-center gap-2">
-                <Check className="w-4 h-4 text-success shrink-0" />
+                <Check className="w-4 h-4 text-[var(--status-done)] shrink-0" />
                 {feature}
               </li>
             ))}
@@ -402,7 +417,7 @@ export function CheckoutPage() {
         </button>
 
         <div className="mt-4 flex items-start gap-2 text-[12px] text-muted">
-          <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-success" />
+          <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-[var(--status-done)]" />
           <p>
             {t(
               'Оплата защищена ЮKassa (PCI DSS). TaskFlow не хранит данные карты.',
@@ -415,7 +430,7 @@ export function CheckoutPage() {
           <button
             type="button"
             onClick={() => navigate('/settings#subscription')}
-            className="text-primary hover:underline"
+            className="text-accent hover:underline"
           >
             {t('← Вернуться в настройки', '← Back to settings')}
           </button>
@@ -438,7 +453,7 @@ export function CheckoutPage() {
           )}
         </p>
         {hasLifetime && (
-          <div className="mt-4 inline-block px-4 py-2 rounded-lg bg-success/10 border border-success/30 text-success text-[13px]">
+          <div className="mt-4 inline-block px-4 py-2 rounded-lg bg-surface-alt border border-[var(--status-done)] text-[var(--status-done)] text-[13px]">
             {t(
               'У вас уже есть Lifetime — новых покупок не требуется.',
               'You already have Lifetime — no new purchase needed.',
@@ -458,14 +473,14 @@ export function CheckoutPage() {
             className={
               'relative rounded-xl border p-6 flex flex-col transition-all ' +
               (isPreselected
-                ? 'border-primary bg-primary/[0.06] ring-2 ring-primary/30 shadow-lg'
+                ? 'border-accent bg-accent-soft ring-2 ring-accent shadow-lg'
                 : tier.highlight
-                  ? 'border-primary/50 bg-primary/[0.03]'
+                  ? 'border-accent bg-surface-alt'
                   : 'border-border bg-surface')
             }
           >
             {tier.highlight && (
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-primary text-white text-[11px] font-medium">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-accent text-white text-[11px] font-medium">
                 {t('Популярное', 'Most popular')}
               </div>
             )}
@@ -487,8 +502,8 @@ export function CheckoutPage() {
               className={
                 'w-full py-2.5 rounded-lg text-[14px] font-medium transition ' +
                 (tier.highlight
-                  ? 'bg-primary text-white hover:bg-primary/90'
-                  : 'bg-surface-alt border border-border hover:border-primary/50') +
+                  ? 'bg-accent text-white hover:bg-accent-hover'
+                  : 'bg-surface-alt border border-border hover:border-accent') +
                 ' disabled:opacity-50 disabled:cursor-not-allowed'
               }
             >
@@ -517,7 +532,7 @@ export function CheckoutPage() {
         <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 max-w-2xl mx-auto text-[14px]">
           {(isRu ? FEATURES_RU : FEATURES_EN).map((f, i) => (
             <li key={i} className="flex items-center gap-2">
-              <Check className="w-4 h-4 text-primary shrink-0" />
+              <Check className="w-4 h-4 text-accent shrink-0" />
               <span>{f}</span>
             </li>
           ))}
@@ -538,7 +553,7 @@ export function CheckoutPage() {
             href="https://yourtaskflow.app/legal/offer.html"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-primary hover:underline"
+            className="text-accent hover:underline"
           >
             {t('Оферту', 'the Offer')}
           </a>
@@ -547,7 +562,7 @@ export function CheckoutPage() {
             href="https://yourtaskflow.app/legal/privacy.html"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-primary hover:underline"
+            className="text-accent hover:underline"
           >
             {t('Политику конфиденциальности', 'Privacy Policy')}
           </a>
@@ -556,7 +571,7 @@ export function CheckoutPage() {
             href="https://yourtaskflow.app/legal/return.html"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-primary hover:underline"
+            className="text-accent hover:underline"
           >
             {t('Политику возврата', 'Refund Policy')}
           </a>

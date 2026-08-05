@@ -14,7 +14,9 @@ import { useCurrentWorkspace, useCurrentWorkspaceRole, useCanManageWorkspace } f
 import { computeWorkspaceId } from '../lib/sync/workspace';
 import { tr } from '../lib/i18n';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { StatusesSection, TagsSection } from './Settings';
+// F49 (ADR 0035): справочники больше не живут в `pages/Settings.tsx` и не
+// дублируются в общих настройках — единственный их экран этот.
+import { StatusesSection, TagsSection } from '../components/WorkspaceReferenceSections';
 import { MembersTab } from '../components/MembersTab';
 import { WorkspaceHistoryTab } from '../components/WorkspaceHistoryTab';
 

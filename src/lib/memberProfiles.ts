@@ -108,6 +108,20 @@ export async function fetchWorkspaceMemberProfiles(workspaceId: string): Promise
     .filter((p): p is MemberProfile => p !== null);
 }
 
+/**
+ * F51: точечно положить один профиль в кэш (без RPC).
+ *
+ * Нужно для СОБСТВЕННОГО профиля: журнал активности берёт аватары из
+ * этого кэша, а `get_workspace_member_profiles` вызывается только на экране
+ * участников shared-пространства. Без этого в личном пространстве (или до
+ * первого визита на «Участников») свой аватар оставался бы заглушкой.
+ * Запись best-effort и не трогает остальные ключи кэша.
+ */
+export function upsertMemberProfileCacheEntry(profile: MemberProfile): void {
+  const merged = { ...readMemberProfileCache(), [profile.user_id]: profile };
+  writeMemberProfileCache(merged);
+}
+
 export interface UseMemberProfilesResult {
   /** user_id → публичный профиль (сервер + кэш). */
   byId: MemberProfileMap;
