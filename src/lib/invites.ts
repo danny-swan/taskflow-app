@@ -11,11 +11,18 @@
 // grant'ами). Чтение — прямой SELECT из sync_workspace_invites (RLS §3 отдаёт
 // приглашённому его строки, owner'у — все строки его пространства).
 //
+// F56 (ADR 0036): «мои входящие» читаются через SECURITY DEFINER RPC
+// `get_my_pending_invites` (миграция 0044) — строка приглашения видна и прямым
+// SELECT'ом, но название пространства и профиль пригласившего скрыты RLS от
+// ещё-не-участника. Прямой SELECT остался как fallback, если RPC недоступна.
+//
 // PostgREST при `raise exception ... using errcode = 'XXXXX'` возвращает объект
 // ошибки с `code` (SQLSTATE) и `message` (текст исключения). Мапим их в
 // типизированный InviteRpcError, чтобы UI показал переведённое сообщение по коду,
 // а не сырой текст из БД (тексты см. в 0032).
 import { supabase } from './supabase';
+import { logger } from './logger';
+import { normalizeMemberProfileRow, type MemberProfile } from './memberProfiles';
 
 export type InviteRole = 'editor' | 'viewer';
 export type InviteStatus = 'pending' | 'accepted' | 'rejected' | 'expired' | 'cancelled';
@@ -32,6 +39,29 @@ export interface WorkspaceInvite {
   expires_at: string;
   created_at: string;
   accepted_at: string | null;
+}
+
+/**
+ * Входящее приглашение, обогащённое отображаемыми полями (F56, ADR 0036).
+ *
+ * Приглашённый ещё не участник пространства, поэтому ни `sync_workspaces.name`,
+ * ни профиль пригласившего он прочитать напрямую не может (RLS). Эти поля
+ * приходят из SECURITY DEFINER RPC `get_my_pending_invites` (миграция 0044).
+ * Оба поля nullable: если RPC недоступна (старый сервер, офлайн) — работает
+ * legacy-путь ниже, и UI показывает прежний нейтральный заголовок.
+ */
+export interface MyPendingInvite {
+  id: string;
+  workspace_id: string;
+  workspace_name: string | null;
+  role: InviteRole;
+  status: InviteStatus;
+  expires_at: string;
+  created_at: string;
+  target_public_user_id: string;
+  inviter_user_id: string;
+  /** Публичный минимум профиля пригласившего (тот же контракт, что у участников). */
+  inviter: MemberProfile | null;
 }
 
 /** Типизированные коды ошибок инвайтов (маппинг SQLSTATE + текста из 0032). */
@@ -161,8 +191,41 @@ export async function cancelInvite(inviteId: string): Promise<void> {
   if (error) throw parseInviteError(error);
 }
 
-/** Мои входящие pending-инвайты (адресованные текущему пользователю). */
-export async function listMyPendingInvites(): Promise<WorkspaceInvite[]> {
+/**
+ * Нормализация строки RPC `get_my_pending_invites` (F56, миграция 0044).
+ * Профиль пригласившего собирается тем же нормализатором, что и профили
+ * участников, — чтобы карточка приглашения переиспользовала `MemberInfoModal`.
+ */
+export function normalizeMyPendingInviteRow(row: Record<string, unknown>): MyPendingInvite | null {
+  const id = typeof row.id === 'string' ? row.id : null;
+  const workspaceId = typeof row.workspace_id === 'string' ? row.workspace_id : null;
+  if (!id || !workspaceId) return null;
+  const inviterId = typeof row.inviter_user_id === 'string' ? row.inviter_user_id : '';
+  const inviter = normalizeMemberProfileRow({
+    user_id: inviterId,
+    public_user_id: row.inviter_public_user_id,
+    nickname: row.inviter_nickname,
+    avatar_variant: row.inviter_avatar_variant,
+    avatar_color: row.inviter_avatar_color,
+    bio: row.inviter_bio,
+  });
+  const name = typeof row.workspace_name === 'string' ? row.workspace_name : null;
+  return {
+    id,
+    workspace_id: workspaceId,
+    workspace_name: name,
+    role: (row.role as InviteRole) ?? 'editor',
+    status: (row.status as InviteStatus) ?? 'pending',
+    expires_at: String(row.expires_at ?? ''),
+    created_at: String(row.created_at ?? ''),
+    target_public_user_id: String(row.target_public_user_id ?? ''),
+    inviter_user_id: inviterId,
+    inviter,
+  };
+}
+
+/** Прежний путь: прямой SELECT строк приглашений (без имени ws и профиля). */
+async function listMyPendingInvitesLegacy(): Promise<MyPendingInvite[]> {
   const uid = await currentUserId();
   if (!uid) return [];
   const { data, error } = await supabase
@@ -172,7 +235,40 @@ export async function listMyPendingInvites(): Promise<WorkspaceInvite[]> {
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
   if (error) throw parseInviteError(error);
-  return (data ?? []) as unknown as WorkspaceInvite[];
+  return ((data ?? []) as unknown as WorkspaceInvite[]).map(r => ({
+    id: r.id,
+    workspace_id: r.workspace_id,
+    workspace_name: null,
+    role: r.role,
+    status: r.status,
+    expires_at: r.expires_at,
+    created_at: r.created_at,
+    target_public_user_id: r.target_public_user_id,
+    inviter_user_id: r.inviter_user_id,
+    inviter: null,
+  }));
+}
+
+/**
+ * Мои входящие pending-инвайты вместе с названием пространства и публичным
+ * профилем пригласившего (F56, RPC `get_my_pending_invites`, миграция 0044).
+ *
+ * Фильтр строк тот же, что был у прямого SELECT (я + pending + свежие сверху) —
+ * он зашит в саму функцию, параметров у неё нет. Если RPC на сервере ещё нет
+ * (клиент обновился раньше миграции) или она недоступна — падаем на прежний
+ * прямой SELECT: список приглашений остаётся рабочим, просто без имени ws и
+ * профиля, как до этого изменения.
+ */
+export async function listMyPendingInvites(): Promise<MyPendingInvite[]> {
+  const { data, error } = await supabase.rpc('get_my_pending_invites');
+  if (error) {
+    logger.warn('[invites] get_my_pending_invites failed, falling back to select:', error.message);
+    return listMyPendingInvitesLegacy();
+  }
+  const rows = Array.isArray(data) ? data : [];
+  return rows
+    .map(r => normalizeMyPendingInviteRow(r as Record<string, unknown>))
+    .filter((i): i is MyPendingInvite => i !== null);
 }
 
 /** Pending-инвайты конкретного пространства (доступно owner'у по RLS). */

@@ -137,17 +137,63 @@ describe('rejectInvite / cancelInvite', () => {
   });
 });
 
-describe('listMyPendingInvites', () => {
-  it('фильтрует по target_user_id текущего юзера и status=pending', async () => {
-    selectResult = { data: [{ id: 'inv_1', status: 'pending' }], error: null };
+describe('listMyPendingInvites (F56, RPC get_my_pending_invites)', () => {
+  it('идёт в RPC без параметров и раскладывает профиль пригласившего', async () => {
+    rpcResult = {
+      data: [{
+        id: 'inv_1', workspace_id: 'ws_s', workspace_name: 'Leaf team', role: 'editor',
+        status: 'pending', expires_at: '2026-08-11T00:00:00Z', created_at: '2026-08-05T00:00:00Z',
+        target_public_user_id: 'TF-ME123', inviter_user_id: 'owner-1',
+        inviter_public_user_id: 'TF-7EDA2R', inviter_nickname: 'Daniil Lebedev',
+        inviter_avatar_variant: 5, inviter_avatar_color: '#fc1d1d', inviter_bio: 'про меня',
+      }],
+      error: null,
+    };
+    const res = await listMyPendingInvites();
+    expect(calls.rpcName).toBe('get_my_pending_invites');
+    // Фильтр «я + pending» зашит в саму функцию — параметров быть не должно.
+    expect(calls.rpcParams ?? undefined).toBeUndefined();
+    expect(calls.from).toBeNull();
+    expect(res).toHaveLength(1);
+    expect(res[0].workspace_name).toBe('Leaf team');
+    expect(res[0].inviter).toEqual({
+      user_id: 'owner-1',
+      public_user_id: 'TF-7EDA2R',
+      nickname: 'Daniil Lebedev',
+      avatar_variant: 5,
+      avatar_color: '#fc1d1d',
+      bio: 'про меня',
+    });
+  });
+
+  it('строка без публичного id пригласившего → inviter = null, приглашение остаётся', async () => {
+    rpcResult = {
+      data: [{ id: 'inv_2', workspace_id: 'ws_s', workspace_name: null, role: 'viewer',
+               status: 'pending', expires_at: '', created_at: '', target_public_user_id: 'TF-ME123',
+               inviter_user_id: 'owner-1', inviter_public_user_id: null }],
+      error: null,
+    };
+    const res = await listMyPendingInvites();
+    expect(res).toHaveLength(1);
+    expect(res[0].inviter).toBeNull();
+    expect(res[0].workspace_name).toBeNull();
+  });
+
+  it('RPC недоступна → fallback на прежний SELECT с теми же фильтрами', async () => {
+    rpcResult = { data: null, error: { message: 'function does not exist', code: '42883' } };
+    selectResult = { data: [{ id: 'inv_3', workspace_id: 'ws_s', role: 'editor', status: 'pending' }], error: null };
     const res = await listMyPendingInvites();
     expect(calls.from).toBe('sync_workspace_invites');
     expect(calls.eq).toContainEqual(['target_user_id', 'uid-me']);
     expect(calls.eq).toContainEqual(['status', 'pending']);
     expect(res).toHaveLength(1);
+    // В fallback обогащения нет — UI покажет прежний нейтральный заголовок.
+    expect(res[0].workspace_name).toBeNull();
+    expect(res[0].inviter).toBeNull();
   });
 
-  it('без сессии возвращает пустой список без запроса', async () => {
+  it('fallback без сессии возвращает пустой список без запроса', async () => {
+    rpcResult = { data: null, error: { message: 'not authenticated', code: '42501' } };
     currentUser = null;
     const res = await listMyPendingInvites();
     expect(res).toEqual([]);
