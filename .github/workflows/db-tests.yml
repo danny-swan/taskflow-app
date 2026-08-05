@@ -151,4 +151,5 @@ jobs:
             supabase/tests/19_admin_users_summary_test.sql \
             supabase/tests/20_accept_invite_reactivation_test.sql \
             supabase/tests/21_member_profiles_test.sql \
-            supabase/tests/22_member_self_leave_rls_test.sql
+            supabase/tests/22_member_self_leave_rls_test.sql \
+            supabase/tests/23_my_pending_invites_test.sql
